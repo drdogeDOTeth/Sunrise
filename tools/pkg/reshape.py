@@ -75,6 +75,16 @@ for entry in pkg.entries:
         continue
     if entry.start_block >= pkg.header.block_count:
         continue
+    # A dump taken while one of our own patch files was installed reads back *through* it, so the
+    # "original" on disk is already rescaled and scaling it again compounds the previous edit. In a
+    # destination package every shipped block is encrypted and ours are the only plain ones, so a
+    # plain block here means precisely that. Refusing beats silently producing a 0.25x mesh.
+    if not pkg.blocks[entry.start_block].encrypted:
+        raise SystemExit(
+            f"entry {entry.index} resolves to a plain block, so {source.name} is one of ours and\n"
+            "any dump taken against it is already modified. Run 'python gametest.py --undo',\n"
+            "launch once to re-dump clean originals, then run this again."
+        )
     tag = pkg.tag_for(entry.index)
     dumped = DUMP / f"tag_{tag:08X}.bin"
     if not dumped.is_file():

@@ -42,7 +42,13 @@ Across 1,857,244 block records:
 | `0x0000` | 18.2% | plain                  |
 | `0x0007` |  0.0% | + alternate key        |
 
-**There is no `0x0001`.** Every compressed block in the install is also encrypted. The plain 18%
+**`0x0001` is rare but real.** A later census restricted to the newest file of each family found
+5,739 compressed-but-not-encrypted blocks across 6 packages, and 5,716 encrypted-but-uncompressed
+across another 6. All four combinations ship, so compression and encryption are genuinely
+independent per-block flags. That matters: a compressed block needs Oodle, which we have, but no
+key — so compressing our own writes is available if a plain block ever proves unacceptable.
+
+Every compressed block in the *bulk* of the install is also encrypted. The plain 18%
 is almost entirely audio (97% plain) and video (82%); the families holding geometry are not:
 
 | family                      | plain blocks | of total  |
@@ -67,6 +73,41 @@ That costs nothing, because:
 - **Reading reference art does not need them exported either.** Sunrise already decrypts in-process,
   so a dump feature inside the mod produces the reference bytes with the keys staying where upstream
   put them.
+
+## A block record is 48 bytes, and all of them matter
+
+| offset | size | field |
+|---|---|---|
+| `0x00` | 4 | body offset, within the patch file named at `0x08` |
+| `0x04` | 4 | stored size |
+| `0x08` | 2 | patch id |
+| `0x0A` | 2 | flags — bit 0 compressed, bit 1 encrypted |
+| `0x0C` | 20 | **SHA-1 of the stored body** |
+| `0x20` | 16 | **AES-GCM tag**, nonzero only when encrypted |
+
+Established against `w64_audio_01d2_en`, which is useful precisely because it mixes both kinds of
+block: `sha1(body)` equals bytes `0x0C..0x1F` for **all 285 of its plain blocks, with no
+exceptions**, and bytes `0x20..0x2F` are nonzero on **precisely** the 61 blocks whose encrypted flag
+is set. A per-byte nonzero histogram across the whole table is what exposed the split — the tail
+16 bytes sit at 17% occupancy in that file and at 99% in a fully-encrypted destination package.
+
+### Why this cost two launches
+
+`patch.py` originally wrote only the leading 12 bytes and left the remaining 36 zero. The result is
+a file that **passes registration and then hangs the game**, because the two checks are not the same
+check: the patchable registrar validates structure and never reads the hash, while the geometry
+streamer validates content and does. The signature is distinctive and worth recognising —
+
+```
+world_controller: successfully changed world to: mercury_freeroam
+state_manager: Entering state 'activity:initial_slice_set_loading'
+… then nothing but networking heartbeats, indefinitely
+```
+
+Both Mercury attempts were misread as bad vertex data, and an entire tool (`reshape.py`) was written
+to fix a cause that was never the cause. Writing the SHA-1 needs no keys, so this costs nothing;
+leaving the GCM tag zero stays correct **because** our blocks are plain, which is a different thing
+from leaving it zero by omission.
 
 ## Writing: use the format's own update mechanism
 

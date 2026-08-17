@@ -14,8 +14,16 @@ body stay exactly as shipped, and only the records describing the replaced entry
 The new body is appended past the end of the file and the entry's own block record is repointed at
 it, rewritten as a plain block — neither compressed nor encrypted. That is legal because block flags
 are per-record and the reader honours them per block, so a plain block sitting among encrypted ones
-decodes without any key. This is what makes the whole approach work without touching the game's
-proprietary key table: writing never needs it.
+decodes without any key. All four flag combinations ship, and `w64_audio_01d2_en` mixes plain and
+encrypted blocks in one file, so this is the format's own behaviour rather than a hopeful reading of
+it. This is what makes the whole approach work without touching the game's proprietary key table:
+writing never needs it.
+
+A block record is 48 bytes and every field matters. The four leading fields fill 12; bytes 12-31
+carry a SHA-1 of the stored body and bytes 32-47 an AES-GCM tag used only when the encrypted flag is
+set. Writing the first twelve and zeroing the rest yields a file the patchable registrar accepts and
+the geometry streamer silently hangs on — the registrar validates structure, the streamer validates
+content, and only the second one reads the hash.
 
 ## Limits, all enforced rather than assumed
 
@@ -28,6 +36,7 @@ proprietary key table: writing never needs it.
 """
 from __future__ import annotations
 
+import hashlib
 import shutil
 import struct
 from dataclasses import dataclass
@@ -253,14 +262,26 @@ def write_patch_package_multi(source: str | Path,
             body_at = (len(raw) + BODY_ALIGNMENT - 1) // BODY_ALIGNMENT * BODY_ALIGNMENT
             raw.extend(b"\x00" * (body_at - len(raw)))
             raw.extend(chunk)
+            # A block record is 48 bytes, not the 12 the four leading fields occupy. Writing only
+            # those and leaving the rest zero produced a file the registrar accepted and the
+            # geometry streamer then hung on, because bytes 12-31 are a SHA-1 of the stored body
+            # and every shipped block carries one. Verified against all 285 plain blocks of
+            # w64_audio_01d2_en: sha1(body) equals those bytes exactly, with no exceptions.
+            #
+            # Bytes 32-47 are the AES-GCM tag and are nonzero only for encrypted blocks - in that
+            # same package they are set on precisely the 61 blocks whose encrypted flag is set.
+            # Ours are written plain, so leaving the tag zero is correct by construction rather
+            # than by omission. Encrypting would need the block keys, which stay in the game.
             struct.pack_into(
-                "<IIHH",
+                "<IIHH20s16s",
                 raw,
                 table_end + record * BLOCK_RECORD_SIZE,
                 body_at,
                 len(chunk),
                 new_patch_id,
                 0,
+                hashlib.sha1(chunk).digest(),
+                b"\x00" * 16,
             )
             record += 1
         size = len(replacements[entry_index])
