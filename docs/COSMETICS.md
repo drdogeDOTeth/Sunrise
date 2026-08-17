@@ -114,14 +114,74 @@ Lane order matches the item's own socket order. Restart the game to apply; no re
 
 ## Custom art
 
-Genuinely new geometry or hand-authored textures are **not reachable in this codebase**, and this
-is not a matter of effort.
+Importing your own mesh — a sword model, a helmet, a whole avatar — is a **large project, but not
+a blocked one**. The obstacles are not where they first appear.
 
-Sunrise reads Tiger packages and never writes them. `src/middleware/content/packages/reader/`
-contains readers only; there is no writer anywhere in the tree. Every tool in the wider Destiny 2
-ecosystem that upstream credits — alkahest, tiger-pkg, tiger-parse, Charm, D2TextureRipper — also
-only reads. Nobody has published working `.pkg` authoring.
+### What is already solved
 
-So "custom player model" in the Skyrim sense would mean first solving Tiger archive repacking,
-which is a research project in its own right and independent of Sunrise. What *is* reachable is
-recombining the art the game already ships, which is what everything above does.
+**Integrity checking is defeated, in this codebase, today.**
+`src/client/hooks/package_trust/package_trust_bypass.cpp` does three things to the running client:
+
+1. Detours the package-header validator and forces its `rsaTrusted` argument to 1, so RSA
+   signature verification cannot refuse a header.
+2. Patches the extended-header authentication failure (`mov eax, -89`) to return success.
+3. NOPs the cached-data hash gate's conditional jump into an unconditional one, so a failed
+   content hash takes the success path.
+
+A tampered package therefore loads. This is the check that would normally end the conversation,
+and upstream already removed it — not for modding, but because the offline client needs it.
+
+**Compression is optional, so no Oodle encoder is needed.** `reader/layout.h` defines
+`BlockFlags::kCompressed = 0x1` as a *per-block* flag. A repacked package can clear it and store
+block bodies raw. `kEncrypted = 0x2` is likewise per-block. Sunrise only ever calls
+`OodleLZ_Decompress`, and the game's shipped `oo2core_3_win64.dll` is very likely decode-only —
+which turns out not to matter.
+
+**The container format is fully documented in this repo.** `reader/layout.h` gives the header size
+(`0x180`), the entry table offset (`0x110`), the block table layout, the fixed decompressed block
+size (`0x40000`), and exact record strides with static asserts. A writer is the inverse of code
+that already exists here.
+
+**Mesh reading is solved upstream.**
+[MontevenDynamicExtractor](https://github.com/MontagueM/MontevenDynamicExtractor) converts Destiny 2
+dynamic models to FBX with textures, skeletons and full vertex data. The formats are understood.
+
+### What is actually hard
+
+- **No `.pkg` writer exists publicly.** tiger-pkg, DestinyUnpacker, alkahest and Charm all read
+  only. This has to be written. It is bounded work against a documented format, not research into
+  an unknown one.
+- **The header records its own file size**, and the validator still compares it against the real
+  one — see the mismatch logging in `validate_header`. A repacked package has to stay internally
+  consistent.
+- **Authoring a mesh the renderer accepts** is the real cost: vertex layouts, index buffers,
+  skeleton binding and material/shader assignment all have to match what the shaders expect.
+  Reading a format tells you its shape but not which of its invariants the consumer relies on.
+
+### Realistic ordering
+
+Roughly increasing difficulty, and worth attacking in this order:
+
+| target | why this order |
+|---|---|
+| Texture replacement | no geometry, no skeleton — proves the repack pipeline end to end |
+| Rigid prop (sword, ship) | one mesh, one bone attachment, no deformation |
+| Skinned armor (helmet, boots) | must bind correctly to the existing skeleton |
+| Full player model | everything above, plus animation compatibility |
+
+Start with a texture. If a repacked package loads and a recoloured texture shows up in game, every
+hard question after that is about mesh authoring rather than about whether the approach works.
+
+### How a custom model would be delivered
+
+You would not add a new item. You would **replace the art an existing ornament points at**, then
+equip that ornament — which is exactly what the settings above make easy. The plug plumbing is the
+delivery mechanism; the repacked package supplies the geometry.
+
+### The alternative path
+
+Intercepting draws at the D3D11 level and substituting geometry avoids packages entirely. Sunrise
+hooks only `IDXGISwapChain::Present`, `ResizeBuffers` and `SetFullscreenState` — swap-chain level,
+for the ImGui overlay. Nothing hooks the device context or any geometry submission, so this would
+be built from scratch, and matching D2's skinning and material state at draw time is likely harder
+than repacking. Worth knowing it exists; not worth starting there.
