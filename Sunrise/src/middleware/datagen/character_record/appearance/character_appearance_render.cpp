@@ -1,5 +1,6 @@
 #include <algorithm>
 
+#include "../../../../core/settings/settings.h"
 #include "../../../../state/build_data/runtime.h"
 #include "internal.h"
 
@@ -100,9 +101,10 @@ void apply_material_pairs(const details::Definition& detail,
     }
 }
 
-/** Applies plug-owned gear art and appends its class-qualified overlay arrangement. */
+/** Applies plug-owned gear art and its class-qualified arrangement. */
 void apply_plug_art(const Equipped& equipped,
                     state::CharacterClass characterClass,
+                    bool arrangementReplaces,
                     layout::RenderEntry& entry) noexcept {
     for (std::size_t lane = 0; lane < equipped.laneCount; ++lane) {
         details::Definition plug{};
@@ -115,13 +117,22 @@ void apply_plug_art(const Equipped& equipped,
         if (plug.gearArtIndex != details::kUnavailableArtIndex) {
             entry.art[layout::kGearArtSlot] = plug.gearArtIndex;
         }
-        const std::uint16_t overlay = select_art_arrangement(plug, characterClass);
-        if (overlay != details::kUnavailableArtIndex) {
-            const auto empty = std::find(
-                entry.overlays.begin(), entry.overlays.end(), layout::kEmptyDefinitionIndex);
-            if (empty != entry.overlays.end()) {
-                *empty = overlay;
-            }
+        const std::uint16_t arrangement = select_art_arrangement(plug, characterClass);
+        if (arrangement == details::kUnavailableArtIndex) {
+            continue;
+        }
+        // A declared gear art index replaces the base item's outright, so a plug that also declares
+        // an arrangement is describing the same substitution twice. Appending that arrangement to
+        // the overlays leaves the base one in its own slot, which is a candidate cause of an
+        // ornament reading as equipped while the base model still draws.
+        if (arrangementReplaces) {
+            entry.art[layout::kArtArrangementSlot] = arrangement;
+            continue;
+        }
+        const auto empty =
+            std::find(entry.overlays.begin(), entry.overlays.end(), layout::kEmptyDefinitionIndex);
+        if (empty != entry.overlays.end()) {
+            *empty = arrangement;
         }
     }
 }
@@ -156,6 +167,8 @@ bool resolve_equipped(const family4::loadout::SlottedInstance& slotted,
 bool apply_render(const family4::loadout::ResolvedInstances& instances,
                   state::CharacterClass characterClass,
                   layout::Appearance& appearance) noexcept {
+    const bool arrangementReplaces =
+        core::settings::get().cosmetics.ornamentReplacesArrangement;
     for (std::size_t index = 0; index < instances.itemCount; ++index) {
         const family4::loadout::SlottedInstance& slotted = instances.items[index];
         if (slotted.equipmentSlot >= appearance.render.size()) {
@@ -173,7 +186,7 @@ bool apply_render(const family4::loadout::ResolvedInstances& instances,
         // rather than taking art row 0.
         entry.art[layout::kGearArtSlot] = detail.gearArtIndex;
         entry.art[layout::kArtArrangementSlot] = select_art_arrangement(detail, characterClass);
-        apply_plug_art(equipped, characterClass, entry);
+        apply_plug_art(equipped, characterClass, arrangementReplaces, entry);
         apply_material_pairs(detail, equipped, entry);
     }
     return true;

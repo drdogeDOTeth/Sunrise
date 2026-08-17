@@ -11,6 +11,7 @@ bool Parser::cosmetics(state::cosmetics::Settings& output) noexcept {
     bool hasUnrestrictedPlugs = false;
     bool hasIgnorePlugOwnership = false;
     bool hasIgnoreInsertionCost = false;
+    bool hasOrnamentReplacesArrangement = false;
     if (consume('}')) {
         return true;
     }
@@ -34,6 +35,12 @@ bool Parser::cosmetics(state::cosmetics::Settings& output) noexcept {
                 return false;
             }
             hasIgnoreInsertionCost = true;
+        } else if (key == "ornament_replaces_arrangement") {
+            if (hasOrnamentReplacesArrangement
+                || !boolean(candidate.ornamentReplacesArrangement)) {
+                return false;
+            }
+            hasOrnamentReplacesArrangement = true;
         } else if (!skip_value(0)) {
             return false;
         }

@@ -24,6 +24,20 @@ struct Settings {
     bool ignorePlugOwnership{false};
     /** Applies a plug without paying its authored insertion cost. */
     bool ignoreInsertionCost{false};
+    /**
+     * Lets an ornament's art arrangement replace the base item's instead of joining the overlays.
+     *
+     * The render path treats the two halves of a plug's art asymmetrically: a declared gear art
+     * index replaces the base item's outright, while a declared arrangement is appended to the
+     * overlay list and the base arrangement stays in its own slot. That asymmetry is a candidate
+     * cause of ornaments reading as equipped while the base model still renders, which is the
+     * reported behaviour.
+     *
+     * Off by default because it is a hypothesis about what the client wants, not a confirmed fix.
+     * Turning it on is the A/B test: equip an ornament that should visibly change a model, launch
+     * once with this clear and once with it set, and compare.
+     */
+    bool ornamentReplacesArrangement{false};
 };
 
 } // namespace sunrise::state::cosmetics
