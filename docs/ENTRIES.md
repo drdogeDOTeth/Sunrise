@@ -63,8 +63,55 @@ mesh record would have if it named a vertex layout and its buffers.
 
 ```powershell
 python tools\pkg\analyze.py           # characterise every dumped entry
-python tools\pkg\inspect.py 80B363C9  # annotate one, field by field
+python tools\pkg\inspect_entry.py 80B363C9  # annotate one, field by field
 ```
+
+## The reference graph, resolved without decrypting anything
+
+A tag encodes its package id and entry index directly, so `tools/pkg/resolve.py` looks up the class
+and size behind any reference from plain entry tables. Only bodies need the game.
+
+```powershell
+python tools\pkg\resolve.py --refs 80B363C9   # what one dumped blob points at
+python tools\pkg\resolve.py --graph           # every dumped blob, plus a class census
+```
+
+`0x80B363C9` — a 52-byte `0x80806E28` — resolves to:
+
+| target | class | size | package |
+|---|---|---|---|
+| `0x80B363C2` | `0x80806E2C` | 1,944 B | sandbox |
+| `0x80B364F4` `0x80B363C5` `0x80B363C8` `0x80B3645E` | `0x808071E8` | 2.4-4.1 KB | sandbox |
+| `0x80C70B97` | `0x80806E2E` | **32 B** | globals |
+| `0x80F5746B` | `0x808071E8` | 1,120 B | globals |
+
+One header, several same-class members, and a tiny shared record from `globals`. `0x808073A5`
+records have the same shape, pointing at four or five `0x808071E8` blobs of 5-6 KB each.
+
+### Two corrections this forced
+
+**`0x808071E8` is not packed buffer data.** Sampled entries are **94-96% zeros**, and two of them —
+3,248 B and 2,384 B — both have their last non-zero byte at *exactly* offset 1115. Identical tails
+across different sizes means a structure with a large reserved region, not vertex or index data.
+The earlier "index buffer or sparse table" reading was too generous to the buffer theory.
+
+**`reference` is not always a class id.** Entries of 12-24 bytes resolve to "classes" that are
+themselves tag-shaped (`0x80BC2BDA`, `0x80B800B7`), so small stubs use the field as a pointer. That
+is why `classes.py` reports 1,061,209 distinct values: the genuinely structured classes are the few
+hundred with high counts, and the long tail is pointers being counted as types.
+
+### Most-referenced classes across the sample
+
+| class | references | note |
+|---|---|---|
+| `0x80809C54` | 99 | 88-112 B, in `globals` — small, shared, heavily pointed at |
+| `0x80806E28` | 55 | the 52-byte manifest |
+| `0x808071E8` | 21 | the mostly-zero structure above |
+| `0x80809C36` | 9 | 17-24 KB dense reference table |
+
+`0x80809C54` is the strongest untouched lead: something referenced 99 times, only ~100 bytes, and
+living in `globals` rather than beside the art is what a shared format or material descriptor looks
+like.
 
 ## Not yet known
 

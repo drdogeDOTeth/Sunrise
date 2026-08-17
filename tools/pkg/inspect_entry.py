@@ -5,7 +5,11 @@ Prints one dumped entry in detail, annotating the fields that are understood.
 annotated as they are recognised — the leading size, tag handles, plausible floats — so the parts
 that are not yet understood stand out by contrast rather than getting lost in a hex dump.
 
-Usage: python inspect.py <tag-hex> [byte-count]
+Named `inspect_entry` rather than `inspect` on purpose: a module named `inspect.py` on the path
+shadows the standard library's, which `dataclasses` imports, breaking every other tool in this
+directory with an error that points nowhere near the cause.
+
+Usage: python inspect_entry.py <tag-hex> [byte-count]
 """
 from __future__ import annotations
 
