@@ -202,19 +202,41 @@ Roughly increasing difficulty, and worth attacking in this order:
 
 | target | why this order |
 |---|---|
-| Texture replacement | no geometry, no skeleton — proves the repack pipeline end to end |
+| Texture on a base item | no geometry, no skeleton — proves the repack pipeline end to end |
 | Rigid prop (sword, ship) | one mesh, one bone attachment, no deformation |
-| Skinned armor (helmet, boots) | must bind correctly to the existing skeleton |
+| Helmet or mask | close to rigid: rides the head with little deformation |
+| Chest, arms, legs | real skinning against the existing skeleton |
 | Full player model | everything above, plus animation compatibility |
 
 Start with a texture. If a repacked package loads and a recoloured texture shows up in game, every
 hard question after that is about mesh authoring rather than about whether the approach works.
 
+A mask or helmet is the right first *geometry* target for the same reason a sword is: it barely
+deforms. Chest and leg armour is where skinning starts to bite.
+
 ### How a custom model would be delivered
 
-You would not add a new item. You would **replace the art an existing ornament points at**, then
-equip that ornament — which is exactly what the settings above make easy. The plug plumbing is the
-delivery mechanism; the repacked package supplies the geometry.
+You would not add a new item. You would replace the art an existing item points at. There are two
+candidate items to point at, and the choice matters more than it looks.
+
+**Replace the base item's art.** The render path sets `art[kGearArtSlot]` and
+`art[kArtArrangementSlot]` straight from the base item's detail, before any plug is folded in. That
+path demonstrably works — it is what draws your gear today. Repacking the asset a given helmet
+references therefore depends on nothing unresolved.
+
+**Replace an ornament's art.** More flexible, since equipping toggles it and the original item is
+left intact. But it rides `apply_plug_art`, which is exactly the path reported as incomplete above.
+
+**Start with the base item.** Not for convenience — because it isolates the variable. Repacking and
+the ornament gap are two independent unknowns, and testing them together means a failure tells you
+nothing about which one broke. Against a base item, either the repack pipeline works or it does
+not.
+
+The cost is that base replacement is global: every instance of that item becomes the new model,
+including on NPCs if the asset is shared. Prefer **exotic armour with a unique model** — distinctive,
+unlikely to be shared with generic gear, and obvious in game, so success or failure is unambiguous.
+
+Move to ornaments once the render-path question is settled, at which point they are strictly nicer.
 
 ### The alternative path
 
