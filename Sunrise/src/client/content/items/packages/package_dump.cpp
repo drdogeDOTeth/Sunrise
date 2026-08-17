@@ -35,11 +35,12 @@ constexpr char kRequestTemplate[] =
 
 /**
  * Requests are bounded so a malformed file cannot make the pass run unboundedly long.
- * Sized for every vertex buffer of one destination package: the largest carries 97, and dumping a
- * partial set is worse than useless when the point is to modify a mesh without disturbing the
- * fields the format is not understood well enough to regenerate.
+ * Sized for every entity model of the two gear packages at once: `investment_0361` carries 186 and
+ * `investment_01d3` 157. Dumping a partial set is worse than useless when the point is to modify a
+ * mesh without disturbing the fields the format is not understood well enough to regenerate, and
+ * every extra pass costs a whole game launch.
  */
-constexpr std::size_t kRequestLimit = 256;
+constexpr std::size_t kRequestLimit = 1024;
 /** One request line, already parsed. */
 struct Request {
     bool isClass{};

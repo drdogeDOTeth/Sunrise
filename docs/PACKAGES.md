@@ -246,9 +246,22 @@ completed normally in 2,109 ms.
 The run was a genuine revalidation rather than a cached verdict: the game wrote a new
 `cache_phr_0000f2a9.dat`, a different hash from the previous set.
 
-## Still not verified
+## The game renders from packages we write
 
-That the game *renders from* our redirected entry, as opposed to merely accepting the file. Proving
-that needs an entry whose effect is observable, which in turn needs the dump feature described
-above, since everything holding art is encrypted. Registration passing is the milestone that
-unblocks the rest; it is not by itself proof the bytes are consumed.
+Confirmed on 2026-08-17, and this closes the container question. Mercury loaded in 7,029 ms with
+zero errors from four packages written by `patch.py`, and the game's own reader returned our
+modified vertex bytes, verified byte-for-byte from inside the process.
+
+Getting there needed four undocumented details, all written up above: the two header region
+descriptors, the tag table hiding after the block table, the full 48-byte block record, and 0x800
+sector alignment — plus the stream model, that a package's data is one continuous byte stream cut
+into exact `0x40000` blocks with entries at arbitrary offsets.
+
+Registration passing was never proof on its own; this is. What remains open is the **geometry
+format**, not the container — see [GEOMETRY.md](GEOMETRY.md).
+
+## Still open
+
+Five oversized Mercury buffers hang the loader even under the stream layout and even unmodified in
+shape at 0.9x, while 183 single-block buffers load fine. Terrain was only ever the proof vehicle, so
+this is a side quest rather than a blocker.
