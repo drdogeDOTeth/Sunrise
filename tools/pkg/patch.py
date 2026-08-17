@@ -19,8 +19,9 @@ proprietary key table: writing never needs it.
 
 ## Limits, all enforced rather than assumed
 
-- The replacement must fit one block (`0x40000`), because growing the block table would move every
-  byte after it.
+- A replacement larger than one block (`0x40000`) is split across consecutive appended records.
+  Vertex buffers run to 2.6 MB, so this is required rather than optional. The entry's start-block
+  field is 14 bits, which caps a package at 16,384 blocks.
 - The entry must own every block it spans. Entries are packed several to a block, so repointing a
   shared block would corrupt its neighbours. `plan_patch` refuses when another entry is in the way.
 - Only the file's own patch level is written. Bodies belonging to other patch files are left alone.
@@ -181,21 +182,49 @@ def write_patch_package(source: str | Path, entry_index: int, new_data: bytes) -
     @param new_data Bytes the entry should yield.
     @return The plan that was carried out.
     """
+    return write_patch_package_multi(source, {entry_index: new_data})[entry_index]
+
+
+def write_patch_package_multi(source: str | Path,
+                              replacements: dict[int, bytes]) -> dict[int, Plan]:
+    """
+    Writes the next patch file, redirecting any number of entries in one go.
+
+    One patch file per changed entry would work but is wasteful and, worse, only the newest file of
+    a package is a legal base — so a second patch has to be built on the first, and the chain has to
+    be rebuilt from scratch whenever any link changes. Redirecting them together avoids that
+    entirely.
+
+    @param source Newest existing file of the package. It is never modified.
+    @param replacements Entry index to the bytes it should yield.
+    @return The plan carried out for each entry.
+    """
     source = Path(source)
     pkg = Package(source)
-    if not 0 <= entry_index < pkg.header.entry_count:
-        raise PackageError(f"entry {entry_index} is outside this package")
-    if not new_data:
-        raise PackageError("replacement is empty")
-    if len(new_data) > BLOCK_SIZE:
-        raise PackageError(
-            f"replacement is {len(new_data):,} bytes, over the {BLOCK_SIZE:,}-byte block limit"
-        )
+    if not replacements:
+        raise PackageError("no replacements given")
+    for entry_index, new_data in replacements.items():
+        if not 0 <= entry_index < pkg.header.entry_count:
+            raise PackageError(f"entry {entry_index} is outside this package")
+        if not new_data:
+            raise PackageError(f"replacement for entry {entry_index} is empty")
+
+    # A body larger than one block is split across consecutive records. The reader walks forward
+    # from the entry's start block taking whatever each one yields, so one entry's pieces have to be
+    # contiguous - which they are, each entry's chunks being appended together.
+    plans: dict[int, list[bytes]] = {
+        index: [data[at : at + BLOCK_SIZE] for at in range(0, len(data), BLOCK_SIZE)]
+        for index, data in replacements.items()
+    }
+    total_chunks = sum(len(c) for c in plans.values())
 
     new_patch_id = pkg.header.patch_id + 1
     new_block_index = pkg.header.block_count
-    if new_block_index > 0x3FFF:
-        raise PackageError(f"block table is full at {new_block_index} records")
+    if new_block_index + total_chunks > 0x3FFF:
+        raise PackageError(
+            f"block table cannot take {total_chunks} more records; it is at {new_block_index} "
+            "and the entry start-block field is 14 bits"
+        )
 
     # Writing over a sibling would silently discard shipped bodies that other records still point
     # at, and the damage would only surface as missing content much later.
@@ -213,27 +242,49 @@ def write_patch_package(source: str | Path, entry_index: int, new_data: bytes) -
     table_end = pkg.header.block_table + pkg.header.block_count * BLOCK_RECORD_SIZE
     raw = bytearray(pkg.raw[:table_end])
 
-    # One more block record, describing the only body this file actually stores.
-    raw.extend(b"\x00" * BLOCK_RECORD_SIZE)
-    body_at = (len(raw) + BODY_ALIGNMENT - 1) // BODY_ALIGNMENT * BODY_ALIGNMENT
-    raw.extend(b"\x00" * (body_at - len(raw)))
-    raw.extend(new_data)
+    # Every record is appended before any body so the table stays contiguous.
+    raw.extend(b"\x00" * (BLOCK_RECORD_SIZE * total_chunks))
+
+    carried: dict[int, Plan] = {}
+    record = 0
+    for entry_index, chunks in plans.items():
+        first_block = new_block_index + record
+        for chunk in chunks:
+            body_at = (len(raw) + BODY_ALIGNMENT - 1) // BODY_ALIGNMENT * BODY_ALIGNMENT
+            raw.extend(b"\x00" * (body_at - len(raw)))
+            raw.extend(chunk)
+            struct.pack_into(
+                "<IIHH",
+                raw,
+                table_end + record * BLOCK_RECORD_SIZE,
+                body_at,
+                len(chunk),
+                new_patch_id,
+                0,
+            )
+            record += 1
+        size = len(replacements[entry_index])
+        entry_at = pkg.header.entry_table + entry_index * ENTRY_RECORD_SIZE
+        struct.pack_into("<Q", raw, entry_at + 8, encode_block_info(first_block, 0, size))
+        carried[entry_index] = Plan(
+            entry_index,
+            first_block,
+            pkg.entries[entry_index].size,
+            size,
+            list(range(first_block, first_block + len(chunks))),
+        )
+
     # The trailer is carried over rather than invented. Its contents are not understood, and the
     # registrar accepts a file that keeps them; a file that drops them is rejected.
     raw.extend(trailer)
 
-    struct.pack_into("<IIHH", raw, table_end, body_at, len(new_data), new_patch_id, 0)
     struct.pack_into("<H", raw, OFF_PATCH_ID, new_patch_id)
-    struct.pack_into("<I", raw, OFF_BLOCK_COUNT, pkg.header.block_count + 1)
-
-    entry_at = pkg.header.entry_table + entry_index * ENTRY_RECORD_SIZE
-    struct.pack_into("<Q", raw, entry_at + 8, encode_block_info(new_block_index, 0, len(new_data)))
-
+    struct.pack_into("<I", raw, OFF_BLOCK_COUNT, pkg.header.block_count + total_chunks)
     struct.pack_into("<I", raw, OFF_FILE_SIZE, len(raw))
     struct.pack_into("<I", raw, OFF_TRAILER, len(raw) - TRAILER_SIZE)
 
     out_path.write_bytes(bytes(raw))
-    return Plan(entry_index, new_block_index, pkg.entries[entry_index].size, len(new_data), [])
+    return carried
 
 
 def write_noop_patch_package(source: str | Path) -> Path:

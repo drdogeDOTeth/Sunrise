@@ -107,12 +107,16 @@ def undo() -> None:
         print("no receipt found; nothing this tool wrote is recorded")
         return
     receipt = json.loads(RECEIPT.read_text())
-    written = PACKAGES / receipt["written"]
-    if written.is_file():
-        written.unlink()
-        print(f"removed {written.name}")
-    else:
-        print(f"{written.name} was already gone")
+    # distort.py writes several files in one run and shares this receipt on purpose, so that there
+    # is one undo command rather than one per tool.
+    names = receipt["written"]
+    for name in [names] if isinstance(names, str) else names:
+        written = PACKAGES / name
+        if written.is_file():
+            written.unlink()
+            print(f"removed {written.name}")
+        else:
+            print(f"{name} was already gone")
     RECEIPT.unlink()
     print("install is back to its shipped state")
 

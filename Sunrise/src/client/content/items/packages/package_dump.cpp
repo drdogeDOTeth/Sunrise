@@ -33,8 +33,13 @@ constexpr char kRequestTemplate[] =
     "#\r\n"
     "# class 0x00000008\r\n";
 
-/** Requests are bounded so a malformed file cannot make the pass run unboundedly long. */
-constexpr std::size_t kRequestLimit = 64;
+/**
+ * Requests are bounded so a malformed file cannot make the pass run unboundedly long.
+ * Sized for every vertex buffer of one destination package: the largest carries 97, and dumping a
+ * partial set is worse than useless when the point is to modify a mesh without disturbing the
+ * fields the format is not understood well enough to regenerate.
+ */
+constexpr std::size_t kRequestLimit = 256;
 /** One request line, already parsed. */
 struct Request {
     bool isClass{};
