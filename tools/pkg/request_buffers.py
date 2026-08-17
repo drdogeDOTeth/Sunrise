@@ -38,41 +38,58 @@ def patch_index(path: Path) -> int:
     return int(tail) if tail.isdigit() else -1
 
 
-matches = [p for p in PACKAGES.glob("*.pkg") if wanted.lower() in p.name.lower()]
-if not matches:
+# A destination is split across several packages - Mercury's is four, holding 17, 65, 97 and 9
+# buffers - and which one draws the ground in front of the player is not knowable from the tables.
+# Patching one of four changed 22% of Mercury's vertices and was invisible in game, so the whole
+# family is requested at once. 188 buffers still fit under the 256-request limit in package_dump.cpp.
+newest: dict[str, Path] = {}
+for path in PACKAGES.glob("*.pkg"):
+    if wanted.lower() not in path.name.lower():
+        continue
+    stem = path.stem.rsplit("_", 1)[0]
+    if stem not in newest or patch_index(path) > patch_index(newest[stem]):
+        newest[stem] = path
+if not newest:
     raise SystemExit(f"no package matching {wanted!r}")
-source = max(matches, key=patch_index)
 
-try:
-    pkg = Package(source)
-except PackageError as exc:
-    raise SystemExit(f"{source.name}: {exc}")
+lines = [f"# Every vertex buffer of packages matching {wanted!r}, for a positions-only edit.", ""]
+requested = 0
+vertices = 0
+measured = 0
+for stem, source in sorted(newest.items()):
+    try:
+        pkg = Package(source)
+    except PackageError as exc:
+        print(f"  {source.name}: {exc}")
+        continue
+    buffers = [
+        e for e in pkg.entries
+        if e.reference == VERTEX_BUFFER_CLASS
+        and e.size > HEADER_SIZE
+        and (e.size - HEADER_SIZE) % STRIDE == 0
+        and e.start_block < pkg.header.block_count
+    ]
+    if not buffers:
+        continue
+    buffers = buffers[:max(0, limit - requested)]
+    if not buffers:
+        print(f"  request limit {limit} reached; {source.name} and later were left out")
+        break
+    lines.append(f"# {source.name}: {len(buffers)} buffers")
+    for entry in buffers:
+        count = (entry.size - HEADER_SIZE) // STRIDE
+        lines.append(
+            f"tag 0x{pkg.tag_for(entry.index):08X}   # entry {entry.index}, {count:,} vertices")
+    print(f"  {source.name}: patch {pkg.header.patch_id}, {len(buffers)} buffers, "
+          f"{sum((e.size - HEADER_SIZE) // STRIDE for e in buffers):,} vertices")
+    requested += len(buffers)
+    vertices += sum((e.size - HEADER_SIZE) // STRIDE for e in buffers)
+    measured += sum(e.size for e in buffers)
 
-buffers = [
-    e for e in pkg.entries
-    if e.reference == VERTEX_BUFFER_CLASS
-    and e.size > HEADER_SIZE
-    and (e.size - HEADER_SIZE) % STRIDE == 0
-    and e.start_block < pkg.header.block_count
-]
-if not buffers:
-    raise SystemExit(f"{source.name} carries no decodable vertex buffers")
-
-buffers = buffers[:limit]
-lines = [
-    f"# Every vertex buffer of {source.name}, for a positions-only edit.",
-    f"# {len(buffers)} buffers, "
-    f"{sum((e.size - HEADER_SIZE) // STRIDE for e in buffers):,} vertices.",
-    "",
-]
-for entry in buffers:
-    count = (entry.size - HEADER_SIZE) // STRIDE
-    lines.append(f"tag 0x{pkg.tag_for(entry.index):08X}   # entry {entry.index}, {count:,} vertices")
+if requested == 0:
+    raise SystemExit(f"nothing matching {wanted!r} carries decodable vertex buffers")
 
 REQUEST.parent.mkdir(parents=True, exist_ok=True)
 REQUEST.write_text("\r\n".join(lines), encoding="utf-8")
-
-print(f"{source.name}: patch {pkg.header.patch_id}, {len(buffers)} vertex buffers")
-print(f"  {sum((e.size - HEADER_SIZE) // STRIDE for e in buffers):,} vertices, "
-      f"{sum(e.size for e in buffers):,} bytes")
-print(f"  wrote {len(buffers)} requests to {REQUEST}")
+print(f"\n{requested} buffers, {vertices:,} vertices, {measured:,} bytes")
+print(f"  wrote {requested} requests to {REQUEST}")
