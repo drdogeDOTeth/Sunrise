@@ -25,8 +25,26 @@ art and art arrangement. Then each plug is layered over: an ornament declares it
 material pairs instead, folded across three stages (base, plug-only, late) where only the first six
 distinct material keys survive.
 
-The consequence: **making an ornament show up is entirely a question of getting its hash into a
-plug lane.** The rendering side was never the obstacle.
+So getting an ornament's hash into a plug lane is necessary. It is **not always sufficient.**
+
+### The model-replacement gap
+
+Sundial's author, who has tested this extensively against a real install, reports that Sunrise
+0.2.1 applies shader and material overrides from plugs but **does not apply every ornament's model
+replacement** — the ornament reads as equipped in menus while the base item model still renders.
+Shaders generally work; ornaments often do not.
+
+That does not match a naive read of `apply_plug_art`, which does set `entry.art[kGearArtSlot]` from
+the plug's `gearArtIndex` and appends its overlay arrangement. So one of these is true, and which
+one is not yet established:
+
+- some ornaments carry their model replacement somewhere other than the plug definition's
+  `gearArtIndex` / `artArrangementIndices`, or
+- the client needs a field the datagen layer does not publish.
+
+**This gates custom models entirely.** If the path that points an item at replacement art is
+incomplete, a perfectly repacked custom mesh will not display either — the delivery mechanism is
+the same one. Resolving this comes before any repacking work is worth starting.
 
 ## What actually blocks it
 
@@ -94,6 +112,26 @@ hash to decimal and search it, or go straight to a database URL:
 The one caveat: Sunrise runs an **old build**. Any item added to Destiny 2 after that build does
 not exist in the installed packages, so its hash resolves to nothing no matter what light.gg says.
 Anything from the shipped era works.
+
+## Tooling: use Sundial
+
+[Sundial](https://github.com/KyleThmpsn/sundial) (Rust, GPL-3.0) is a mature GUI for editing
+Sunrise's `settings.json` and is the right tool for loadout work. It scans the installed packages
+to build a searchable catalog of items, plugs and abilities, cached at
+`%LOCALAPPDATA%\Sundial\catalog\d2sk-86657.json`, and offers browse/search per equipment slot and
+socket. It also has an "unsafe" mode showing every plug matching a socket type, and a
+"really unsafe" mode allowing any discovered plug in any socket.
+
+It targets Sunrise 0.1 / 0.2 / 0.2.1 against Destiny 2 Shadowkeep build `86657.20.08.23` — which is
+also the build this fork runs on.
+
+Sundial and the settings above are complementary, not redundant. Sundial edits the file *before*
+launch and so never touches the runtime staging path; the `state.cosmetics` switches govern plugs
+applied *in game* through the character screen. Sundial cannot help with the latter, and the
+switches cannot help with the former.
+
+Changes made in Sundial need a full exit to desktop and relaunch to take effect. It backs up every
+save to `%LOCALAPPDATA%\Sundial\backups`.
 
 ## Editing a loadout by hand
 
