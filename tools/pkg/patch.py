@@ -193,6 +193,15 @@ def write_patch_package(source: str | Path, entry_index: int, new_data: bytes) -
     if new_block_index > 0x3FFF:
         raise PackageError(f"block table is full at {new_block_index} records")
 
+    # Writing over a sibling would silently discard shipped bodies that other records still point
+    # at, and the damage would only surface as missing content much later.
+    out_path = source.with_name(f"{pkg.stem}_{new_patch_id}.pkg")
+    if out_path.exists():
+        raise PackageError(
+            f"{out_path.name} already exists, so {source.name} is not the newest file of this "
+            "package; base the patch on the newest one instead"
+        )
+
     table_end = pkg.header.block_table + pkg.header.block_count * BLOCK_RECORD_SIZE
     raw = bytearray(pkg.raw[:table_end])
 
@@ -212,7 +221,6 @@ def write_patch_package(source: str | Path, entry_index: int, new_data: bytes) -
     struct.pack_into("<I", raw, OFF_FILE_SIZE, len(raw))
     struct.pack_into("<I", raw, OFF_BODY_END, body_at)
 
-    out_path = source.with_name(f"{pkg.stem}_{new_patch_id}.pkg")
     out_path.write_bytes(bytes(raw))
     return Plan(entry_index, new_block_index, pkg.entries[entry_index].size, len(new_data), [])
 

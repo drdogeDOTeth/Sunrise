@@ -17,3 +17,6 @@
 # Python tooling under tools/
 __pycache__/
 *.py[cod]
+
+# Local game-test state
+tools/pkg/gametest_receipt.json
