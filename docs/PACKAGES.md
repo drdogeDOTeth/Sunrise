@@ -90,6 +90,56 @@ Current limits, all enforced rather than assumed:
 - Bodies are written plain — neither compressed nor encrypted.
 - Block indices are a 14-bit field, capping a package at 16,384 blocks.
 
+## Every package ends in a 0x800 trailer
+
+All 2,202 shipped packages satisfy both of these **exactly**:
+
+- `0x164` holds the real file size.
+- File size minus the value at `0x160` is `0x800`. The last 2,048 bytes are a trailer, and `0x160`
+  records where it starts.
+
+This is not decoration. A written patch file that breaks the relationship is rejected by the game's
+patchable registrar with result `-86`, logged through Sunrise's assert hook as
+`Patchable package registration failed with result  (-86)`. `write_patch_package` therefore carries
+the source file's trailer over verbatim — its contents are not understood, and they do not need to
+be, because the registrar accepts a file that keeps them.
+
+### How that was established
+
+By bisection, because guessing was going to be expensive:
+
+1. A patch file with a redirected entry was rejected with `-86`.
+2. A **no-op** patch file — a byte-identical copy of its source with only the patch id at `0x20`
+   changed — registered **cleanly**. That ruled out an intrinsic header signature or an
+   expected-file-set check, and pinned the cause on the table edits.
+3. Comparing the two against the shipped set produced the `0x800` invariant above.
+
+`write_noop_patch_package()` exists to repeat step 2 whenever a rejection needs re-bisecting.
+
+### The registrar caches its verdict
+
+The game validates a package set **only when it changes**, then caches the result and skips
+revalidation. A second launch after a rejected file appeared came up clean and briefly looked like a
+pass; nothing had been re-checked. Clearing `C:\Sunrise\cache_phr_*.dat` and
+`bin\x64\Sunrise\cache\content_manifest.bin` forces a genuine re-check, and `gametest.py` now does
+that automatically on every run. A launch without it proves nothing.
+
+## What -86 is not
+
+`-86` is `0xFFFFFFAA`, a sibling of the `-93` and `-89` results
+`client/hooks/package_trust/package_trust_bypass.cpp` already defeats. Forcing it the same way does
+**not** work: `B8 AA FF FF FF` (`mov eax, -86`) does not appear anywhere in the unpacked image, so
+the value arrives in a variable rather than as an immediate. The assert text reads
+`failed with result  (-86)` — the doubled space is consistent with a `"%s (%d)"` format whose first
+argument is empty.
+
+Note also that the site cannot be found by scanning `destiny2.exe` on disk. It is VMProtect-packed:
+there is a `.vmp0` section, `.text` reports entropy 8.00, and no marker strings survive. A file scan
+finds zero sites for `-93` and `-89` too, both of which resolve fine at runtime.
+
+The bypass added here is deliberately **non-fatal** for that reason — `-93` and `-89` are
+load-bearing and proven, and a pattern that fails to resolve must not take them down.
+
 ## Verified so far
 
 ```powershell

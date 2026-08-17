@@ -30,8 +30,20 @@ import json
 import sys
 from pathlib import Path
 
-from patch import write_patch_package
+from patch import write_noop_patch_package, write_patch_package
 from tigerpkg import BLOCK_SIZE, Package, PackageError
+
+# The game validates a package set only when it changes, then caches the verdict and skips
+# revalidation. A launch without clearing these repeats the previous answer whatever the files say,
+# which made one earlier run look like a pass when nothing had been re-checked.
+#
+# The game cache is named for a hash of the package set (cache_phr_0000fbbe -> cache_phr_0000fb13
+# when one file was added), so changing the files already invalidates it. Clearing is belt and
+# braces, and it has to glob rather than name one file, or it silently clears nothing.
+CACHE_GLOBS = (
+    (Path(r"C:\Sunrise"), "cache_phr_*.dat"),
+    (Path(r"C:\Sunrise\bin\x64\Sunrise\cache"), "content_manifest.bin"),
+)
 
 PACKAGES = Path(r"C:\Sunrise\packages")
 # Kept beside this tool rather than in the packages directory. That directory holds nothing but
@@ -76,6 +88,20 @@ def candidates() -> list[tuple]:
     return rows
 
 
+def clear_caches() -> None:
+    """Moves the validation caches aside so the next launch re-checks the package set."""
+    spare = Path(__file__).parent / "cache_backup"
+    spare.mkdir(exist_ok=True)
+    moved = 0
+    for directory, pattern in CACHE_GLOBS:
+        for cache in directory.glob(pattern):
+            cache.replace(spare / cache.name)
+            print(f"  moved {cache.name} aside")
+            moved += 1
+    if moved == 0:
+        print("  no caches present (the game rebuilds them on the next launch)")
+
+
 def undo() -> None:
     if not RECEIPT.is_file():
         print("no receipt found; nothing this tool wrote is recorded")
@@ -93,11 +119,33 @@ def undo() -> None:
 
 if "--undo" in sys.argv:
     undo()
+    print("\nclearing validation caches so the next launch re-checks:")
+    clear_caches()
     raise SystemExit(0)
 
 rows = candidates()
 if not rows:
     raise SystemExit("no suitable candidate package found")
+
+if "--noop" in sys.argv:
+    # Bisection: change nothing but the patch id. See write_noop_patch_package.
+    _neg, _family, source, pkg, _readable, _plain = rows[0]
+    if RECEIPT.is_file():
+        raise SystemExit(f"{RECEIPT.name} exists; run --undo first")
+    written = write_noop_patch_package(source)
+    print(f"\nno-op patch of {source.name} (patch {pkg.header.patch_id}, layout {pkg.header.layout})")
+    print(f"  {written.name}: {written.stat().st_size:,} bytes, identical but for the patch id")
+    check = Package(written)
+    if set(check.check()) - set(pkg.check()):
+        written.unlink()
+        raise SystemExit("no-op copy did not verify; removed")
+    print("  verifies clean")
+    RECEIPT.write_text(json.dumps({"written": written.name, "source": source.name,
+                                   "entry": None, "mode": "noop"}, indent=2))
+    print("\nclearing validation caches so the launch re-checks:")
+    clear_caches()
+    print(f"\nInstalled {written.name}. Launch, then: python readlog.py")
+    raise SystemExit(0)
 
 print(f"{'file':40s} {'patch':>5} {'checkable':>9} {'blocks':>7} {'plain':>6}  family MB")
 for _neg, family, path, pkg, readable, plain in rows[:8]:
@@ -169,6 +217,8 @@ print(f"  no new structural complaints, redirected entry exact, "
       f"{len(before) - 1:,} neighbours unchanged")
 
 RECEIPT.write_text(json.dumps({"written": written.name, "source": source.name,
-                               "entry": target}, indent=2))
+                               "entry": target, "mode": "redirect"}, indent=2))
+print("\nclearing validation caches so the launch re-checks:")
+clear_caches()
 print(f"\nInstalled {written.name}")
 print(f"Undo with:  python gametest.py --undo")

@@ -44,9 +44,13 @@ from tigerpkg import (
 
 # Appended bodies start on this boundary, matching the alignment shipped bodies already sit on.
 BODY_ALIGNMENT = 16
-# The header carries the file size here, and a second size 0x800 below it.
-OFF_BODY_END = 0x160
+# Every one of the 2,202 shipped packages satisfies both of these exactly: 0x164 is the real file
+# size, and the file ends in a 0x800 trailer whose start is recorded at 0x160. A written file that
+# breaks the relationship is rejected by the patchable registrar with -86, while a byte-identical
+# copy that preserves it registers cleanly - which is how the trailer was identified.
+OFF_TRAILER = 0x160
 OFF_FILE_SIZE = 0x164
+TRAILER_SIZE = 0x800
 # Smallest plaintext a block is assumed to carry when its real size cannot be measured. This is
 # Oodle's decode step, the granularity Sunrise itself searches on.
 MIN_ASSUMED_PLAINTEXT = 0x4000
@@ -202,6 +206,10 @@ def write_patch_package(source: str | Path, entry_index: int, new_data: bytes) -
             "package; base the patch on the newest one instead"
         )
 
+    if len(pkg.raw) < TRAILER_SIZE:
+        raise PackageError(f"{source.name} is too small to carry a trailer")
+    trailer = pkg.raw[-TRAILER_SIZE:]
+
     table_end = pkg.header.block_table + pkg.header.block_count * BLOCK_RECORD_SIZE
     raw = bytearray(pkg.raw[:table_end])
 
@@ -210,6 +218,9 @@ def write_patch_package(source: str | Path, entry_index: int, new_data: bytes) -
     body_at = (len(raw) + BODY_ALIGNMENT - 1) // BODY_ALIGNMENT * BODY_ALIGNMENT
     raw.extend(b"\x00" * (body_at - len(raw)))
     raw.extend(new_data)
+    # The trailer is carried over rather than invented. Its contents are not understood, and the
+    # registrar accepts a file that keeps them; a file that drops them is rejected.
+    raw.extend(trailer)
 
     struct.pack_into("<IIHH", raw, table_end, body_at, len(new_data), new_patch_id, 0)
     struct.pack_into("<H", raw, OFF_PATCH_ID, new_patch_id)
@@ -219,10 +230,41 @@ def write_patch_package(source: str | Path, entry_index: int, new_data: bytes) -
     struct.pack_into("<Q", raw, entry_at + 8, encode_block_info(new_block_index, 0, len(new_data)))
 
     struct.pack_into("<I", raw, OFF_FILE_SIZE, len(raw))
-    struct.pack_into("<I", raw, OFF_BODY_END, body_at)
+    struct.pack_into("<I", raw, OFF_TRAILER, len(raw) - TRAILER_SIZE)
 
     out_path.write_bytes(bytes(raw))
     return Plan(entry_index, new_block_index, pkg.entries[entry_index].size, len(new_data), [])
+
+
+def write_noop_patch_package(source: str | Path) -> Path:
+    """
+    Writes the next patch file as an exact copy of its source, with only the patch id bumped.
+
+    This exists to bisect the registrar's -86 rejection. The file changes nothing: it stores no
+    bodies of its own, and every block record keeps the patch id of the file that already holds its
+    body, so the package resolves to exactly the same bytes it did before. The only differences from
+    a shipped file are the patch id at 0x20 and, consequently, its name.
+
+    If the game accepts this, the container layout is understood and the rejection is caused by the
+    table edits a real patch makes. If the game rejects it, the check is intrinsic to the header —
+    a signature or an expected-file-set test — and no amount of care with the tables will pass it.
+    Those two outcomes need completely different work, which is why it is worth one launch to tell
+    them apart.
+
+    @param source Newest existing file of the package. It is never modified.
+    @return The file written.
+    """
+    source = Path(source)
+    pkg = Package(source)
+    new_patch_id = pkg.header.patch_id + 1
+    out_path = source.with_name(f"{pkg.stem}_{new_patch_id}.pkg")
+    if out_path.exists():
+        raise PackageError(f"{out_path.name} already exists; {source.name} is not the newest file")
+
+    raw = bytearray(pkg.raw)
+    struct.pack_into("<H", raw, OFF_PATCH_ID, new_patch_id)
+    out_path.write_bytes(bytes(raw))
+    return out_path
 
 
 def verify_patch(out_path: str | Path, entry_index: int, expected: bytes) -> None:
