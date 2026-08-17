@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 
 from patch import write_patch_package_multi
-from tigerpkg import Package
+from tigerpkg import BLOCK_SIZE, Package
 
 PACKAGES = Path(r"C:\Sunrise\packages")
 DUMP = Path(r"C:\Sunrise\bin\x64\Sunrise\dump")
@@ -58,6 +58,13 @@ scale = option("--scale", 0.5)
 if not 0.0 < scale <= 1.0:
     raise SystemExit("--scale must be within (0, 1]; scaling up can wrap the int16 range")
 
+# Bodies larger than one block are split across consecutive records, which round-trips through our
+# own reader but has never been accepted by the game. The only package that ever loaded, 03a7, is
+# also the only one whose buffers all fit a single block - it wrote 97 records for 97 buffers, while
+# 0356 wrote 28 for 17. Patching every package but skipping oversized buffers keeps the coverage and
+# removes multi-block as a variable.
+single_block = "--single-block" in sys.argv
+
 newest: dict[str, Path] = {}
 for path in PACKAGES.glob("*.pkg"):
     if wanted.lower() not in path.name.lower():
@@ -80,11 +87,15 @@ for stem, source in sorted(newest.items()):
     replacements: dict[int, bytes] = {}
     vertices = 0
     missing = 0
+    oversized = 0
 
     for entry in pkg.entries:
         if entry.reference != VERTEX_BUFFER_CLASS or entry.size <= HEADER_SIZE:
             continue
         if entry.start_block >= pkg.header.block_count:
+            continue
+        if single_block and entry.size > BLOCK_SIZE:
+            oversized += 1
             continue
         # A dump taken while one of our own patch files was installed reads back *through* it, so
         # the "original" on disk is already rescaled and scaling it again compounds the edit. In a
@@ -123,7 +134,8 @@ for stem, source in sorted(newest.items()):
 
     print(f"{source.name}: patch {pkg.header.patch_id}")
     print(f"  {len(replacements)} buffers rescaled to {scale:g}x, {vertices:,} vertices"
-          + (f", {missing} not dumped" if missing else ""))
+          + (f", {missing} not dumped" if missing else "")
+          + (f", {oversized} skipped as multi-block" if oversized else ""))
 
     plans = write_patch_package_multi(source, replacements)
     written = source.with_name(f"{pkg.stem}_{pkg.header.patch_id + 1}.pkg")

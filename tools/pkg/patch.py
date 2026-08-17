@@ -52,6 +52,9 @@ from tigerpkg import (
     PackageError,
 )
 
+# Entry start offsets are stored in 14 bits scaled by 16, so a body must begin on a 16-byte
+# boundary within the block stream.
+BODY_STREAM_ALIGNMENT = 16
 # Appended bodies start on this boundary, matching the alignment shipped bodies already sit on.
 #
 # This was 16, which is what shipped bodies *appear* to satisfy if you only check that they are
@@ -244,14 +247,32 @@ def write_patch_package_multi(source: str | Path,
         if not new_data:
             raise PackageError(f"replacement for entry {entry_index} is empty")
 
-    # A body larger than one block is split across consecutive records. The reader walks forward
-    # from the entry's start block taking whatever each one yields, so one entry's pieces have to be
-    # contiguous - which they are, each entry's chunks being appended together.
-    plans: dict[int, list[bytes]] = {
-        index: [data[at : at + BLOCK_SIZE] for at in range(0, len(data), BLOCK_SIZE)]
-        for index, data in replacements.items()
-    }
-    total_chunks = sum(len(c) for c in plans.values())
+    # A package's data is one continuous stream cut into fixed BLOCK_SIZE blocks, and entries sit at
+    # arbitrary byte offsets within it. Shipped entries prove it: in mercury_destination_0356 entry
+    # 2939 ends inside block 1220 and entry 2962 begins in that same block at offset 257,088.
+    #
+    # So every block holds exactly BLOCK_SIZE uncompressed bytes, and only the last block a patch
+    # file contributes may be short. That is measurable on plain blocks, where stored size *is*
+    # uncompressed size: w64_audio_01d2_en_2 has 283 of 285 at exactly 0x40000 with the two partials
+    # at the end of each patch's run, and w64_audio_01e7_en_2 has 292 of 293 with its one partial
+    # last of all.
+    #
+    # Giving each entry its own block, as this did before, makes every block partial. A single-block
+    # entry survives that because start_offset is 0 and the reader never crosses a boundary, which
+    # is why 97 such entries loaded cleanly. Multi-block entries must cross, the arithmetic assumes
+    # full blocks, and Mercury froze with 2048 mainloop hitches.
+    stream = bytearray()
+    placement: dict[int, tuple[int, int]] = {}
+    for index, data in replacements.items():
+        # Entry start offsets are stored in 14 bits scaled by 16, so each body must begin on a
+        # 16-byte boundary within the stream.
+        if len(stream) % BODY_STREAM_ALIGNMENT:
+            stream.extend(b"\x00" * (BODY_STREAM_ALIGNMENT - len(stream) % BODY_STREAM_ALIGNMENT))
+        placement[index] = (len(stream), len(data))
+        stream.extend(data)
+
+    chunks = [bytes(stream[at : at + BLOCK_SIZE]) for at in range(0, len(stream), BLOCK_SIZE)]
+    total_chunks = len(chunks)
 
     new_patch_id = pkg.header.patch_id + 1
     new_block_index = pkg.header.block_count
@@ -292,45 +313,46 @@ def write_patch_package_multi(source: str | Path,
     raw.extend(b"\x00" * (BLOCK_RECORD_SIZE * total_chunks))
     raw.extend(tail)
 
+    for record, chunk in enumerate(chunks):
+        body_at = (len(raw) + BODY_ALIGNMENT - 1) // BODY_ALIGNMENT * BODY_ALIGNMENT
+        raw.extend(b"\x00" * (body_at - len(raw)))
+        raw.extend(chunk)
+        # A block record is 48 bytes, not the 12 the four leading fields occupy. Writing only
+        # those and leaving the rest zero produced a file the registrar accepted and the
+        # geometry streamer then hung on, because bytes 12-31 are a SHA-1 of the stored body
+        # and every shipped block carries one. Verified against all 285 plain blocks of
+        # w64_audio_01d2_en: sha1(body) equals those bytes exactly, with no exceptions.
+        #
+        # Bytes 32-47 are the AES-GCM tag and are nonzero only for encrypted blocks - in that
+        # same package they are set on precisely the 61 blocks whose encrypted flag is set.
+        # Ours are written plain, so leaving the tag zero is correct by construction rather
+        # than by omission. Encrypting would need the block keys, which stay in the game.
+        struct.pack_into(
+            "<IIHH20s16s",
+            raw,
+            table_end + record * BLOCK_RECORD_SIZE,
+            body_at,
+            len(chunk),
+            new_patch_id,
+            0,
+            hashlib.sha1(chunk).digest(),
+            b"\x00" * 16,
+        )
+
     carried: dict[int, Plan] = {}
-    record = 0
-    for entry_index, chunks in plans.items():
-        first_block = new_block_index + record
-        for chunk in chunks:
-            body_at = (len(raw) + BODY_ALIGNMENT - 1) // BODY_ALIGNMENT * BODY_ALIGNMENT
-            raw.extend(b"\x00" * (body_at - len(raw)))
-            raw.extend(chunk)
-            # A block record is 48 bytes, not the 12 the four leading fields occupy. Writing only
-            # those and leaving the rest zero produced a file the registrar accepted and the
-            # geometry streamer then hung on, because bytes 12-31 are a SHA-1 of the stored body
-            # and every shipped block carries one. Verified against all 285 plain blocks of
-            # w64_audio_01d2_en: sha1(body) equals those bytes exactly, with no exceptions.
-            #
-            # Bytes 32-47 are the AES-GCM tag and are nonzero only for encrypted blocks - in that
-            # same package they are set on precisely the 61 blocks whose encrypted flag is set.
-            # Ours are written plain, so leaving the tag zero is correct by construction rather
-            # than by omission. Encrypting would need the block keys, which stay in the game.
-            struct.pack_into(
-                "<IIHH20s16s",
-                raw,
-                table_end + record * BLOCK_RECORD_SIZE,
-                body_at,
-                len(chunk),
-                new_patch_id,
-                0,
-                hashlib.sha1(chunk).digest(),
-                b"\x00" * 16,
-            )
-            record += 1
-        size = len(replacements[entry_index])
+    for entry_index, (offset, size) in placement.items():
+        first_block = new_block_index + offset // BLOCK_SIZE
+        last_block = new_block_index + (offset + size - 1) // BLOCK_SIZE
         entry_at = pkg.header.entry_table + entry_index * ENTRY_RECORD_SIZE
-        struct.pack_into("<Q", raw, entry_at + 8, encode_block_info(first_block, 0, size))
+        struct.pack_into(
+            "<Q", raw, entry_at + 8,
+            encode_block_info(first_block, offset % BLOCK_SIZE, size))
         carried[entry_index] = Plan(
             entry_index,
             first_block,
             pkg.entries[entry_index].size,
             size,
-            list(range(first_block, first_block + len(chunks))),
+            list(range(first_block, last_block + 1)),
         )
 
     # The trailer is carried over rather than invented. Its contents are not understood, and the
