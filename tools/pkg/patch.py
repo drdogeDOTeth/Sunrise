@@ -53,7 +53,18 @@ from tigerpkg import (
 )
 
 # Appended bodies start on this boundary, matching the alignment shipped bodies already sit on.
-BODY_ALIGNMENT = 16
+#
+# This was 16, which is what shipped bodies *appear* to satisfy if you only check that they are
+# aligned at all. They satisfy far more: across mercury _4 (226 own blocks), mercury _5 (195) and
+# w64_audio_01d2_en_2 (163), the least-aligned body in any of them sits on 0x800, with no
+# exceptions in 584 blocks. It is the same 2,048-byte sector the trailer occupies, so the container
+# is built on sectors throughout.
+#
+# Writing bodies on 16-byte boundaries produced files that register cleanly and then hang the
+# geometry streamer in activity:initial_slice_set_loading. A single small entry survived it, which
+# briefly read as evidence that plain blocks were fine — a 3-vertex buffer is easy for the game not
+# to draw at all. Ninety-seven did not.
+BODY_ALIGNMENT = 0x800
 # Every one of the 2,202 shipped packages satisfies both of these exactly: 0x164 is the real file
 # size, and the file ends in a 0x800 trailer whose start is recorded at 0x160. A written file that
 # breaks the relationship is rejected by the patchable registrar with -86, while a byte-identical
@@ -61,6 +72,21 @@ BODY_ALIGNMENT = 16
 OFF_TRAILER = 0x160
 OFF_FILE_SIZE = 0x164
 TRAILER_SIZE = 0x800
+# The header carries two `{offset, size, sha1[20]}` descriptors covering regions of the file. Both
+# verify exactly on every file checked - mercury _4, mercury _5 and w64_audio_01d2_en_2 - which is
+# what identified them.
+#
+# The second one spans the entry table *and* the block table, so growing the block table changes
+# both its size and its digest. A file that leaves them stale registers cleanly, reads correctly
+# through Sunrise's own reader, and then hangs the game's loader forever in
+# activity:initial_slice_set_loading. That is the whole explanation for the hang: registration
+# checks structure, Sunrise's reader does not verify these, and the game's loader does.
+#
+# The first descriptor covers a region ahead of the entry table that a patch never touches, so it
+# is carried over untouched.
+OFF_REGION_A = 0x0F0
+OFF_REGION_B = 0x110
+REGION_DIGEST_SIZE = 20
 # Smallest plaintext a block is assumed to carry when its real size cannot be measured. This is
 # Oodle's decode step, the granularity Sunrise itself searches on.
 MIN_ASSUMED_PLAINTEXT = 0x4000
@@ -249,10 +275,22 @@ def write_patch_package_multi(source: str | Path,
     trailer = pkg.raw[-TRAILER_SIZE:]
 
     table_end = pkg.header.block_table + pkg.header.block_count * BLOCK_RECORD_SIZE
-    raw = bytearray(pkg.raw[:table_end])
+    region_offset, region_size = struct.unpack_from("<II", pkg.raw, OFF_REGION_B)
+    region_end = region_offset + region_size
+    if not region_offset < table_end <= region_end:
+        raise PackageError(
+            f"{source.name}: block table ends at 0x{table_end:X}, outside the hashed region "
+            f"0x{region_offset:X}..0x{region_end:X}")
 
+    # A small table of tag references sits immediately after the block table, inside the hashed
+    # region. Nothing in the header points at it, so its position is implied by the table's end and
+    # it has to travel with it. Truncating at table_end silently dropped it.
+    tail = bytes(pkg.raw[table_end:region_end])
+
+    raw = bytearray(pkg.raw[:table_end])
     # Every record is appended before any body so the table stays contiguous.
     raw.extend(b"\x00" * (BLOCK_RECORD_SIZE * total_chunks))
+    raw.extend(tail)
 
     carried: dict[int, Plan] = {}
     record = 0
@@ -303,6 +341,17 @@ def write_patch_package_multi(source: str | Path,
     struct.pack_into("<I", raw, OFF_BLOCK_COUNT, pkg.header.block_count + total_chunks)
     struct.pack_into("<I", raw, OFF_FILE_SIZE, len(raw))
     struct.pack_into("<I", raw, OFF_TRAILER, len(raw) - TRAILER_SIZE)
+
+    # Last, because every earlier write in this function lands inside the hashed region: the new
+    # block records, the tail that moved behind them, and each redirected entry's blockInfo. The
+    # header fields just written sit ahead of the region and do not affect it.
+    grown = region_size + BLOCK_RECORD_SIZE * total_chunks
+    struct.pack_into("<I", raw, OFF_REGION_B + 4, grown)
+    struct.pack_into(
+        f"<{REGION_DIGEST_SIZE}s",
+        raw,
+        OFF_REGION_B + 8,
+        hashlib.sha1(bytes(raw[region_offset:region_offset + grown])).digest())
 
     out_path.write_bytes(bytes(raw))
     return carried
