@@ -638,6 +638,7 @@
     <ClCompile Include="src\state\build_data\cache\records\cache_investment_records.cpp" />
     <ClCompile Include="src\server\bap\encrypted\push\snapshot\family4_object_staging.cpp" />
     <ClCompile Include="src\core\settings\state\account_rows_parser.cpp" />
+    <ClCompile Include="src\core\settings\state\cosmetics_parser.cpp" />
     <ClCompile Include="src\server\bap\encrypted\push\queuez\queuez_banner_push.cpp" />
     <ClCompile Include="src\server\bap\encrypted\push\queuez\queuez_push_reporting.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_container_location.cpp" />
@@ -888,6 +889,7 @@
     <ClInclude Include="src\state\equipment\light\definition.h" />
     <ClInclude Include="src\state\equipment\light\calculation\equipment_light_calculation.h" />
     <ClInclude Include="src\state\equipment\light\resolution\configured_equipment_light_resolver.h" />
+    <ClInclude Include="src\state\cosmetics\definition.h" />
     <ClInclude Include="src\state\investment\investment.h" />
     <ClInclude Include="src\state\content\content_catalog.h" />
     <ClInclude Include="src\state\content_manifest\cache\format.h" />

@@ -127,6 +127,12 @@ private:
      */
     [[nodiscard]] bool investment(state::Family5State& output) noexcept;
     /**
+     * Parses the optional socket-plug relaxations on top of the strict defaults.
+     * @param output Receives the relaxations only after the whole object is valid.
+     * @return True when every supported key appears at most once with a boolean value.
+     */
+    [[nodiscard]] bool cosmetics(state::cosmetics::Settings& output) noexcept;
+    /**
      * Fills the flag-override list from [slot, value] pairs.
      * @param output Receives the flag rows and their count.
      * @return True when every slot, value, and the row count fit their bounds.

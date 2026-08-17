@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "../../core/settings/settings.h"
 #include "../../middleware/datagen/family4/loadout/loadout_resolver.h"
 #include "../../middleware/web_service/messages/opcode1901.h"
 #include "../build_data/runtime.h"
@@ -141,9 +142,14 @@ bool prepare_character_selector_socket_plug(std::uint64_t instanceIdentityToken,
         // its installed pool accepts the plug; this disambiguates armour items whose two mod
         // sockets intentionally expose the same pool. Some action kinds are semantic categories
         // instead (notably shaders), so retain the unique-compatible-lane fallback for those.
+        //
+        // Relaxed pools accept every lane, which would make the unique-lane fallback below
+        // ambiguous for any item with more than one socket. The physical lane the request already
+        // names is the only non-arbitrary answer, so it is taken whenever it exists.
         if (requestedSocketLane < targetDetail.ordinarySocketCount
-            && build_data::is_socket_plug_allowed(
-                targetDefinition.definitionIndex, requestedSocketLane, plugDefinitionIndex)) {
+            && (core::settings::get().cosmetics.unrestrictedPlugs
+                || build_data::is_socket_plug_allowed(
+                    targetDefinition.definitionIndex, requestedSocketLane, plugDefinitionIndex))) {
             resolvedSocketLane = requestedSocketLane;
         } else {
             for (std::size_t lane = 0; lane < targetDetail.ordinarySocketCount; ++lane) {

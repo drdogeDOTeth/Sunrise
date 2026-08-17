@@ -4,6 +4,7 @@
 
 #include "../../state/account/account_state.h"
 #include "../../state/activity/defaults/definition.h"
+#include "../../state/cosmetics/definition.h"
 #include "../../state/investment/investment.h"
 #include "../../state/unlocks/definition.h"
 #include "../logging/log.h"
@@ -43,6 +44,8 @@ struct Settings {
     state::unlocks::Table initialUnlocks;
     /** Authored family-5 unlock overrides. Only the two override lists are authored here. */
     state::Family5State initialFamily5;
+    /** Authored relaxations of the socket-plug rules. Every field is off unless configured. */
+    state::cosmetics::Settings cosmetics;
 };
 
 /** @return The complete default settings. */

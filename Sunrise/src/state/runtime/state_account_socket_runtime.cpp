@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "../../core/logging/log.h"
+#include "../../core/settings/settings.h"
 #include "../../middleware/datagen/family4/loadout/loadout_resolver.h"
 #include "../build_data/runtime.h"
 #include "runtime.h"
@@ -103,6 +104,8 @@ void report_socket_plug(std::string_view stage,
                                      std::uint16_t plugDefinitionIndex,
                                      PendingSocketPlug& mutation) noexcept {
     mutation = {};
+    // Authored relaxations are read once, so one staging pass judges every check the same way.
+    const state::cosmetics::Settings& cosmetics = core::settings::get().cosmetics;
     CharacterItemLocation location{};
     build_data::items::Definition targetDefinition{};
     build_data::items::Definition plugDefinition{};
@@ -153,8 +156,9 @@ void report_socket_plug(std::string_view stage,
         || !build_data::find_item_definition_index(plugDefinitionIndex, plugDefinition)
         || plugDefinition.definitionIndex != plugDefinitionIndex
         || plugDefinition.definitionHash == authored_inventory::kNoDefinitionHash
-        || !build_data::is_socket_plug_allowed(
-            targetDefinition.definitionIndex, socketLane, plugDefinitionIndex)) {
+        || !(cosmetics.unrestrictedPlugs
+             || build_data::is_socket_plug_allowed(
+                 targetDefinition.definitionIndex, socketLane, plugDefinitionIndex))) {
         return fail("definition_or_compatibility");
     }
 
@@ -163,8 +167,13 @@ void report_socket_plug(std::string_view stage,
     // An ornament is a permanent unlock the account holds once earned, not a stack it draws
     // down, which is why the Client offers every valid one for a socket. Requiring a stack for
     // one would refuse a plug the account already has.
+    //
+    // Ignoring ownership drops the whole stack transition rather than only its refusal. A plug the
+    // account never held has no row to check, no unit to take and nothing to release, so treating
+    // it as consuming nothing is the only consistent reading.
     const bool consumesStack =
-        build_data::is_profile_action_source(plugDefinitionIndex, plugDefinition.bucketId)
+        !cosmetics.ignorePlugOwnership
+        && build_data::is_profile_action_source(plugDefinitionIndex, plugDefinition.bucketId)
         && build_data::is_consumed_on_apply(plugDefinitionIndex, plugDefinition.bucketId)
         && !(socketLane < detail.initialPlugIndices.size()
              && detail.initialPlugIndices[socketLane] == plugDefinitionIndex);
@@ -175,7 +184,11 @@ void report_socket_plug(std::string_view stage,
     AccountState chargedAccount = snapshot;
     build_data::material_requirements::Definition materialSet{};
     bool profileChanged = false;
-    const std::uint16_t materialSetIndex = plugDefinition.insertionMaterialRequirementSetIndex;
+    // An ignored cost is reported as the plug having no authored requirement set at all, so the
+    // staged mutation carries no set index and the push describes the same charge it applied.
+    const std::uint16_t materialSetIndex =
+        cosmetics.ignoreInsertionCost ? build_data::items::kUnavailableMaterialRequirementSetIndex
+                                      : plugDefinition.insertionMaterialRequirementSetIndex;
     if (materialSetIndex != build_data::items::kUnavailableMaterialRequirementSetIndex
         && (!build_data::find_material_requirement_set(materialSetIndex, materialSet)
             || materialSet.requirementSetIndex != materialSetIndex

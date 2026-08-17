@@ -207,6 +207,7 @@ bool Parser::state_settings(Settings& output) noexcept {
     }
     bool hasActivity = false;
     bool hasInvestment = false;
+    bool hasCosmetics = false;
     for (;;) {
         std::string_view key;
         if (!string(key) || !consume(':')) {
@@ -234,6 +235,11 @@ bool Parser::state_settings(Settings& output) noexcept {
                 return false;
             }
             hasActivity = true;
+        } else if (key == "cosmetics") {
+            if (hasCosmetics || !cosmetics(output.cosmetics)) {
+                return false;
+            }
+            hasCosmetics = true;
         } else if (!skip_value(0)) {
             return false;
         }
