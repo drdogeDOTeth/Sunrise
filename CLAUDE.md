@@ -77,6 +77,27 @@ ornaments render.
 
 What gates appearance is not rendering but *permission*. See `docs/COSMETICS.md`.
 
+## Where this fork is going
+
+The goal is importing custom 3D models — see `docs/COSMETICS.md` for the full assessment.
+
+Established so far, by observation rather than inspection:
+
+- The fork builds and loads in the real game (0.3.0.0, Shadowkeep `86657.20.08.23`).
+- Ornament model replacement works, so an ornament is a viable delivery path for custom art.
+- `oo2core_3_win64.dll` exports `OodleLZ_Compress`, so a repacker can compress as the game does.
+- Package integrity checking is already bypassed upstream, so a tampered package loads.
+
+Remaining, in order:
+
+1. **A Tiger `.pkg` writer.** Nothing else can proceed without it. It is the inverse of
+   `middleware/content/packages/reader`, whose `layout.h` documents the header size, table
+   offsets, block size and record strides with static asserts.
+2. **Prove it with a texture swap** — no geometry, so a pass means the pipeline itself works.
+3. **Extract a reference helmet** with MontevenDynamicExtractor for correct scale, skeleton and
+   vertex layout.
+4. **Fit and inject a custom mesh** against that reference.
+
 ## Contributing back
 
 Upstream's rules, if we ever open a PR there: no game data committed (everything extracted at
