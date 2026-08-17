@@ -156,9 +156,19 @@ python roundtrip_test.py    # writes a patch file and reads the whole package ba
 - A written patch file reads back with the redirected entry byte-exact and **all 722 other entries
   byte-identical**.
 
-## Not yet verified
+## The game loads packages we write
 
-**The game has not loaded a written package.** Everything above is proven against our own reader.
-Sunrise reads packages for its datagen, but the renderer is the game's own loader, and whether it
-accepts a hand-written patch file is untested. That is the next real milestone, and it is the one
-that can still invalidate the approach.
+Confirmed against the real game on 2026-08-17. `w64_audio_023d_6.pkg` — written by
+`write_patch_package()`, carrying a redirected entry, a block table grown by one record and a newly
+stored 258,768-byte body — registered with **no assert**, and `bootflow:package_registration`
+completed normally in 2,109 ms.
+
+The run was a genuine revalidation rather than a cached verdict: the game wrote a new
+`cache_phr_0000f2a9.dat`, a different hash from the previous set.
+
+## Still not verified
+
+That the game *renders from* our redirected entry, as opposed to merely accepting the file. Proving
+that needs an entry whose effect is observable, which in turn needs the dump feature described
+above, since everything holding art is encrypted. Registration passing is the milestone that
+unblocks the rest; it is not by itself proof the bytes are consumed.
