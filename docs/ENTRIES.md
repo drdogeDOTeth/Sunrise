@@ -113,6 +113,74 @@ hundred with high counts, and the long tail is pointers being counted as types.
 living in `globals` rather than beside the art is what a shared format or material descriptor looks
 like.
 
+## Class `0x80807173` is a vertex buffer
+
+The first class identified rather than guessed at.
+
+### It is a typed buffer
+
+```
+ 0  u64  total size, equal to the entry size
+ 8  u64  element count
+16  u64  element stride
+48       count * stride bytes of payload
+```
+
+`48 + count * stride == entry size` **exactly**, on every sample:
+
+| tag | count | stride | payload | entry |
+|---|---|---|---|---|
+| `0x80EC419A` | 3,108 | 16 | 49,728 | 49,776 |
+| `0x80EC4DB3` | 21,505 | 16 | 344,080 | 344,128 |
+
+That is falsifiable arithmetic, not pattern-matching, and `tools/pkg/buffers.py` runs it against
+every dumped entry. Of the 19 classes sampled so far it holds for **only** this one, so the header
+is specific to buffer classes rather than a general convention.
+
+### The 16-byte element is a packed vertex
+
+Identified by spatial coherence: real positions put consecutive vertices near each other, so the
+mean step between consecutive elements is tiny next to the column's full range. Random or packed
+fields do not behave that way.
+
+| bytes | field | mean step ÷ range |
+|---|---|---|
+| 0-5 | `int16 x, y, z` — **position** | **0.67-1.3%** |
+| 6-7 | `int16 w` | 4.6-4.9% |
+| 8-9 | packed | 4-11% |
+| 10-11 | packed, likely a normal | **26%** |
+| 12 | `u8` index, small palette (`0, 13, 67, 75, 255`) | — |
+| 13-15 | zero on every vertex sampled | — |
+
+Positions are normalised `int16`, so a model's bounding box has to come from elsewhere — most
+likely the header record that references the buffer.
+
+### Scale
+
+1,115 entries, 102 MB total, median 13,280 B, largest 2.6 MB. A 2.6 MB buffer at 16 bytes per
+vertex is about 165,000 vertices, which is the right order for a detailed model.
+
+**This matters for the writer:** the median buffer already exceeds nothing, but the large ones pass
+`0x40000`, and `write_patch_package()` still caps at a single block. Multi-block bodies are now a
+hard requirement rather than a nicety.
+
+## How the payload classes were found
+
+Counting entries per class was misleading — it surfaced schema records, which are numerous and
+small. Ranking by **total bytes** instead put the payload classes at the top despite each having
+only a few hundred entries:
+
+| class | entries | median | max | total |
+|---|---|---|---|---|
+| `0x80808CB8` | 426 | 255 KB | 12.3 MB | 230 MB |
+| `0x80806F8D` | 419 | 186 KB | 30.5 MB | 225 MB |
+| `0x80808CBA` | 501 | 111 KB | 8.0 MB | 160 MB |
+| `0x80807320` | 424 | 285 KB | 2.2 MB | 154 MB |
+| `0x80807173` | 1,115 | 13 KB | 2.6 MB | **102 MB — vertex buffers** |
+
+Everything inspected before this was 26 KB or smaller, which is why the first two rounds of dumping
+found only descriptors.
+
 ## Not yet known
 
 Which class is geometry, which is texture, and how any of them are laid out. The next step is to
