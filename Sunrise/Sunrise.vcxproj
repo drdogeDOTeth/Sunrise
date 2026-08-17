@@ -642,6 +642,7 @@
     <ClCompile Include="src\server\bap\encrypted\push\queuez\queuez_banner_push.cpp" />
     <ClCompile Include="src\server\bap\encrypted\push\queuez\queuez_push_reporting.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_container_location.cpp" />
+    <ClCompile Include="src\client\content\items\packages\package_dump.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_build_report.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_root_tables.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_item_rows.cpp" />

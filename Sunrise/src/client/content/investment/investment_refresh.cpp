@@ -43,6 +43,10 @@ bool requires_package_sweep() noexcept {
 
 /** Publishes every installed equipment mapping domain. */
 bool refresh() noexcept {
+    // Runs at most once per process and returns immediately without a request file. It sits here
+    // because this is the one place reached both when the domains are already cached and when a
+    // full package pass has just run, so a dump does not depend on which of those happened.
+    items::packages::dump_if_requested();
     if (ready()) {
         // The same lock as the extraction path. A cache write holds its own lock across file
         // calls, so a held thread stopped inside one would deadlock the freeze below.
