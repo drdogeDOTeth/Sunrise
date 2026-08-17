@@ -21,3 +21,4 @@ __pycache__/
 # Local game-test state
 tools/pkg/gametest_receipt.json
 tools/pkg/cache_backup/
+reference/
