@@ -42,6 +42,30 @@ constexpr auto kExtendedHeaderFailure =
     signature<signature_length(kExtendedHeaderFailureText)>(kExtendedHeaderFailureText);
 
 /**
+ * The patchable registrar's remaining rejection, seen as
+ * "Patchable package registration failed with result  (-86)" when the game is offered a package
+ * this project wrote. -86 is 0xFFFFFFAA, and the site is expected to take the same shape as the
+ * -89 failure above: load the result, then join the common cleanup path.
+ *
+ * Unlike the two failures above, this one is not known to be unique, so it is resolved and reported
+ * rather than assumed. The game is VMProtect-packed, so the site cannot be located by scanning the
+ * file on disk; only the unpacked in-memory image carries it.
+ */
+constexpr std::string_view kPatchableRegistrationFailureText = "B8 AA FF FF FF E9 ? ? ? ?";
+constexpr auto kPatchableRegistrationFailure =
+    signature<signature_length(kPatchableRegistrationFailureText)>(
+        kPatchableRegistrationFailureText);
+
+/** The bare result load, counted only to tell a wrong pattern apart from a repeating one. */
+constexpr std::string_view kPatchableRegistrationResultText = "B8 AA FF FF FF";
+constexpr auto kPatchableRegistrationResult =
+    signature<signature_length(kPatchableRegistrationResultText)>(
+        kPatchableRegistrationResultText);
+
+/** Bound on reported match addresses. The count matters; the addresses are for diagnosis. */
+constexpr std::size_t kResultSiteReportLimit = 8;
+
+/**
  * Cached-data authentication gate used while registering/loading base packages. The hash routine
  * returns a boolean in AL. Native code conditionally jumps to the ordinary success continuation;
  * otherwise it enters the unique "Failed to validate cached data hash" error path with -89.
@@ -75,6 +99,8 @@ std::byte* g_extendedHeaderResult{};
 std::array<std::byte, kSuccessResult.size()> g_extendedHeaderOriginal{};
 std::byte* g_cachedDataBranch{};
 std::array<std::byte, kAlwaysTakeSuccessBranch.size()> g_cachedDataBranchOriginal{};
+std::byte* g_registrationResult{};
+std::array<std::byte, kSuccessResult.size()> g_registrationOriginal{};
 
 /** Writes instruction bytes and restores the page's original protection. */
 template <std::size_t Size>
@@ -134,6 +160,56 @@ std::int32_t __fastcall validate_header(const std::uint32_t* validationMask,
         validationMask, packageGroup, buildSignature, expectedFileSize, localeToken, 1, header);
 }
 
+/**
+ * Forces the patchable registrar's -86 rejection to report success.
+ *
+ * Deliberately non-fatal. The -93 and -89 bypasses are load-bearing and already proven on this
+ * build; a pattern that does not resolve here must not take them down with it. A miss is reported
+ * with the raw site count so the next attempt starts from evidence rather than from a guess.
+ */
+void install_registration_bypass() noexcept {
+    std::array<std::byte*, kResultSiteReportLimit> sites{};
+    const std::size_t total =
+        patterns::count_main_image_matches(kPatchableRegistrationResult,
+                                           "package_registration_result",
+                                           std::span(sites));
+    std::byte* const failure = scan_main_image_unique(kPatchableRegistrationFailure,
+                                                      "package_registration_failure");
+    std::array<char, 192> event{};
+    if (failure == nullptr) {
+        const int length = std::snprintf(event.data(),
+                                         event.size(),
+                                         "ev=package_trust stage=registration result=unresolved "
+                                         "sites=%zu reason=%s",
+                                         total,
+                                         total == 0 ? "no_result_load" : "not_unique_with_jump");
+        if (length > 0) {
+            core::log::write(core::log::Channel::client,
+                             core::log::Level::warn,
+                             std::string_view(event.data(), static_cast<std::size_t>(length)));
+        }
+        return;
+    }
+    g_registrationResult = failure + kResultImmediateOffset;
+    std::memcpy(g_registrationOriginal.data(), g_registrationResult, g_registrationOriginal.size());
+    if (!write_code(g_registrationResult, kSuccessResult)) {
+        g_registrationResult = nullptr;
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::warn,
+                         "ev=package_trust stage=registration result=write_fail");
+        return;
+    }
+    const int length = std::snprintf(event.data(),
+                                     event.size(),
+                                     "ev=package_trust stage=registration result=ok sites=%zu",
+                                     total);
+    if (length > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         std::string_view(event.data(), static_cast<std::size_t>(length)));
+    }
+}
+
 } // namespace
 
 /** Attaches the native package-header trust bypass. */
@@ -187,12 +263,20 @@ bool install() noexcept {
     core::log::write(core::log::Channel::client,
                      core::log::Level::info,
                      "ev=package_trust stage=attach result=ok mode=package_integrity_bypass");
+    install_registration_bypass();
     return true;
 }
 
 /** Detaches the native package-header trust bypass. */
 bool uninstall() noexcept {
     bool restored = true;
+    if (g_registrationResult != nullptr) {
+        const bool registrationRestored = write_code(g_registrationResult, g_registrationOriginal);
+        restored = restored && registrationRestored;
+        if (registrationRestored) {
+            g_registrationResult = nullptr;
+        }
+    }
     if (g_cachedDataBranch != nullptr) {
         const bool cachedDataRestored = write_code(g_cachedDataBranch, g_cachedDataBranchOriginal);
         restored = restored && cachedDataRestored;

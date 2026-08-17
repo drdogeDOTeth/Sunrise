@@ -31,6 +31,22 @@ std::byte* scan_main_image_unique(std::span<const PatternByte> signature,
     return matches[0].address;
 }
 
+/** Counts how often one signature matches the main image. */
+std::size_t count_main_image_matches(std::span<const PatternByte> signature,
+                                     const char* name,
+                                     std::span<std::byte*> output) noexcept {
+    executable::ExecutableImage main{};
+    if (!executable::inspect_main_module(main)) {
+        return 0;
+    }
+    std::array<ImageRange, executable::kPeSectionLimit> ranges{};
+    for (std::size_t index = 0; index < main.count; ++index) {
+        ranges[index] = ImageRange{main.sections[index]};
+    }
+    const Pattern pattern{name, signature};
+    return collect_matches(std::span(ranges.data(), main.count), pattern, output);
+}
+
 /** Decodes a RIP-relative operand into the absolute address it refers to. */
 std::byte* resolve_relative(const std::byte* operand, const std::byte* nextInstruction) noexcept {
     std::int32_t displacement = 0;
