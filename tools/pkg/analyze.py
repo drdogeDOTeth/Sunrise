@@ -1,4 +1,4 @@
-"""
+﻿"""
 Characterises dumped package entries so their classes can be identified.
 
 Nothing here decodes a known format — the point is to work out *which* class is which, using signals
