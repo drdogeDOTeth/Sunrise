@@ -15,6 +15,17 @@ Upstream is on the `upstream` remote. Our work lives on the `cosmetics` branch.
 Output is `build\x64\<Config>\steam_api64.dll`. The mod ships as a proxy `steam_api64.dll` that
 replaces the game's own.
 
+To install it:
+
+```powershell
+.\install.ps1                    # defaults to C:\Sunrise
+.\install.ps1 -GamePath D:\...
+.\install.ps1 -Restore           # put the game's original DLL back
+```
+
+The first run saves the game's own DLL as `steam_api64.dll.original` and never overwrites that
+backup afterwards, so repeated installs cannot lose it.
+
 Two gotchas the script or this file exist to absorb:
 
 - **`Sunrise.vcxproj` pins `PlatformToolset v145`**, which ships with Visual Studio 2026. A VS 2022
