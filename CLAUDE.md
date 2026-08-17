@@ -63,7 +63,8 @@ Bungie's servers.
 - `src/server/` — the in-process server (`bap/` is the main protocol surface)
 - `src/state/` — authored account state: characters, inventory, sockets, unlocks
 - `src/state/build_data/` — tables extracted from the installed packages at runtime
-- `src/middleware/content/packages/` — Tiger `.pkg` **readers**. There is no writer anywhere.
+- `src/middleware/content/packages/` — Tiger `.pkg` **readers**. There is no writer in the mod; the
+  one this fork added lives offline in `tools/pkg/` — see `docs/PACKAGES.md`.
 - `src/middleware/datagen/` — encodes state into the records the game reads
 - `src/core/` — settings, logging, filesystem, the ImGui overlay
 
@@ -88,15 +89,19 @@ Established so far, by observation rather than inspection:
 - `oo2core_3_win64.dll` exports `OodleLZ_Compress`, so a repacker can compress as the game does.
 - Package integrity checking is already bypassed upstream, so a tampered package loads.
 
+- Socket plug gates work in the live game: `ev=socket_plug stage=commit_end result=ok
+  reason=published`.
+- A Tiger `.pkg` **writer exists and round-trips offline** (`tools/pkg/`). It writes the next patch
+  file of a package, the same mechanism Bungie's own updates use.
+
 Remaining, in order:
 
-1. **A Tiger `.pkg` writer.** Nothing else can proceed without it. It is the inverse of
-   `middleware/content/packages/reader`, whose `layout.h` documents the header size, table
-   offsets, block size and record strides with static asserts.
-2. **Prove it with a texture swap** — no geometry, so a pass means the pipeline itself works.
-3. **Extract a reference helmet** with MontevenDynamicExtractor for correct scale, skeleton and
-   vertex layout.
-4. **Fit and inject a custom mesh** against that reference.
+1. **Get the game to load a written package.** Everything so far is proven against our own reader
+   only. This is the milestone that can still invalidate the approach.
+2. **Dump a reference entry from inside Sunrise**, which holds the block keys the packages need and
+   which this fork deliberately does not export to disk. See `docs/PACKAGES.md`.
+3. **Prove it with a texture swap** — no geometry, so a pass means the pipeline itself works.
+4. **Fit and inject a custom mesh** against the reference.
 
 ## Contributing back
 

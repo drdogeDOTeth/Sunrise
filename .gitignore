@@ -13,3 +13,7 @@
 
 # CMake build files
 /build/
+
+# Python tooling under tools/
+__pycache__/
+*.py[cod]

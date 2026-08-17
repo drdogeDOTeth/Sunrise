@@ -13,7 +13,14 @@ import collections
 import sys
 from pathlib import Path
 
-from tigerpkg import BLOCK_SIZE, FLAG_ALTERNATE_KEY, FLAG_COMPRESSED, FLAG_ENCRYPTED, Package, PackageError
+from tigerpkg import (
+    BLOCK_SIZE,
+    FLAG_ALTERNATE_KEY,
+    FLAG_COMPRESSED,
+    FLAG_ENCRYPTED,
+    Package,
+    PackageError,
+)
 
 root = Path(sys.argv[1] if len(sys.argv) > 1 else r"C:\Sunrise\packages")
 files = sorted(root.glob("*.pkg"))
@@ -26,9 +33,9 @@ ok = 0
 failed: list[tuple[str, str]] = []
 structural: list[tuple[str, list[str]]] = []
 flag_counts: collections.Counter[int] = collections.Counter()
+layout_counts: collections.Counter[str] = collections.Counter()
 entry_total = block_total = 0
 biggest_block = 0
-uncompressed_blocks = 0
 
 for path in files:
     try:
@@ -41,23 +48,22 @@ for path in files:
         continue
 
     ok += 1
+    layout_counts[pkg.header.layout] += 1
     entry_total += pkg.header.entry_count
     block_total += pkg.header.block_count
     for block in pkg.blocks:
         flag_counts[block.flags] += 1
         biggest_block = max(biggest_block, block.size)
-        if not block.compressed:
-            uncompressed_blocks += 1
 
     problems = pkg.check()
     if problems:
         structural.append((path.name, problems))
 
 print(f"parsed cleanly : {ok:,} / {len(files):,}")
+print(f"layouts        : " + ", ".join(f"{k}={v:,}" for k, v in sorted(layout_counts.items())))
 print(f"entries        : {entry_total:,}")
 print(f"blocks         : {block_total:,}")
 print(f"largest block  : {biggest_block:,} bytes (decompressed cap {BLOCK_SIZE:,})")
-print(f"uncompressed   : {uncompressed_blocks:,} blocks")
 
 print("\n--- block flag combinations ---")
 for flags, count in sorted(flag_counts.items()):
@@ -71,7 +77,8 @@ for flags, count in sorted(flag_counts.items()):
     extra = flags & ~(FLAG_COMPRESSED | FLAG_ENCRYPTED | FLAG_ALTERNATE_KEY)
     if extra:
         names.append(f"unknown:{extra:#x}")
-    print(f"  0x{flags:04X}  {count:8,}  {'+'.join(names) or 'none'}")
+    share = 100.0 * count / block_total if block_total else 0.0
+    print(f"  0x{flags:04X}  {count:9,}  {share:5.1f}%  {'+'.join(names) or 'none'}")
 
 if failed:
     print(f"\n--- {len(failed)} FAILED TO PARSE ---")
@@ -79,9 +86,10 @@ if failed:
         print(f"  {name}: {reason}")
 
 if structural:
-    print(f"\n--- {len(structural)} with structural complaints ---")
+    total_problems = sum(len(p) for _n, p in structural)
+    print(f"\n--- {len(structural)} files with {total_problems:,} structural complaints ---")
     for name, problems in structural[:20]:
-        print(f"  {name}: {problems[0]}")
+        print(f"  {name}: {len(problems)}x, first: {problems[0]}")
 
 if not failed and not structural:
     print("\nAll packages parsed with no structural complaints.")
