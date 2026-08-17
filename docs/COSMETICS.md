@@ -25,26 +25,32 @@ art and art arrangement. Then each plug is layered over: an ornament declares it
 material pairs instead, folded across three stages (base, plug-only, late) where only the first six
 distinct material keys survive.
 
-So getting an ornament's hash into a plug lane is necessary. It is **not always sufficient.**
+The consequence: **making an ornament show up is a question of getting its hash into a plug lane.**
 
-### The model-replacement gap
+### Ornament model replacement works — verified
 
-Sundial's author, who has tested this extensively against a real install, reports that Sunrise
-0.2.1 applies shader and material overrides from plugs but **does not apply every ornament's model
-replacement** — the ornament reads as equipped in menus while the base item model still renders.
-Shaders generally work; ornaments often do not.
+Confirmed in game on 2026-08-16 against build 0.3.0.0: equipping the Omega Mechanos Crown universal
+ornament on a Scatterhorn Hood changed the rendered model, in world, not just in menus. All
+`state.cosmetics` switches were off, so this is stock upstream behaviour.
 
-That does not match a naive read of `apply_plug_art`, which does set `entry.art[kGearArtSlot]` from
-the plug's `gearArtIndex` and appends its overlay arrangement. So one of these is true, and which
-one is not yet established:
+This matters because Sundial's FAQ says otherwise — that Sunrise "does not apply every ornament's
+model replacement." That was true of **0.2.1**, which is what Sundial targets. Two commits landed
+afterwards:
 
-- some ornaments carry their model replacement somewhere other than the plug definition's
-  `gearArtIndex` / `artArrangementIndices`, or
-- the client needs a field the datagen layer does not publish.
+```
+39215d4 fix(appearance): select class-specific item art
+df8dd6a feat(appearance): refresh equipped gear across live families
+```
 
-**This gates custom models entirely.** If the path that points an item at replacement art is
-incomplete, a perfectly repacked custom mesh will not display either — the delivery mechanism is
-the same one. Resolving this comes before any repacking work is worth starting.
+`39215d4` is the fix. Before it, a plug's arrangement *replaced* `art[kArtArrangementSlot]`; after
+it, the arrangement is appended to the bounded overlay list while the base arrangement stays put,
+which is what "preserves armor and ornament composition" in its message means. Anyone reading
+`apply_plug_art` and seeing the asymmetry between gear art (replaces) and arrangement (appends)
+should know that asymmetry **is the fix, not a bug** — restoring the symmetry reintroduces 0.2.1's
+behaviour.
+
+The practical upshot for custom art: the ornament delivery path works, so replacing the art an
+ornament points at is viable and does not require sacrificing a base item.
 
 ## What actually blocks it
 
@@ -225,18 +231,15 @@ path demonstrably works — it is what draws your gear today. Repacking the asse
 references therefore depends on nothing unresolved.
 
 **Replace an ornament's art.** More flexible, since equipping toggles it and the original item is
-left intact. But it rides `apply_plug_art`, which is exactly the path reported as incomplete above.
+left intact. It rides `apply_plug_art`, which is **verified working** on 0.3.0.0 — see above.
 
-**Start with the base item.** Not for convenience — because it isolates the variable. Repacking and
-the ornament gap are two independent unknowns, and testing them together means a failure tells you
-nothing about which one broke. Against a base item, either the repack pipeline works or it does
-not.
+**Prefer the ornament.** An earlier version of this document recommended the base item, on the
+grounds that the ornament path was unproven. It is now proven, and the ornament is strictly better:
+base replacement is global, so every instance of that item becomes the new model, including on NPCs
+if the asset is shared. An ornament is opt-in and reversible by unequipping.
 
-The cost is that base replacement is global: every instance of that item becomes the new model,
-including on NPCs if the asset is shared. Prefer **exotic armour with a unique model** — distinctive,
+If you do go the base-item route, prefer **exotic armour with a unique model** — distinctive,
 unlikely to be shared with generic gear, and obvious in game, so success or failure is unambiguous.
-
-Move to ornaments once the render-path question is settled, at which point they are strictly nicer.
 
 ### The alternative path
 
