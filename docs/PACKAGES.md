@@ -74,6 +74,45 @@ That costs nothing, because:
   so a dump feature inside the mod produces the reference bytes with the keys staying where upstream
   put them.
 
+## The header hashes two regions, and a patch invalidates one
+
+Two 28-byte descriptors, at `0x0F0` and `0x110`:
+
+| offset | size | field |
+|---|---|---|
+| `+0x00` | 4 | region offset |
+| `+0x04` | 4 | region size |
+| `+0x08` | 20 | SHA-1 of those bytes |
+
+Both verify exactly on `mercury_destination_03a7_4`, `_5` and `w64_audio_01d2_en_2`.
+
+- `0x0F0` covers a region ahead of the entry table that a patch never touches.
+- **`0x110` spans the entry table and the block table together.** Adding block records changes both
+  its size and its digest.
+
+A **table of tag references sits immediately after the block table**, still inside the `0x110`
+region — 608 bytes in `_5`, 576 in `_4`, holding pairs like `0x80F4E031 0x80F2C8E7`. No header word
+points at it, so its position is implied by where the block table ends, and it must move with it.
+
+### Three checks, not one
+
+Leaving those stale yields a file that **registers cleanly, reads correctly, and hangs the game**:
+
+| check | reads the digest? |
+|---|---|
+| patchable registrar (`-86`) | no — structural only |
+| Sunrise's own reader | no |
+| the game's geometry loader | **yes** |
+
+That is why five earlier hypotheses each fixed something real and changed nothing. Compute the
+digest **last**: the new block records, the relocated tail and every redirected entry's `blockInfo`
+all land inside the region, while block count and file size sit ahead of it.
+
+### How it was found
+
+By diffing header words across four consecutive shipped patches of one package and asking which
+words Bungie changes that we do not. Twenty showed up at once. Ask that question first.
+
 ## A block record is 48 bytes, and all of them matter
 
 | offset | size | field |
