@@ -127,34 +127,41 @@ def write_obj(path: Path, vertices, faces, name: str) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-all_lods = "--all-lods" in sys.argv
-wanted = [argument for argument in sys.argv[1:] if argument.startswith("0x")]
+def main() -> None:
+    """Command line. Kept out of import so `fit_mask` can reuse the readers above."""
+    all_lods = "--all-lods" in sys.argv
+    wanted = [argument for argument in sys.argv[1:] if argument.startswith("0x")]
 
-if "--helmets" in sys.argv:
-    chosen = sorted((model for model in models if model.helmet_like),
-                    key=lambda model: -model.vertices)[:option("--limit", 12)]
-elif wanted:
-    tags = {int(argument, 0) for argument in wanted}
-    chosen = [model for model in models if model.tag in tags]
-    if not chosen:
-        raise SystemExit(f"none of {wanted} are among the {len(models)} dumped models")
-else:
-    raise SystemExit(__doc__)
+    if "--helmets" in sys.argv:
+        chosen = sorted((model for model in models if model.helmet_like),
+                        key=lambda model: -model.vertices)[:option("--limit", 12)]
+    elif wanted:
+        tags = {int(argument, 0) for argument in wanted}
+        chosen = [model for model in models if model.tag in tags]
+        if not chosen:
+            raise SystemExit(f"none of {wanted} are among the {len(models)} dumped models")
+    else:
+        raise SystemExit(__doc__)
 
-out_dir = Path(option("--out-dir", "."))
-out_dir.mkdir(parents=True, exist_ok=True)
-single_out = option("--out", "")
+    out_dir = Path(option("--out-dir", "."))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    single_out = option("--out", "")
 
-for model in chosen:
-    vertices, faces, notes = extract(model, all_lods)
-    if not faces:
-        print(f"0x{model.tag:08X}  no geometry: " + "; ".join(notes))
-        continue
-    path = Path(single_out) if single_out else out_dir / f"model_{model.tag:08X}.obj"
-    write_obj(path, vertices, faces, f"model_{model.tag:08X}")
-    print(f"0x{model.tag:08X}  {len(vertices):,} verts, {len(faces):,} tris  "
-          f"span {model.span:.3f} height {model.height:.3f}  -> {path}")
-    for note in notes:
-        print(f"    {note}")
-    if single_out:
-        break
+    for model in chosen:
+        vertices, faces, notes = extract(model, all_lods)
+        if not faces:
+            print(f"0x{model.tag:08X}  no geometry: " + "; ".join(notes))
+            continue
+        path = Path(single_out) if single_out else out_dir / f"model_{model.tag:08X}.obj"
+        write_obj(path, vertices, faces, f"model_{model.tag:08X}")
+        print(f"0x{model.tag:08X}  {len(vertices):,} verts, {len(faces):,} tris  "
+              f"span {model.span:.3f} height {model.height:.3f}  -> {path}")
+        for note in notes:
+            print(f"    {note}")
+        if single_out:
+            break
+
+
+
+if __name__ == "__main__":
+    main()

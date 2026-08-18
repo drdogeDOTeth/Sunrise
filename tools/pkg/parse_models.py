@@ -72,8 +72,10 @@ ARRAY_HEADER = 0x10
 EMPTY_TAG = 0xFFFFFFFF
 
 TAG_MIN, TAG_MAX = 0x80800000, 0x80FFFFFF
-# The one stride Shadowkeep uses for a skinned position buffer; weights are 8.
-POSITION_STRIDE = 16
+# Assumed stride for the offline census only, when the buffer header has not been dumped yet. 8 is
+# by far the commonest: of the helmet candidates, 30 headers are stride 8, 4 are 12 and 2 are 16.
+# `extract_mesh.py` always reads the real stride out of the header instead of assuming this.
+ASSUMED_POSITION_STRIDE = 8
 # A mesh table longer than this is a misparse, not a model.
 MAX_MESHES = 64
 MAX_PARTS = 256
@@ -201,8 +203,13 @@ class Mesh:
 
     @property
     def vertices(self) -> int:
-        """@return Vertex count implied by the position buffer at the one skinned stride."""
-        return self.position_bytes // POSITION_STRIDE
+        """@return Vertex count, exact once the header is dumped and estimated before that.
+
+        The census runs before any buffer header exists on disk, so it has to assume a stride. The
+        estimate is only ever used for ranking and for the helmet threshold, both of which survive a
+        factor of two; anything that touches real bytes reads the stride from the header.
+        """
+        return self.position_bytes // ASSUMED_POSITION_STRIDE
 
     @property
     def skinned(self) -> bool:
