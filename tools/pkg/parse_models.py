@@ -189,6 +189,11 @@ class Mesh:
         self.index_buffer, self.index_bytes = buffer_of(self.indices)
         self.lods: set[int] = set()
         count, start = array_at(data, at + PART_ARRAY)
+        # Kept so `inject_mesh` can rewrite the part table in place rather than re-deriving where it
+        # sits, which is the kind of duplicated offset arithmetic that drifts apart silently.
+        self.record_at = at
+        self.parts_at = start
+        self.part_count = count
         self.parts = []
         for index in range(min(count, MAX_PARTS)):
             part = start + index * PART_STRIDE
