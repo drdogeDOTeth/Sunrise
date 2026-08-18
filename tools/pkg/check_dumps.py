@@ -33,6 +33,20 @@ from pathlib import Path
 from parse_models import SUNRISE, lookup, option
 
 TAG_MIN, TAG_MAX = 0x80800000, 0x80FFFFFF
+RECEIPT = Path(__file__).with_name("inject_receipt.json")
+
+# The check compares a dump against the newest installed package - so with one of our patch files
+# installed it compares our bytes against our bytes and reports a clean bill of health for dumps
+# that are actually poisoned. Observed exactly that: 72 known-bad buffers passed silently because
+# the patch had been reinstalled between the two runs. Refuse rather than mislead.
+if RECEIPT.is_file() and "--anyway" not in sys.argv:
+    import json
+    installed = json.loads(RECEIPT.read_text()).get("written", [])
+    if any(Path(name).is_file() for name in installed):
+        raise SystemExit(
+            "a patch written by inject_mesh.py is installed, so the shipped entry sizes this check\n"
+            "needs are not readable - it would compare our bytes against our bytes and pass.\n"
+            "Run 'python inject_mesh.py --undo' first, or --anyway if you know what you are doing.")
 
 directory = Path(option("--dump", str(SUNRISE / "dump")))
 files = sorted(directory.glob("tag_*.bin"))
