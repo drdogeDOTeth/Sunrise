@@ -172,6 +172,21 @@ def build_replacements(model, source: np.ndarray, faces: np.ndarray) -> dict[int
     }
 
 
+def blank_model(model) -> bytes:
+    """@return The model blob with every part's index count zeroed, so it draws nothing.
+
+    Hiding a mesh needs no new capability: a part with no indices issues no draw. That makes it a
+    cheap probe. Blanking costs **one** entry per model - no buffers, no headers - so a whole
+    package can be silenced in a single patch file, and whichever piece of armour disappears in game
+    is the one whose model lives there.
+    """
+    out = bytearray(model.data)
+    for mesh in model.meshes:
+        for slot in range(mesh.part_count):
+            struct.pack_into("<I", out, mesh.parts_at + slot * PART_STRIDE + PART_INDEX_COUNT, 0)
+    return bytes(out)
+
+
 def injectable(model) -> bool:
     """@return True when a model is a single-mesh helmet whose buffers were dumped."""
     if not model.helmet_like or len(model.meshes) != 1:
@@ -203,6 +218,28 @@ def main() -> None:
         undo()
         return
     tags = [argument for argument in sys.argv[1:] if argument.startswith("0x")]
+    if "--blank-others" in sys.argv:
+        # One launch, maximum information: the mask goes into every injectable helmet, and every
+        # other dumped model in the same packages is silenced. Whatever the equipped helmet does -
+        # turn into a mask, vanish, or stay put - names the package its model lives in.
+        chosen = [model for model in models if injectable(model)]
+        blanked = [model for model in models if model not in chosen]
+        by_package: dict[Path, dict[int, bytes]] = {}
+        positions, faces = load_mesh(option("--glb", str(DEFAULT_GLB)), option("--mesh", "GasMask"))
+        source = to_destiny(np.asarray(positions, dtype=np.float64))
+        for model in chosen:
+            by_package.setdefault(package_of(model.tag), {}).update(
+                build_replacements(model, source, faces))
+        for model in blanked:
+            by_package.setdefault(package_of(model.tag), {})[entry_index_of(model.tag)] =                 blank_model(model)
+        print(f"{len(chosen)} models get the mask, {len(blanked)} are blanked")
+        for path, replacements in sorted(by_package.items()):
+            print(f"  {path.name}: {len(replacements)} entries")
+        if "--dry-run" in sys.argv:
+            return
+        write_all(by_package, option("--sandbox", ""))
+        return
+
     if "--all-helmets" in sys.argv:
         chosen = [model for model in models if injectable(model)]
     elif tags:
@@ -236,7 +273,11 @@ def main() -> None:
     if "--dry-run" in sys.argv:
         return
 
-    sandbox = option("--sandbox", "")
+    write_all(by_package, option("--sandbox", ""))
+
+
+def write_all(by_package: dict[Path, dict[int, bytes]], sandbox: str) -> None:
+    """Writes one patch file per package and verifies every entry it redirected."""
     for path, replacements in sorted(by_package.items()):
         target = path
         if sandbox:
