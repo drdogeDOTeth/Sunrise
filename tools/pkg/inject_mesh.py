@@ -187,6 +187,24 @@ def blank_model(model) -> bytes:
     return bytes(out)
 
 
+def has_room(model, vertices: int) -> bool:
+    """@return True when every per-vertex buffer we do *not* rewrite can still be indexed.
+
+    Positions and indices get replaced; the texcoord/normal buffer is inherited untouched, and the
+    game still indexes it by vertex. So a custom mesh with more vertices than the target reads off
+    the end of it. That is not theoretical - it hung the tower. A 1,172-vertex helmet carries a
+    28,128-byte texcoord buffer at stride 24, and asking for vertex 2,361 seeks to byte 56,664,
+    more than twice past the end.
+
+    The stride needs no dump: it is exactly `texcoord bytes / original vertex count`.
+    """
+    mesh = model.meshes[0]
+    original = mesh.position_bytes // vertex_stride(mesh.positions)
+    return vertices <= original and (mesh.texcoord_bytes == 0
+                                     or vertices * (mesh.texcoord_bytes // original)
+                                     <= mesh.texcoord_bytes)
+
+
 def injectable(model) -> bool:
     """@return True when a model is a single-mesh helmet whose buffers were dumped."""
     if not model.helmet_like or len(model.meshes) != 1:
@@ -254,6 +272,13 @@ def main() -> None:
     source = to_destiny(np.asarray(positions, dtype=np.float64))
     if faces.max() >= len(source):
         raise SystemExit(f"index {faces.max()} exceeds {len(source)} vertices")
+
+    cramped = [model for model in chosen if not has_room(model, len(source))]
+    chosen = [model for model in chosen if has_room(model, len(source))]
+    if cramped:
+        print(f"skipping {len(cramped)} models with too few vertices to index safely:")
+        for model in sorted(cramped, key=lambda m: m.vertices)[:6]:
+            print(f"  0x{model.tag:08X}  {model.vertices:,} verts < {len(source):,}")
 
     # Grouped by package: only the newest file of a package is a legal base, so every model living
     # in the same package has to be redirected in one patch file rather than a chain of them.
