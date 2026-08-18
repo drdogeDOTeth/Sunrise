@@ -42,9 +42,12 @@ is not a homogeneous coordinate, so writing 1.0 there would be wrong.
 Usage:
     python inject_mesh.py 0x80BA7474 --dry-run
     python inject_mesh.py 0x80BA7474 --glb <path.glb> --mesh GasMask
+    python inject_mesh.py --all-helmets
+    python inject_mesh.py --undo
 """
 from __future__ import annotations
 
+import json
 import struct
 import sys
 from pathlib import Path
@@ -56,6 +59,11 @@ from parse_models import INDEX, TAG_BASE, TAG_ENTRY_BITS, TAG_ENTRY_MASK, models
 from extract_mesh import dumped, vertex_stride
 from patch import write_patch_package_multi, verify_patch
 from tigerpkg import Package
+
+# Every file this tool adds is recorded here so undoing is one command. Nothing shipped is ever
+# modified, moved or truncated - a patch file is only ever *added* - so deleting what the receipt
+# names puts the install back byte for byte.
+RECEIPT = Path(__file__).with_name("inject_receipt.json")
 
 PACKED_MAX = 32767.0
 TRIANGLES = 3
@@ -172,7 +180,28 @@ def injectable(model) -> bool:
     return bool(vertex_stride(mesh.positions)) and dumped(mesh.indices) is not None
 
 
+def undo() -> None:
+    """Removes every patch file this tool added, and clears the validation caches."""
+    if not RECEIPT.is_file():
+        print("no receipt found; nothing this tool wrote is recorded")
+        return
+    for name in json.loads(RECEIPT.read_text())["written"]:
+        written = Path(name)
+        if written.is_file():
+            written.unlink()
+            print(f"removed {written.name}")
+        else:
+            print(f"{written.name} was already gone")
+    RECEIPT.unlink()
+    from gametest import clear_caches
+    print("install is back to its shipped state; clearing validation caches:")
+    clear_caches()
+
+
 def main() -> None:
+    if "--undo" in sys.argv:
+        undo()
+        return
     tags = [argument for argument in sys.argv[1:] if argument.startswith("0x")]
     if "--all-helmets" in sys.argv:
         chosen = [model for model in models if injectable(model)]
@@ -221,6 +250,9 @@ def main() -> None:
         for entry, data in replacements.items():
             verify_patch(written, entry, data)
         print(f"  wrote and verified {len(replacements)} entries -> {written}")
+        if not sandbox:
+            done = json.loads(RECEIPT.read_text())["written"] if RECEIPT.is_file() else []
+            RECEIPT.write_text(json.dumps({"written": sorted(set(done) | {str(written)})}, indent=2))
 
 
 if __name__ == "__main__":

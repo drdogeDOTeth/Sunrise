@@ -55,7 +55,8 @@ from pathlib import Path
 from tigerpkg import HEADER_SIZE, TAG_BASE, TAG_ENTRY_BITS, TAG_ENTRY_MASK, Package, PackageError
 
 PACKAGES = Path(r"C:\Sunrise\packages")
-REQUEST = Path(r"C:\Sunrise\bin\x64\Sunrise\dump\request.txt")
+DUMP = Path(r"C:\Sunrise\bin\x64\Sunrise\dump")
+REQUEST = DUMP / "request.txt"
 # package_dump.cpp bounds a run at this many requests; raised from 256 so both gear packages fit in
 # one launch, since every extra pass costs the user a whole game start.
 REQUEST_LIMIT = 1024
@@ -150,13 +151,19 @@ def request_models(stems: list[str]) -> None:
         "",
     ]
     requested = 0
+    # A family name expands to every package in it. Naming nine globals packages one at a time is
+    # how a package gets left out, and a missing package looks exactly like a missing feature.
+    wanted_paths = []
     for stem in stems:
-        source = ALL.get(stem)
-        if source is None:
-            matches = [name for name in ALL if stem in name]
-            if len(matches) != 1:
-                raise SystemExit(f"{stem!r} matches {len(matches)} packages; name one exactly")
-            source = ALL[matches[0]]
+        if stem in ALL:
+            wanted_paths.append(ALL[stem])
+            continue
+        matches = sorted(name for name in ALL if stem in name)
+        if not matches:
+            raise SystemExit(f"{stem!r} matches no package")
+        wanted_paths.extend(ALL[name] for name in matches)
+
+    for source in wanted_paths:
         pkg = Package(source)
         for entry in pkg.entries:
             if entry.reference != ENTITY_MODEL or requested >= REQUEST_LIMIT:
@@ -164,11 +171,27 @@ def request_models(stems: list[str]) -> None:
             lines.append(f"tag 0x{pkg.tag_for(entry.index):08X}   "
                          f"# {source.stem}, model, {entry.size:,} bytes")
             requested += 1
+    if "--also-buffers" in sys.argv:
+        # Spend the leftover request budget on buffers for helmet models already parsed but never
+        # dumped. A launch costs the user minutes, so an empty slot in the request file is waste.
+        from parse_models import models as parsed
+        lines += ["", "# Buffers for helmet models parsed earlier but not yet dumped."]
+        for model in sorted((m for m in parsed if m.helmet_like), key=lambda m: -m.vertices):
+            for mesh in model.meshes:
+                for tag in (mesh.positions, mesh.position_buffer,
+                            mesh.indices, mesh.index_buffer):
+                    if requested >= REQUEST_LIMIT or not POINTER_MIN <= tag <= TAG_MAX:
+                        continue
+                    if (DUMP / f"tag_{tag:08X}.bin").is_file():
+                        continue
+                    lines.append(f"tag 0x{tag:08X}")
+                    requested += 1
+
     REQUEST.parent.mkdir(parents=True, exist_ok=True)
     REQUEST.write_text("\r\n".join(lines), encoding="utf-8")
-    print(f"wrote {requested} model requests to {REQUEST}")
+    print(f"wrote {requested} requests to {REQUEST}")
     if requested >= REQUEST_LIMIT:
-        print(f"capped at the {REQUEST_LIMIT}-request limit; rerun with fewer packages for the rest")
+        print(f"capped at the {REQUEST_LIMIT}-request limit; rerun for the rest")
 
 
 if "--request" in sys.argv:
