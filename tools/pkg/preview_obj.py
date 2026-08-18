@@ -4,7 +4,7 @@ Renders extracted OBJ files to a contact sheet, so a mesh can be identified by e
 Naming a mesh is the one step no amount of table decoding settles here: the item -> model chain
 runs through investment tables Charm does not decode below Witch Queen, so a model carries no name.
 Its shape does. Six candidates rendered front, side and top is enough to tell a helmet from a
-shoulder pad in one glance, which is what the bounding-box filter in  can only
+shoulder pad in one glance, which is what the bounding-box filter in `parse_models.py` can only
 guess at.
 
 Orthographic, z-buffered by triangle depth, flat-shaded from the view axis. Destiny is Z-up.

@@ -128,9 +128,52 @@ python parse_models.py --helmets
 python parse_models.py --tag 0x80EC2012
 ```
 
+## Vertex layouts
+
+Positions are packed **signed 16-bit**, dequantised as `value / 32767 * scale + translation`. The
+stride says what else shares the vertex:
+
+| stride | 0x00 | 0x08 |
+|---|---|---|
+| 8 | position x,y,z,w as int16 | — |
+| 12 | position x,y,z,w as int16 | 2 bone indices + 2 weights, or a texcoord |
+| 16 | position x,y,z,w as int16 | 4 weight values, then 4 bone indices |
+
+So **skinning is inline in the position stride**, not in a paired buffer. The legacy "old weights"
+tag is absent on 686 of 724 meshes here, which is why testing for a stride-8 weight buffer beside a
+stride-16 position buffer finds almost nothing — that pairing is the exception, not armour's shape.
+
+Indices are 16-bit on every helmet candidate. A part declares its own index range and primitive
+type: 3 for triangles, 5 for strips. `ELodCategory` 0 is the main geometry; 4, 7 and 9 are cheaper
+copies and 1, 2, 3 and 8 are attachments, so exporting every LOD at once buries a low-poly duplicate
+inside the model.
+
+## Confirmed by looking at it
+
+```powershell
+python extract_mesh.py --helmets --limit 6 --out-dir out
+python preview_obj.py out sheet.png
+```
+
+52 models with a ~0.30 m box centred at ~1.72 m render as unmistakable helmets — visor slits, ear
+housings, crests, antennae. The ~0.58 m box at ~1.39 m is the torso cluster. Since a model carries
+no name, shape is the identification.
+
 ## The plan for the mask
 
 Unchanged from what already worked on terrain, which is the point of having proven the container
-first: **rewrite positions only**, inherit every other byte, and keep the vertex count identical so
-the game's index buffer and bone weights stay valid. The stride-8 weight buffer is never touched, so
-the mesh stays rigged to whatever bones it was rigged to.
+first: **rewrite positions only** — bytes 0-5 of each vertex — inherit every other byte, and keep
+the vertex count identical. The `w` component, the bone indices and the weights all survive, so the
+mesh stays rigged exactly as it was and the game's index buffer stays valid.
+
+That vertex count is **not a hard limit**, only the safe first step. We write the package, so a new
+buffer at a different count is writable too — it just also means updating the 12-byte vertex header,
+the index buffer and the part index ranges together. Keeping the count fixed isolates one variable
+for the first attempt.
+
+The same reasoning bounds what a *whole custom character* can be. Because positions are rewritten in
+place, each vertex keeps the bone weights it already had: a vertex weighted to the left forearm
+stays weighted to the left forearm whatever geometry is written there. A helmet is forgiving —
+near-rigid, essentially one bone. A body is not, and needs a region-aware resample rather than a
+nearest-point fit. Replacing an armour *set* piece by piece is the tractable route to a full custom
+character, and it sidesteps armour occlusion entirely.
