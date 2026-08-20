@@ -114,9 +114,32 @@ the investment packages:
 ## Finding a helmet without names
 
 The item → model link runs `item → artArrangementIndex → entity assignment → SEntity → resource →
-SEntityModel`. Charm decodes it, but **only for Witch Queen and later**: it logs "API is not
-supported for versions below DESTINY2_WITCHQUEEN_6307". So for this build the investment tables are
-undecoded, and item names are not available that way.
+SEntityModel`. Charm decodes the second hop, but **only for Witch Queen and later**: it logs "API
+is not supported for versions below DESTINY2_WITCHQUEEN_6307", and its assignment-table class
+`0x808055CE` has **zero** entries in this install.
+
+The first hop is already extracted. Sunrise's `build_data.bin` carries every item's arrangement
+index (`tools/pkg/lookup_item.py`). The investment root that names the second hop is
+`0x81327D22` (class `0x80807D84`, dumped). Tiger tags use an additive bias:
+`0x80800000 + (package_id << 13) + entry`. Thus package id `0x0593` (also stored at header
+offset `0x04`) correctly produces `0x813xxxxx`. Using bitwise OR instead aliases it to a wrong
+`0x80Bxxxxx` handle that the in-game dumper cannot find.
+
+Observed on the live Warlock loadout:
+
+| item | hash | arrangement |
+|---|---|---|
+| equipped helmet (Scatterhorn) | `0xEA042965` | 2295 |
+| swapped helmet | `0x5CA160F5` | 479 |
+| swapped helmet | `0x0B117DAB` | 2290 |
+| ornament plug applied in-game | `0x231DBD19` | 1314 |
+
+`gearArtIndex` is unset (`0xFFFF`) on all of them — appearance is the arrangement index. The
+Witch Queen assignment table is the missing hop, not the item table.
+
+The 52 "helmet-shaped" models are hard hats: span 0.15–0.55 m at ~1.72 m. Scatterhorn / Winterhart
+are hoods. Six dumped models sit at head height with a larger cowl box (span 0.59–0.74 m) and were
+never injected.
 
 Geometry answers it instead. `ModelScale` and `ModelTranslation` dequantise the packed positions, so
 together they *are* the model-space bounding box. A helmet is a small box sitting at head height —
@@ -177,3 +200,124 @@ stays weighted to the left forearm whatever geometry is written there. A helmet 
 near-rigid, essentially one bone. A body is not, and needs a region-aware resample rather than a
 nearest-point fit. Replacing an armour *set* piece by piece is the tractable route to a full custom
 character, and it sidesteps armour occlusion entirely.
+
+## What the inspect screen actually draws
+
+`helmet_mode=1` hides helmet items, so the character screen shows the **race/gender head** plus
+the equipped armour set. Wrapping eight person-sized investment bodies (`0x80BA75A7` and
+neighbours) did not change that view — those meshes sit under the robes.
+
+The only globals heads in this install (body-space, ~0.31 m span at ~1.72 m):
+
+| tag | package | meshes | parts |
+|---|---|---|---|
+| `0x80C71828` | `w64_globals_0238` | 4 | 26 |
+| `0x80FA3678` | `w64_globals_03d1` | 3 | 12 |
+| `0x80B9F9B7` | `w64_globals_01cf` | 3 | 30 |
+
+`probe_heads.py` blanked those three; the inspect screen still showed the bald Awoken, so the
+player head is not a separate globals helmet-sized mesh.
+
+The playable-character path is `playable_character.py`. The custom GLB is already skinned
+(Mixamo-style: Hips / Spine / Head / limbs, 48 joints). Destiny will not play those bones, so
+each custom vertex copies bone indices from the nearest Destiny vertex.
+
+Observed 2026-08-19: nulling Warlock armour slots shows the **default undersuit** (sleeveless
+tunic, pants, boots, bald head) — not a nude mesh and not the custom character. The 72k globals
+body `0x80B9F962` is the **character-select preview**; replacing it left the select screen
+loading with no 3D cards while in-game inspect still drew the undersuit. That patch was undone.
+
+In-game inspect with armour off still drew the default undersuit after wrapping those eight
+bodies — they are not the live mesh. The beige tunic is a **chest** in the torso cluster
+(span ~0.6–0.9 m at ~1.35 m). Those model headers were dumped; their vertex buffers were not.
+`probe_undersuit.py` blanked all 59 dumped torso models; the beige tunic still drew, so the
+undersuit is not in that bbox cluster. Empty equipment slots make the client fall back on
+race/gender/class defaults rather than item art. `probe_investment.py` blanks **every**
+entity model in `investment_01d3` and `0361` (343 models). The tunic survived, so the
+undersuit is **not** in those gear packages; empty slots make the client draw a
+race/gender/class default from elsewhere. Character-select spinners on that launch were
+Hunter/Titan armour in the same packages — undone.
+
+`probe_globals_bodies.py` blanked the remaining 41 person-sized globals bodies (leaving the
+72k select preview). The beige undersuit still drew.
+
+Ruled out as the in-game default mesh: investment (all 343), globals person-bodies and the
+three globals heads. The inspect screen is orbit/UI, not gear. `w64_ui_037e` carries 21
+entity models including two **46,448-byte** headers (far larger than a typical 1,120-byte
+armour model). `w64_orbit_d2_03b1` has 152 models but they are tiny (416–1,120 B), more
+likely gizmos than a skinned guardian. Dumped 238 of those 254 tags. The remaining globals_06dc
+failure was traced to offline handle encoding: Tiger adds `0x80800000` to the shifted package id;
+bitwise OR produced wrong `0x80DB...` aliases for the real `0x815B...` handles. `Package.tag_for()`
+and the high-tag bounds are fixed; globals_06dc is now the primary focused Guardian dump.
+`w64_ui_037e` is full of person-sized models (span ~1.85 m, height ~0.93 m), including
+two 6-mesh 46,448-byte headers. Orbit models are kilometre-scale gizmos. `probe_ui.py`
+blanks all 21 `ui_037e` entity models. Restore `settings.json.bak_armor` to put the
+robes back.
+
+## Live package-read trace (preferred targeting path)
+
+Broad blank probes established where the default undersuit is not, but they do not reveal what the
+inspect renderer actually requests. The client now attaches dormant `ReadFile` / `ReadFileEx`
+observers to the retail process. They forward reads unchanged and only record calls originating in
+`destiny2.exe` whose final path is below `packages` and ends in `.pkg`.
+
+1. Launch clean, reach orbit, and press **F8** to start capture.
+2. Open the character inspect view (or trigger the model transition being investigated).
+3. Press **F8** again to stop. A capture is capped at 8,192 package reads if the second press is
+   missed.
+4. Close the game and run `python tools/pkg/analyze_package_trace.py`.
+
+Each event records the patch filename, physical read offset, byte count, immediate caller RVA and
+up to four `destiny2.exe` stack RVAs. `analyze_package_trace.py` resolves physical reads through the
+newest Tiger block table and ranks every logical entry crossing a touched block, with
+`SEntityModel` (`0x808073A5`) candidates first. The caller/stack histogram is also the evidence for
+a later direct internal loader hook, without guessing a function signature from packed disk code.
+
+The 2026-08-19 focused Guardian-inspect capture recorded 1,036 reads. After correcting Tiger's
+additive high-package tag encoding, its model-bearing timeline contained exactly two entries from
+the runtime-selected globals_06dc family: `0x815B868B` and `0x815B8697`, both 544-byte
+`SEntityModel` headers. These are the primary default-Guardian candidates for the next dump/blank
+test; the other 14 globals_06dc models remain a small fallback set.
+
+### 2026-08-19 later — that lead is dead, and why
+
+A 438-tag dump (`keys=ok`) resolved all 16 globals_06dc models plus the whole newly reachable
+`0x06D0`–`0x06DE` cluster, both cinematics packages, `npcs_0938` and `sandbox_0691`. Parsing kills
+the primary lead outright:
+
+- **`0x815B868B` and `0x815B8697` are not bodies.** Both carry model scale 2.519 and translation
+  z 0.625, i.e. a 5.04 m box spanning −1.89 m to +3.14 m, one mesh, 6 parts, LODs [1, 7]. A standing
+  Guardian is a ~1.86 m box with its floor at 0. Their identical size and shape make them a matched
+  pair of world objects, not sex/race variants.
+- **The three captured "owner" tags are not owners.** All three decode identically: class
+  `0x80807140`, 208 bytes, holding an array of `0x808071E8` records at `+0x090` and two `0x808071DC`
+  references at `+0x0A0`/`+0x0A4`. None references an `SEntityModel`. This is a material/technique
+  resource that the loose 100 ms association window caught, exactly the mis-pairing the hook's own
+  notes warned about. Package adjacency is the only signal they carry.
+
+Bounding-box screening is sharper than span+height. A body has `box_floor ≈ 0` **and**
+`box_top ∈ [1.5, 2.3]`; that rejects both kilometre gizmos and torso-only pieces. Across all 438
+dumped models this yields **25 person-shaped models**, the largest being `0x81A700AC`
+(`npcs_0938`, 3 meshes, 1.33 MB of positions) and the only globals_06dc body being `0x815B85A1`
+(6 meshes, 0.018–1.858 m, 272,720 B; `0x815B85A3` shares its exact bounding box and adds an
+old-weights buffer).
+
+**None of those 25 appear anywhere in the inspect capture.** globals_06dc was read 10 times and
+touched only the two 5 m objects. Absence of a read is not proof of absence of use — the Guardian
+body is resident from character select, well before the F8 window — but it does mean the capture
+provides no positive evidence for any of them, and a blank probe over the 25 is a coin flip rather
+than a targeted test.
+
+### The actual blocker, and the instrument that closes it
+
+The capture's 127 `stage=lookup` events carry only **five distinct `r9` values**
+(`0x25BB312EA10`, `0x25BB3130408`, `0x25BB3131A10`, `0x25BB3133AE0`, `0x25BB3138490`), repeated
+across the whole window: five live `SEntityModel` instances drawn during inspect. `r9` is a heap
+pointer with no offline meaning, which is precisely why every targeting attempt so far has had to
+guess.
+
+The fix is to make the hook self-resolving rather than to guess better. At `stage=lookup`, read a
+bounded window of the object at `r9` and log every dword in tag range. A live instance necessarily
+carries its own mesh and buffer handles, and buffer tags resolve offline through the plain entry
+tables to exactly one package and entry — turning "which of 21,240 models" into a table lookup.
+This needs no correlation window and no assumption about which materializer path ran.

@@ -65,6 +65,9 @@ Bungie's servers.
 - `src/state/build_data/` — tables extracted from the installed packages at runtime
 - `src/middleware/content/packages/` — Tiger `.pkg` **readers**. There is no writer in the mod; the
   one this fork added lives offline in `tools/pkg/` — see `docs/PACKAGES.md`.
+- `src/client/hooks/package_trace/`, `src/client/hooks/model_trace/` — dormant F8-gated capture of
+  package reads and live model instances. `docs/TOOLS.md` covers the whole toolchain and the
+  capture procedure.
 - `src/middleware/datagen/` — encodes state into the records the game reads
 - `src/core/` — settings, logging, filesystem, the ImGui overlay
 

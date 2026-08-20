@@ -68,7 +68,10 @@ ENTITY_MODEL = 0x808073A5
 VERTEX_HEADER_SIZE = 12
 INDEX_HEADER_SIZE = 24
 
-TAG_MIN, TAG_MAX = 0x80800000, 0x80FFFFFF
+# Package ids are 12-bit values.  Valid handles therefore extend through 0x82xxxxxx;
+# globals_06dc, for example, encodes as 0x815Bxxxx rather than 0x80DBxxxx.
+TAG_MIN = TAG_BASE
+TAG_MAX = TAG_BASE + (0x0FFF << TAG_ENTRY_BITS) + TAG_ENTRY_MASK
 # Class ids cluster below this; a reference above it in a stub entry is a pointer to real data.
 POINTER_MIN = 0x80801000
 

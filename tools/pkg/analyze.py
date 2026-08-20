@@ -17,9 +17,12 @@ import struct
 import sys
 from pathlib import Path
 
+from tigerpkg import TAG_BASE, TAG_ENTRY_BITS, TAG_ENTRY_MASK
+
 DUMP = Path(sys.argv[1] if len(sys.argv) > 1 else r"C:\Sunrise\bin\x64\Sunrise\dump")
 NAME_RE = re.compile(r"^tag_([0-9A-Fa-f]{8})\.bin$")
-TAG_MIN, TAG_MAX = 0x80800000, 0x80FFFFFF
+TAG_MIN = TAG_BASE
+TAG_MAX = TAG_BASE + (0x0FFF << TAG_ENTRY_BITS) + TAG_ENTRY_MASK
 
 
 def entropy(data: bytes) -> float:

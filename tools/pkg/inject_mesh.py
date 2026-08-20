@@ -43,6 +43,8 @@ Usage:
     python inject_mesh.py 0x80BA7474 --dry-run
     python inject_mesh.py 0x80BA7474 --glb <path.glb> --mesh GasMask
     python inject_mesh.py --all-helmets
+    python inject_mesh.py --all-helmets --rewrite-uvs
+    python inject_mesh.py --request-uvs
     python inject_mesh.py --undo
 """
 from __future__ import annotations
@@ -55,7 +57,17 @@ from pathlib import Path
 import numpy as np
 
 from glb import load_mesh
-from parse_models import INDEX, TAG_BASE, TAG_ENTRY_BITS, TAG_ENTRY_MASK, models, option
+from parse_models import (
+    INDEX,
+    REQUEST_DIR,
+    TAG_BASE,
+    TAG_ENTRY_BITS,
+    TAG_ENTRY_MASK,
+    TAG_MAX,
+    TAG_MIN,
+    models,
+    option,
+)
 from extract_mesh import dumped, vertex_stride
 from patch import write_patch_package_multi, verify_patch
 from tigerpkg import Package
@@ -120,6 +132,20 @@ def rewrite_header(original: bytes, data_size: int, at: int, width: str) -> byte
     return bytes(out)
 
 
+def resize_per_vertex(original: bytes, old_count: int, new_count: int) -> bytes:
+    """@return `new_count` vertices of the same stride, tiled from `original` if needed.
+
+    The game indexes this buffer by vertex. Tiling keeps every byte a copy of something it
+    already accepted, so a longer custom mesh does not read off the end. UVs will not match
+    the mask; the point is to keep the loader alive.
+    """
+    if old_count <= 0 or len(original) < old_count:
+        raise SystemExit(f"cannot resize a {len(original)}-byte buffer of {old_count} vertices")
+    stride = len(original) // old_count
+    tiled = original if new_count <= old_count else original * ((new_count + old_count - 1) // old_count)
+    return tiled[: new_count * stride]
+
+
 def rewrite_model(model, mesh, index_count: int) -> bytes:
     """@return The model blob with part 0 covering the new triangles and every other part silenced."""
     out = bytearray(model.data)
@@ -136,7 +162,8 @@ def rewrite_model(model, mesh, index_count: int) -> bytes:
 
 
 
-def build_replacements(model, source: np.ndarray, faces: np.ndarray) -> dict[int, bytes]:
+def build_replacements(model, source: np.ndarray, faces: np.ndarray,
+                       rewrite_uvs: bool = False) -> dict[int, bytes]:
     """@return Entry index -> new bytes, for the five entries one model needs.
 
     @param source Custom mesh vertices, already in Destiny's frame and centred on nothing in
@@ -163,13 +190,28 @@ def build_replacements(model, source: np.ndarray, faces: np.ndarray) -> dict[int
 
     positions = pack_positions(placed, stride, scale, translation)
     indices = pack_indices(faces)
-    return {
+    replacements = {
         entry_index_of(mesh.position_buffer): positions,
         entry_index_of(mesh.positions): rewrite_header(vertex_header, len(positions), 0, "<I"),
         entry_index_of(mesh.index_buffer): indices,
         entry_index_of(mesh.indices): rewrite_header(index_header, len(indices), 8, "<q"),
         entry_index_of(model.tag): rewrite_model(model, mesh, faces.size),
     }
+    # UV rewrite is opt-in. Tiling that buffer across 40 models hung the tower; the 19-model
+    # inject that left UVs alone loaded clean.
+    if rewrite_uvs:
+        uv_header = dumped(mesh.texcoords)
+        uv_body = dumped(mesh.texcoord_buffer)
+        if uv_header is None or not uv_body:
+            raise SystemExit(f"0x{model.tag:08X}: --rewrite-uvs needs a dumped texcoord buffer")
+        original = len(uv_body) // max(struct.unpack_from("<h", uv_header, 4)[0], 1)
+        if original == 0:
+            original = mesh.position_bytes // stride
+        resized = resize_per_vertex(uv_body, original, len(source))
+        replacements[entry_index_of(mesh.texcoord_buffer)] = resized
+        replacements[entry_index_of(mesh.texcoords)] = rewrite_header(
+            uv_header, len(resized), 0, "<I")
+    return replacements
 
 
 def blank_model(model) -> bytes:
@@ -187,27 +229,41 @@ def blank_model(model) -> bytes:
     return bytes(out)
 
 
-def has_room(model, vertices: int) -> bool:
+def has_room(model, vertices: int, rewrite_uvs: bool = False) -> bool:
     """@return True when every per-vertex buffer we do *not* rewrite can still be indexed.
 
-    Positions and indices get replaced; the texcoord/normal buffer is inherited untouched, and the
-    game still indexes it by vertex. So a custom mesh with more vertices than the target reads off
-    the end of it. That is not theoretical - it hung the tower. A 1,172-vertex helmet carries a
-    28,128-byte texcoord buffer at stride 24, and asking for vertex 2,361 seeks to byte 56,664,
-    more than twice past the end.
-
-    The stride needs no dump: it is exactly `texcoord bytes / original vertex count`.
+    Positions and indices are always replaced. The texcoord/normal buffer is inherited
+    unless `--rewrite-uvs` is set. A 2,362-vertex mask on a 1,172-vertex helmet seeks
+    past a stride-24 UV buffer and hangs the tower — that is why this check exists.
     """
     mesh = model.meshes[0]
-    original = mesh.position_bytes // vertex_stride(mesh.positions)
-    return vertices <= original and (mesh.texcoord_bytes == 0
-                                     or vertices * (mesh.texcoord_bytes // original)
-                                     <= mesh.texcoord_bytes)
+    stride = vertex_stride(mesh.positions)
+    if not stride:
+        return False
+    original = mesh.position_bytes // stride
+    if original <= 0:
+        return False
+    if not rewrite_uvs:
+        return vertices <= original and (mesh.texcoord_bytes == 0
+                                         or vertices * (mesh.texcoord_bytes // original)
+                                         <= mesh.texcoord_bytes)
+    if mesh.weight_bytes == 0:
+        return True
+    return vertices * (mesh.weight_bytes // original) <= mesh.weight_bytes
+
+
+def head_like(model) -> bool:
+    """@return True for a hard-hat or a hood: head height, span up to a cowl."""
+    return (1.55 <= model.height <= 2.05 and 0.15 <= model.span <= 0.80
+            and model.vertices >= 300)
 
 
 def injectable(model) -> bool:
-    """@return True when a model is a single-mesh helmet whose buffers were dumped."""
-    if not model.helmet_like or len(model.meshes) != 1:
+    """@return True when mesh 0 of a head model has the buffers a write needs.
+
+    Multi-mesh heads (antlers, visors) keep every mesh after 0 untouched.
+    """
+    if not head_like(model) or not model.meshes:
         return False
     mesh = model.meshes[0]
     return bool(vertex_stride(mesh.positions)) and dumped(mesh.indices) is not None
@@ -235,7 +291,35 @@ def main() -> None:
     if "--undo" in sys.argv:
         undo()
         return
+    if "--request-uvs" in sys.argv:
+        lines = [
+            "# Texcoord header + body for every single-mesh head model still missing them.",
+            "# Also slot 4 of the investment root, the last 4301-row size match.",
+            "",
+            "# slot 4  class 0x808076F0  1,470,710 B",
+            "tag 0x81327CF0",
+            "",
+        ]
+        seen: set[int] = set()
+        missing = 0
+        for model in models:
+            if not injectable(model):
+                continue
+            mesh = model.meshes[0]
+            if dumped(mesh.texcoords) is not None and dumped(mesh.texcoord_buffer) is not None:
+                continue
+            missing += 1
+            lines.append(f"# model 0x{model.tag:08X}  {model.vertices:,} verts")
+            for tag in (mesh.texcoords, mesh.texcoord_buffer):
+                if TAG_MIN <= tag <= TAG_MAX and tag not in seen:
+                    seen.add(tag)
+                    lines.append(f"tag 0x{tag:08X}")
+        request = REQUEST_DIR / "request.txt"
+        request.write_text("\r\n".join(lines) + "\r\n", encoding="ascii")
+        print(f"wrote {len(seen) + 1} requests for {missing} models plus slot 4 to {request}")
+        return
     tags = [argument for argument in sys.argv[1:] if argument.startswith("0x")]
+    rewrite_uvs = "--rewrite-uvs" in sys.argv
     if "--blank-others" in sys.argv:
         # One launch, maximum information: the mask goes into every injectable helmet, and every
         # other dumped model in the same packages is silenced. Whatever the equipped helmet does -
@@ -247,7 +331,7 @@ def main() -> None:
         source = to_destiny(np.asarray(positions, dtype=np.float64))
         for model in chosen:
             by_package.setdefault(package_of(model.tag), {}).update(
-                build_replacements(model, source, faces))
+                build_replacements(model, source, faces, rewrite_uvs))
         for model in blanked:
             by_package.setdefault(package_of(model.tag), {})[entry_index_of(model.tag)] =                 blank_model(model)
         print(f"{len(chosen)} models get the mask, {len(blanked)} are blanked")
@@ -273,8 +357,8 @@ def main() -> None:
     if faces.max() >= len(source):
         raise SystemExit(f"index {faces.max()} exceeds {len(source)} vertices")
 
-    cramped = [model for model in chosen if not has_room(model, len(source))]
-    chosen = [model for model in chosen if has_room(model, len(source))]
+    cramped = [model for model in chosen if not has_room(model, len(source), rewrite_uvs)]
+    chosen = [model for model in chosen if has_room(model, len(source), rewrite_uvs)]
     if cramped:
         print(f"skipping {len(cramped)} models with too few vertices to index safely:")
         for model in sorted(cramped, key=lambda m: m.vertices)[:6]:
@@ -284,11 +368,8 @@ def main() -> None:
     # in the same package has to be redirected in one patch file rather than a chain of them.
     by_package: dict[Path, dict[int, bytes]] = {}
     for model in chosen:
-        if len(model.meshes) != 1:
-            print(f"  skipping 0x{model.tag:08X}: {len(model.meshes)} meshes")
-            continue
         by_package.setdefault(package_of(model.tag), {}).update(
-            build_replacements(model, source, faces))
+            build_replacements(model, source, faces, rewrite_uvs))
 
     print(f"custom mesh {len(source):,} verts, {len(faces):,} tris")
     print(f"{len(chosen)} models across {len(by_package)} packages")

@@ -18,9 +18,11 @@
 #include "../hooks/config_getter/config_getter_lifecycle.h"
 #include "../hooks/cursor/runtime.h"
 #include "../hooks/graphics/graphics_hook_lifecycle.h"
+#include "../hooks/model_trace/model_class_trace.h"
 #include "../hooks/network/runtime.h"
 #include "../hooks/noclip/runtime.h"
 #include "../hooks/package_trust/package_trust_bypass.h"
+#include "../hooks/package_trace/package_read_trace.h"
 #include "../hooks/polled_input/runtime.h"
 #include "../hooks/queuez/queuez_hook_lifecycle.h"
 #include "../hooks/retail_log/retail_log_lifecycle.h"
@@ -163,6 +165,12 @@ void clear_game_targets() noexcept {
     (void)hooks::retail_log::install();
     (void)hooks::assert_handler::install();
     (void)hooks::config_getter::install();
+    // F8 opens a bounded package-read window used to identify the exact model an inspect view
+    // requests. This is diagnostic: a system-export miss cannot demote normal client activation.
+    (void)hooks::package_trace::install();
+    // The body is commonly cached before inspect opens, so file I/O alone misses it. Pair the
+    // same F8 window with the reflected SEntityModel lookup and keep this optional as well.
+    (void)hooks::model_trace::install();
     // Boot-step fixes scan for their own single-site targets; each reports its own outcome.
     (void)hooks::bootflow::install();
     // The teleport hooks attach whether or not the feature is on, so the interface can enable it

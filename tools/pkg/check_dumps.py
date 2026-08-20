@@ -30,9 +30,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from parse_models import SUNRISE, lookup, option
-
-TAG_MIN, TAG_MAX = 0x80800000, 0x80FFFFFF
+from parse_models import SUNRISE, TAG_MAX, TAG_MIN, lookup, option
 RECEIPT = Path(__file__).with_name("inject_receipt.json")
 
 # The check compares a dump against the newest installed package - so with one of our patch files

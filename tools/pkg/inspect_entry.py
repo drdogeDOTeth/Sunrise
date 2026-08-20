@@ -17,8 +17,11 @@ import struct
 import sys
 from pathlib import Path
 
+from tigerpkg import TAG_BASE, TAG_ENTRY_BITS, TAG_ENTRY_MASK
+
 DUMP = Path(r"C:\Sunrise\bin\x64\Sunrise\dump")
-TAG_MIN, TAG_MAX = 0x80800000, 0x80FFFFFF
+TAG_MIN = TAG_BASE
+TAG_MAX = TAG_BASE + (0x0FFF << TAG_ENTRY_BITS) + TAG_ENTRY_MASK
 # Values in this range recur across unrelated blobs, so they mark inline structure types rather
 # than pointing at another entry.
 INLINE_MAX = 0x80801000

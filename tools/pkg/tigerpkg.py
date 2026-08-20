@@ -254,7 +254,11 @@ class Package:
 
     def tag_for(self, entry_index: int) -> int:
         """@return The tag handle the game uses to address one entry of this package."""
-        return TAG_BASE | (self.header.package_id << TAG_ENTRY_BITS) | entry_index
+        # TAG_BASE is a numeric bias, not a bit-field prefix. OR happens to agree
+        # with addition for low package ids, but aliases ids once their shifted
+        # value overlaps bit 23. Live traces prove package 0x06DC is addressed as
+        # 0x815Bxxxx, not 0x80DBxxxx.
+        return TAG_BASE + (self.header.package_id << TAG_ENTRY_BITS) + entry_index
 
     def block_body(self, index: int) -> bytes:
         """@return One block's stored body, read from whichever patch file holds it."""

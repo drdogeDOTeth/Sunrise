@@ -3,6 +3,7 @@
 #include <atomic>
 
 #include "../../../core/ui/busy/busy.h"
+#include "../package_trace/package_read_trace.h"
 #include "graphics_hook_lifecycle.h"
 
 namespace sunrise::client::hooks::graphics::replacement {
@@ -44,6 +45,8 @@ __declspec(noinline) HRESULT STDMETHODCALLTYPE present_body(IDXGISwapChain* swap
                                                             UINT flags) noexcept {
     HRESULT result = DXGI_ERROR_INVALID_CALL;
     const bool rendererEnabled = enter_hook_call();
+    // Poll outside the game image so the polled-input guard forwards the real F8 state.
+    package_trace::poll_hotkey();
     const auto call = original<Present>(HookSlot::present);
     if (call != nullptr) {
         if (rendererEnabled && (flags & DXGI_PRESENT_TEST) == 0) {

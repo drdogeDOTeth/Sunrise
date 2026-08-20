@@ -24,7 +24,11 @@ from tigerpkg import TAG_BASE, TAG_ENTRY_BITS, TAG_ENTRY_MASK, Package, PackageE
 PACKAGES = Path(r"C:\Sunrise\packages")
 DUMP = Path(r"C:\Sunrise\bin\x64\Sunrise\dump")
 FAMILY_RE = re.compile(r"^w64_(?P<family>.+?)_[0-9a-f]{4}(_[a-z]{2})?_\d+\.pkg$", re.IGNORECASE)
-TAG_MIN, TAG_MAX = 0x80800000, 0x80FFFFFF
+# A Tiger handle is TAG_BASE + (12-bit package id << 13) + entry index.  Older
+# probes incorrectly capped this at 0x80FFFFFF, excluding installed packages such
+# as globals_06dc (whose real handles begin 0x815B...).
+TAG_MIN = TAG_BASE
+TAG_MAX = TAG_BASE + (0x0FFF << TAG_ENTRY_BITS) + TAG_ENTRY_MASK
 INLINE_MAX = 0x80801000
 
 

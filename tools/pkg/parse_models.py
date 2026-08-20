@@ -71,7 +71,10 @@ PART_STRIDE = 0x20
 ARRAY_HEADER = 0x10
 EMPTY_TAG = 0xFFFFFFFF
 
-TAG_MIN, TAG_MAX = 0x80800000, 0x80FFFFFF
+# Do not truncate package ids above 0x3ff: the installed Shadowkeep set includes
+# globals_06dc at handles 0x815Bxxxx.
+TAG_MIN = TAG_BASE
+TAG_MAX = TAG_BASE + (0x0FFF << TAG_ENTRY_BITS) + TAG_ENTRY_MASK
 # Assumed stride for the offline census only, when the buffer header has not been dumped yet. 8 is
 # by far the commonest: of the helmet candidates, 30 headers are stride 8, 4 are 12 and 2 are 16.
 # `extract_mesh.py` always reads the real stride out of the header instead of assuming this.

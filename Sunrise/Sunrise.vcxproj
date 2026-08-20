@@ -221,6 +221,8 @@
     <ClCompile Include="src\client\hooks\network\investment\investment_derived_rebuild.cpp" />
     <ClCompile Include="src\client\hooks\network\investment\investment_family5_rearm.cpp" />
     <ClCompile Include="src\client\hooks\package_trust\package_trust_bypass.cpp" />
+    <ClCompile Include="src\client\hooks\package_trace\package_read_trace.cpp" />
+    <ClCompile Include="src\client\hooks\model_trace\model_class_trace.cpp" />
     <ClCompile Include="src\client\hooks\bitmap\bitmap_hook_lifecycle.cpp" />
     <ClCompile Include="src\client\hooks\bitmap\bitmap_ref_guard.cpp" />
     <ClCompile Include="src\client\hooks\external_server\external_server_route.cpp" />
@@ -806,6 +808,8 @@
     <ClInclude Include="src\client\executable\image.h" />
     <ClInclude Include="src\client\hooks\network\investment\investment_derived_rebuild.h" />
     <ClInclude Include="src\client\hooks\network\runtime.h" />
+    <ClInclude Include="src\client\hooks\package_trace\package_read_trace.h" />
+    <ClInclude Include="src\client\hooks\model_trace\model_class_trace.h" />
     <ClInclude Include="src\client\hooks\network\bubble_authority\bubble_authority_replacements.h" />
     <ClInclude Include="src\client\hooks\network\bubble_authority\scope\bubble_authority_scope.h" />
     <ClInclude Include="src\client\hooks\network\coordinator\network_call_coordinator.h" />
