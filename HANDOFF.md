@@ -31,9 +31,12 @@ Newest files win:
 
 | package | live | previous |
 |---|---|---|
-| `w64_sandbox_037c` | **`_21`** | `_20` (good body, chrome shading) |
-| `w64_sandbox_037d` | **`_21`** | `_20` |
-| `w64_sandbox_0698` | **`_20`** | `_19` |
+| `w64_sandbox_037c` | **`_22`** | `_21` (BROKEN — shards) |
+| `w64_sandbox_037d` | **`_22`** | `_21` (BROKEN — shards) |
+| `w64_sandbox_0698` | **`_21`** | `_20` (BROKEN — shards) |
+
+`_20` is the last layer confirmed good in game. `_21` shipped a stride bug and exploded; `_22`
+fixes it. If `_22` is ever suspect, `_20` is the state to compare against, not `_21`.
 | `w64_sandbox_01e2` | `_6` | inert — legs are blanked |
 | `w64_sandbox_0699` | `_6` | inert — gauntlets are blanked |
 
@@ -384,7 +387,27 @@ drawing. Candidates, cheapest first:
 
 This is cosmetic and low-risk. Do not fix it in the same layer as a UV change.
 
-## `_21` — the stride-24 buffer is decoded, and we now write it
+## `_21` shipped a stride bug. `_22` is the fix.
+
+`_21` exploded the body into huge angular shards in every view. The cause was **one shadowed
+local variable** in `inject_mesh0`: `header` held the *position* buffer header, and the new
+texcoord branch reassigned `header` to the *texcoord* header before the position header was
+written. So the position buffer's 12-byte header shipped with **stride 24 instead of 16**, and
+the game read 23,512 stride-16 vertices at stride-24 offsets.
+
+Nothing objected, because **every size was right** — only the stride was wrong, and the writer
+never rewrites a stride, so it had no reason to look at one.
+
+Diagnosis took no launch. Our own patch files are plain, so reading `_20` and `_21` back and
+diffing entry by entry showed `positions` SAME but `pos_hdr` DIFFERENT — which is impossible if
+the pipeline is sane, since the same buffer at the same size must produce the same header.
+
+`check_buffer_headers()` now refuses to ship any buffer header whose stride does not match the
+buffer it describes, or whose size is not a whole number of vertices at that stride. **Diff your
+own patch layers when something breaks** — the writer is offline-readable and it is the fastest
+instrument in the toolbox.
+
+## `_22` — the stride-24 buffer is decoded, and we now write it
 
 The "chrome" was never a texture problem. `clone_uvs` only *resized* the shipped second vertex
 buffer, so every **normal and tangent** in it was interpolated nonsense, and a broken tangent
@@ -393,7 +416,7 @@ frame reads as reflective noise long before a wrong albedo does.
 The layout is in [docs/GEOMETRY.md](docs/GEOMETRY.md) and `decode_texcoords.py` re-verifies it on
 demand: UV pair, unit normal, zero pad, unit tangent, `+/-32767` handedness, secondary UV.
 
-`_21` writes a real one. `retarget_mesh.py` exports `character_body_frame.bin` (9 float32 per
+`_22` writes a real one. `retarget_mesh.py` exports `character_body_frame.bin` (9 float32 per
 vertex: u, v, normal xyz, tangent xyz, handedness) and `inject_scatterhorn.py` packs it, setting
 `texcoord_scale` / `texcoord_translation` to `0.5 / 0.5` so the int16 range covers exactly `0..1`.
 
@@ -401,7 +424,7 @@ The buffer we write passes every check the shipped one does — unit lengths at 
 `{0}`, sign `{±32767}`, normal ⟂ tangent at mean `|dot|` 0.0000, UV round-trip error 8e-6 — and
 carries the original's near-constant `uv2` (0.782) across unchanged.
 
-**Expectation for `_21`:** the lighting should stop being liquid metal and start reading as a
+**Expectation for `_22`:** the lighting should stop being liquid metal and start reading as a
 shaded character. The **albedo is still Scatterhorn's**, now sampled through the custom model's
 own UV layout, so it will look like robe texture laid over the body — different, not yet right.
 

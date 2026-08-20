@@ -713,14 +713,14 @@ def inject_mesh0(by_package: dict[Path, dict[int, bytes]], tag: int,
     mesh = model.meshes[0]
     stride = vertex_stride(mesh.positions)
     original = dumped(mesh.position_buffer)
-    header = dumped(mesh.positions)
+    position_header = dumped(mesh.positions)
     index_header = dumped(mesh.indices)
     if index_header is None:
         index_header = dumped(load_model(CHESTS[0]).meshes[0].indices)
         if index_header is None:
             raise SystemExit(f"0x{tag:08X}: index header not dumped and no chest fallback")
         print(f"  cloned chest index header for 0x{mesh.indices:08X}")
-    if not stride or original is None or header is None:
+    if not stride or original is None or position_header is None:
         raise SystemExit(f"0x{tag:08X}: position/index headers not dumped")
     old_count = len(original) // stride
     indices = pack_indices(faces)
@@ -728,8 +728,8 @@ def inject_mesh0(by_package: dict[Path, dict[int, bytes]], tag: int,
     if own_texcoords:
         native = dumped(mesh.texcoord_buffer) or uv_body_fb
         uvs = pack_texcoords(frame, original_uv2(native, model))
-        header = dumped(mesh.texcoords) or uv_header_fb
-        uv_header = rewrite_header(header, len(uvs), 0, "<I")
+        texcoord_header = dumped(mesh.texcoords) or uv_header_fb
+        uv_header = rewrite_header(texcoord_header, len(uvs), 0, "<I")
         uv_note = f"authored UVs + tangent frame, stride {TEXCOORD_STRIDE}"
     else:
         if frame is not None:
@@ -745,12 +745,39 @@ def inject_mesh0(by_package: dict[Path, dict[int, bytes]], tag: int,
     print(f"  uvs       {len(uvs):,} B ({uv_note})")
     print(f"  carrier parts {chosen} -> {faces.size:,} indices; others zeroed")
     put(by_package, mesh.position_buffer, positions)
-    put(by_package, mesh.positions, rewrite_header(header, len(positions), 0, "<I"))
+    put(by_package, mesh.positions, rewrite_header(position_header, len(positions), 0, "<I"))
     put(by_package, mesh.index_buffer, indices)
     put(by_package, mesh.indices, rewrite_header(index_header, len(indices), 8, "<q"))
     put(by_package, mesh.texcoord_buffer, uvs)
     put(by_package, mesh.texcoords, uv_header)
     put(by_package, model.tag, model_blob)
+    check_buffer_headers(by_package, mesh, stride, len(positions), len(uvs))
+
+
+def check_buffer_headers(by_package: dict[Path, dict[int, bytes]], mesh,
+                         position_stride: int, position_bytes: int, uv_bytes: int) -> None:
+    """Refuse to ship a buffer header whose stride does not match the buffer it describes.
+
+    A 12-byte header is `size, stride, type, deadbeef`, and only the size is ever rewritten -
+    so the stride can only be wrong by having started from the *other* buffer's header. That
+    happened once: the texcoord header was copied over the position header, the game read
+    23,512 stride-16 vertices as stride-24, and the body came apart into shards. It cost a
+    launch, and nothing in the pipeline objected, because every size was right.
+    """
+    for tag, expected_stride, expected_size, what in (
+        (mesh.positions, position_stride, position_bytes, "position"),
+        (mesh.texcoords, TEXCOORD_STRIDE, uv_bytes, "texcoord"),
+    ):
+        written = by_package[package_of(tag)][entry_index_of(tag)]
+        size, stride = struct.unpack_from("<Ih", written, 0)
+        if stride != expected_stride or size != expected_size:
+            raise SystemExit(
+                f"0x{tag:08X}: {what} header says size {size:,} stride {stride}, "
+                f"but the buffer is {expected_size:,} bytes at stride {expected_stride}")
+        if expected_size % expected_stride:
+            raise SystemExit(
+                f"0x{tag:08X}: {what} buffer of {expected_size:,} B is not a whole number of "
+                f"stride-{expected_stride} vertices")
 
 
 def inject_slot(by_package: dict[Path, dict[int, bytes]], tag: int, kind: str,
