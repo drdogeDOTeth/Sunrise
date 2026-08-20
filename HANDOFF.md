@@ -1,29 +1,28 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-20 (evening). **Status: `_20` WORKS. User-confirmed in game.**
+**Updated:** 2026-08-20 (evening). **Status: `_22` WORKS. The custom character is in the game.**
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
-> world (i went to mercury) no stretching or anything."
+> world (i went to mercury) no stretching or anything." — on `_20`
+>
+> "AHHH YEAH THATS WHAT IM TALKING ABOUT." — on `_22`
 
-**`_22` confirmed too** — with the real tangent frame the body stops being liquid chrome and
-reads as a properly shaded character: defined gloves, sneakers, ribbed fabric, correct lighting
-in character select, character screen, the Tower and the EDZ. Albedo is still Scatterhorn's.
+The custom `void_4003GasMask.glb` renders on the playable Guardian in **every view** — character
+select, character screen, the Tower, Mercury, the EDZ — with correct proportions, articulated
+hands, arms and legs, **no stretching**, and proper shading: defined gloves, sneakers, ribbed
+fabric, real lighting response.
 
-The custom character renders correctly on the playable Guardian in **all three views** — Tower,
-character screen, and in-world on Mercury — with **no stretching**, correct proportions, and
-articulated hands, arms and legs. **The geometry and skinning problem is solved.** Do not
-re-open it, and do not re-tune weights, bone palettes or arm angles.
+**Geometry, skinning and shading are all solved. Do not re-open them.** No re-tuning weights,
+bone palettes, arm angles or the tangent frame.
 
-Two things remain, and neither is geometry:
+Three things remain, none of them geometry:
 
-1. **Gloves still draw over the custom hands.** Some gauntlet-side model is still rendering
-   beyond the pair we blank. See "the leftover gloves" below.
-2. **The body wears tiled Scatterhorn texture.** UVs are the whole remaining problem. See
-   "Next: UVs and textures".
-
-**Goal:** custom `void_4003GasMask.glb` visibly rendering **and connected** on the playable
-Guardian. Inspect / character select / Tower all draw this inject. Race-head inspect is
-deprioritized.
+1. **Albedo is still Scatterhorn's.** The body wears the robe's colours through the custom
+   model's own UV layout. See "Then: textures".
+2. **The custom mesh has five texture atlases and we draw through two parts.** Structural, and
+   it gates textures. Same section.
+3. **Gloves still draw over the custom hands**, and the bald race head still draws above the gas
+   mask. Both cosmetic leftovers. See "the leftover gloves".
 
 Do **not** merge upstream Sunrise 0.3.2.
 
@@ -33,25 +32,37 @@ Do **not** merge upstream Sunrise 0.3.2.
 
 Newest files win:
 
-| package | live | previous |
-|---|---|---|
-| `w64_sandbox_037c` | **`_22`** | `_21` (BROKEN — shards) |
-| `w64_sandbox_037d` | **`_22`** | `_21` (BROKEN — shards) |
-| `w64_sandbox_0698` | **`_21`** | `_20` (BROKEN — shards) |
+| package | live | previous | note |
+|---|---|---|---|
+| `w64_sandbox_037c` | **`_22`** | `_21` | `_21` BROKEN — shards |
+| `w64_sandbox_037d` | **`_22`** | `_21` | `_21` BROKEN — shards |
+| `w64_sandbox_0698` | **`_21`** | `_20` | its `_20` is the broken one |
+| `w64_sandbox_01e2` | `_6` | — | inert; legs are blanked |
+| `w64_sandbox_0699` | `_6` | — | inert; gauntlets are blanked |
 
-`_20` is the last layer confirmed good in game. `_21` shipped a stride bug and exploded; `_22`
-fixes it. If `_22` is ever suspect, `_20` is the state to compare against, not `_21`.
-| `w64_sandbox_01e2` | `_6` | inert — legs are blanked |
-| `w64_sandbox_0699` | `_6` | inert — gauntlets are blanked |
+**Package `0698` runs one layer behind `037c`/`037d`** — the injector writes each package its own
+next index, so "the `_22` inject" is `037c_22` + `037d_22` + `0698_21`. Do not read the numbers
+as a single version.
+
+`_22` is the good state and the one to branch from. `_21` shipped a stride bug and exploded;
+`_20` was the last good layer before it. If `_22` ever looks wrong, compare against `_20`.
 
 Repo: `C:\Users\Round\OneDrive\Desktop\Destiny2ProjectSunrise\Sunrise` branch `cosmetics`.
 
 **Do not `--undo`.** `inject_mesh.py --undo` deletes *every* receipt patch and returns vanilla
 Scatterhorn. Write a **new layer** instead.
 
-**`_20` is a good state. Branch from it; do not regress it.** If a later layer breaks the body,
-the recipe that produced `_20` is: `retarget_mesh.py` for the mesh, then `inject_scatterhorn.py`
-with no flags.
+**The recipe that produces the working body**, from `tools/pkg`, Destiny closed:
+
+```
+blender --background --python retarget_mesh.py -- 23512 character_body.obj
+python inject_scatterhorn.py --dry-run
+python inject_scatterhorn.py
+```
+
+No flags. `--no-retarget` (T-pose mesh), `--no-authored` (donor weights) and `--no-uvs` (resized
+Scatterhorn texcoords) each disable one half of the pipeline and exist only to bisect a
+regression.
 
 ---
 
@@ -106,15 +117,19 @@ Earlier failures that already proved the same geometry:
 | restore full chest, blank gauntlets (`_16`) | arms yanked back, **sheet between legs**, chrome noise | skinny mesh + L/R weight blend |
 | side-lock + 70° swing (`_17`) | written to fix `_16`; user went to look, then demanded all bones | **no clear "this is good"** before `_18` |
 | **3-slot all-bones (`_18`)** | pillar + shards | **worse.** AABB-fit, not bone indices |
-| **whole body, chest draw, joints 1-28 (`_19`)** | awaiting verdict | one bind frame, real legs |
+| **whole body, chest draw, joints 1-28 (`_19`)** | connected, real legs | one bind frame |
+| **retargeted + authored weights (`_20`)** | **WORKS** — hands, arms, legs | user-confirmed |
+| tangent frame, stride bug (`_21`) | shards everywhere | position header shipped stride 24 |
+| **tangent frame, fixed (`_22`)** | **WORKS** — properly shaded | user-confirmed |
 
 Webbing on `_16` was proven: custom mesh median `|y| ≈ 0.07`. **Zero** L/R-spanning
 triangles. Laplacian smooth across one "legs" band mixed left shin into right shin.
 Crotch `|y|<0.08` is most of this body, not a gusset. Fix was `strip_crossed` + side
 labels, **not** splitting onto the legs slot.
 
-Arms yanked back: 55° swing left hands at `|y|≈0.56` vs robe sleeves ≈0.40. 70° matches
-robe width, and `_19` keeps 70°. See "the one thing `_19` does not fix" below.
+Arms yanked back: 55° swing left hands at `|y|≈0.56` vs robe sleeves ≈0.40. All of that
+hand-tuning is **obsolete** — `_20` replaced the swing with a real retarget against `rig.json`.
+See "The retarget — what `_20` changed".
 
 ### Hard rules
 
@@ -245,30 +260,51 @@ weights — those two flags are how to bisect if `_20` looks wrong.
 
 ---
 
-## Ten facts that must survive a compact
+## Facts that must survive a compact
 
-1. **Inspect, character select, and Tower all draw this inject.** Tower frames `0x80B9F855` /
-   `0x80C23B5D` / `0x80FA2308` are still not the player.
+**The state of the project**
+
+1. **The custom character works in game.** `_22`, user-confirmed in every view. Geometry,
+   skinning and shading are done. Only textures and two cosmetic leftovers remain.
 2. **The playable character *is* its armour**, not a globals body. Equipped Scatterhorn is the
-   live mesh.
-3. **Assignment hop is closed.** Item → arrangement index (`build_data.bin`) → hash table
-   `0x81319329` → assignment table `0x81613D23` → parent map `0x80EC3F61` → entity-parent
-   (`0x8080744A`, 24 B, SEntity at `+0x10`) → SEntity → resource → `SEntityModel`. Scan the
-   resource for class `0x808073A5`; the tag is often at `+0x64C` / `+0x65C`.
-4. **Chest arrangement 2293 / hash `0x4A8A34A0` is Scatterhorn Robe.** User-confirmed.
-   Models `0x80EFA1CA` / `0x80EFA1A9` in `sandbox_037d`, **not** `investment_0361`.
-5. **Full 23k on chest mesh 0 is the shape of the answer**, carrier parts **10 and 32**.
-   Original robe ~4,100 verts. Welded GLB 23,512 / 46,068 tris.
-6. **Bone indices are one global skeleton, 1–28 is a whole body, and one draw poses all of it.**
-   The per-mesh palette never existed. `bone_frames.py` proves it offline in seconds.
-7. **A raw nearest-point snap destroys the mesh** (40–50% degenerate triangles → floating
-   fragments). Smooth the *displacement*, not the positions. (That was the wrap. Topology
-   inject copies skin tails, not positions-from-nearest.)
-8. **Write the buffer's package, not the model's.** `package_of(position_buffer)`.
+   live mesh, and inspect / character select / Tower / in-world all draw this one inject.
+3. **The whole body rides on the chest draw alone**, carrier parts **10 and 32** of model
+   `0x80EFA1CA` / `0x80EFA1A9` in `sandbox_037d`. Legs, gauntlets, hood, second robe and class
+   item are blanked. Original robe ~4,100 verts; the custom body is 23,512 / 46,068 tris.
+
+**The three things that took longest to learn**
+
+4. **Bone indices are one global skeleton. 1–28 is a whole body, and one draw poses all of it.**
+   The per-mesh palette never existed. `bone_frames.py` proves it offline in seconds. Never
+   split a welded body across armour slots, and never AABB-fit a limb onto a donor cloud.
+5. **The rig is recoverable from the armour bound to it** — `skeleton.py`, 25 named joints, at
+   the *parent blend* not the bone centroid. The custom mesh is posed onto it and carries its
+   own weights; nearest-donor transfer is gone and should not come back.
+6. **The second vertex buffer is a tangent frame, and getting it wrong looks like liquid chrome
+   long before a wrong albedo does.** Layout in `docs/GEOMETRY.md`; `decode_texcoords.py`
+   re-verifies it against the geometry on demand.
+
+**The two invariants that break silently**
+
+7. **Diff your own patch layers when something breaks.** Anything we write is plain, so reading
+   two layers back and comparing entry by entry needs no launch. `_21`'s shards were found that
+   way in seconds: `positions` SAME but `pos_hdr` DIFFERENT, which is impossible if the pipeline
+   is sane. `check_buffer_headers()` now guards that specific class of bug.
+8. **Write the buffer's package, not the model's.** `package_of(position_buffer)`. Buffer
+   *headers* live in `0698`; position buffers live in `037d`. They are different packages.
 9. **Do not dump rewritten mesh/position/UV tags** in `037c` / `037d` / `0698` / `01e2` /
-   `0699`. Exception: **`0x81531EE8` / `0x81531EE9`**.
+   `0699`. Exception: **`0x81531EE8` / `0x81531EE9`**, and material entries, which we never write.
+
+**Version facts**
+
 10. **Do not merge 0.3.2.** Shadowkeep: `SEntity` `0x80809C0F`, resource `0x80809C36`,
-    `SEntityModel` `0x808073A5`, entity-parent `0x8080744A`. Charm WQ classes are **zero**.
+    `SEntityModel` `0x808073A5`, entity-parent `0x8080744A`, material `0x808071E8`.
+    Charm WQ classes are **zero**.
+11. **Assignment hop is closed.** Item → arrangement index (`build_data.bin`) → hash table
+    `0x81319329` → assignment table `0x81613D23` → parent map `0x80EC3F61` → entity-parent
+    (`0x8080744A`, 24 B, SEntity at `+0x10`) → SEntity → resource → `SEntityModel`. Scan the
+    resource for class `0x808073A5`; the tag is often at `+0x64C` / `+0x65C`.
+    Chest arrangement 2293 / hash `0x4A8A34A0` is Scatterhorn Robe, user-confirmed.
 
 ---
 
@@ -276,7 +312,8 @@ weights — those two flags are how to bisect if `_20` looks wrong.
 
 1. **`0x80B9F855` / `0x80C23B5D` / `0x80FA2308` are NOT the player body.** Tower frames.
 2. **`0x815B868B` / `0x815B8697` (globals_06dc) are not body variants.** 5.04 m world objects.
-3. **Constructor "owner" tags are materials**, class `0x80807140`.
+3. **Constructor "owner" tags are not owners.** They are class `0x80807140`, the 208-byte
+   technique that *references* a material. The material itself is class `0x808071E8`.
 4. **Investment-root slot 4 (`0x81327CF0`) is NOT the assignment table.** Count **1,170**.
 5. **Slot 19 (`0x81327CDE`) is NOT the assignment table.** Count **5,181**.
 6. **`0x80EC2012` is legs/boots**, first cluster in `investment_0361`, not the equipped chest.
@@ -341,45 +378,60 @@ If a render looks like noise, the **stride is wrong**. `ui_037e` is stride 48.
 ## What is proven
 
 - Write pipeline is correct (0.5x position patch dumped back byte-for-byte; `--undo`; 0x800
-  align; per-block SHA-1).
-- Armour geometry decodes and renders offline.
+  align; per-block SHA-1; arbitrary entry resizing).
+- Armour geometry decodes and renders offline, and so does the second vertex buffer.
 - Equipped Scatterhorn lives in **sandbox** `037c` / `037d` / `0698`, not investment lookalikes.
-- Chest-only 23k inject **can** look like a connected custom body (pre-`_18`).
 - **Bone indices are one global skeleton.** Proven offline, three independent ways.
 - **The rig is recovered** — 25 named joints with pivots, `objs/skeleton/rig.json`.
+- **The whole custom character renders correctly in game**, posed and shaded. `_22`.
 
 ---
 
-## What `_19` is
+## What `_22` is, exactly
 
-Destiny closed, from `Sunrise/tools/pkg`, `python inject_scatterhorn.py`:
+Destiny closed, from `Sunrise/tools/pkg`:
 
-- One placed mesh, all 23,512 verts, on **chest mesh 0 of both `0x80EFA1CA` and `0x80EFA1A9`**,
-  packed with the chest's own translation and a scale grown 0.700 → 0.904 so the body fits.
-- Weights from a **single donor cloud spanning chest + legs + gauntlets** (both meshes each),
-  plain nearest neighbour, no AABB fit, clamped to `BODY_BONES` (joints ≤ 28).
-- `strip_crossed` + side labels + `ARM_SWING = 70` + `LEG_Z = 0.98` + `SIDE_EPS = 0.04`,
-  unchanged from `_17`.
+```
+blender --background --python retarget_mesh.py -- 23512 character_body.obj
+python inject_scatterhorn.py
+```
+
+- One placed mesh, all **23,512 verts / 46,068 tris**, on **chest mesh 0 of both `0x80EFA1CA`
+  and `0x80EFA1A9`**, carrier parts **10 and 32**, every other part's index count zeroed.
+- Placed **absolutely in rig space** (`z -0.008..1.765`), not re-centred; scale grown 0.700 →
+  1.013 so the body packs.
+- **Arms posed onto `rig.json`** — upper arms 55°, elbows 19–21°. Torso and legs untouched.
+- **Weights are the GLB's own**, mapped to rig bone indices, clamped to joints ≤ 28.
+- **Tangent frame is the GLB's own** — UV, normal, tangent, handedness — with the model header's
+  texcoord scale/translation set to `0.5 / 0.5`.
 - Legs, gauntlets, hood, second robe, class item **blanked** — the one mesh covers all of them.
-- Patches written and verified: `037c_19` (2 entries), `037d_19` (14), `0698_18` (10).
+- Patches: `037c_22` (2 entries), `037d_22` (14), `0698_21` (10).
 
-The dry run now prints a **per-joint drift audit** — where the custom vertices on a joint sit
-against where the donor vertices on the same joint sit. `_18`'s pillar was thighs 0.6 m from
-their donors, and the old histogram could not show that. Nothing in `_19` exceeds 0.30 m.
+The dry run prints a **per-joint drift audit** — where custom vertices on a joint sit against
+the donor vertices on the same joint. `_18`'s pillar was thighs 0.6 m from their donors and the
+old bone histogram could not show that. Nothing in `_22` exceeds 0.103 m, and every joint in the
+rig carries geometry.
 
-Custom mesh: `Sunrise/tools/pkg/character_chest.obj` (already built).
 Blender: `C:\Program Files\Blender Foundation\Blender 5.1\blender.exe`
-```
-blender --background --python prepare_mesh.py -- 23512 character_chest.obj
-```
+
+Build outputs, all gitignored and all regenerated by that one Blender command:
+`character_body.obj`, `_weights.json`, `_frame.bin`, `_groups.json`.
 
 ---
 
-## The leftover gloves
+## The leftover gloves, and the bald head
 
-The custom hands render correctly, but a glove still draws over them. The gauntlet models we
-blank are `0x80EF981E` / `0x80EF9809`, which came from arrangement 2292 — so something else is
-drawing. Candidates, cheapest first:
+Two cosmetic leftovers, both low-risk and neither geometry.
+
+**The bald race head draws above the gas mask.** Visible in the character screen: a smooth grey
+head sits above the custom mask. `helmet_mode` in `settings.json` is `0` (Helmet Always On) and
+the hood model is blanked, so the head being drawn is the **race/gender head**, not an item — the
+same default mesh the old `probe_heads.py` work could never find in `globals`. It is drawn by the
+character path, not by armour, which is why blanking armour never removed it. Options: find and
+blank that head, or accept it and design the custom head around it.
+
+**A glove still draws over the custom hands.** The gauntlet models we blank are `0x80EF981E` /
+`0x80EF9809`, from arrangement 2292 — so something else is drawing. Candidates, cheapest first:
 
 1. **The gauntlet arrangement carries more than two models.** `lookup_arrangement.py` resolves an
    arrangement hash to a pair; re-check whether 2292 yields further entity models beyond A/B, the
@@ -532,9 +584,21 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ---
 
-## Suggested first message back to the user
+## Where to pick up
 
-`_20` is installed. Launch, go to the Tower, and look at the **arms and hands** — that is what
-this layer changed. Do not re-derive the bone census, re-argue the palette, or re-tune an arm
-swing angle; all three are settled and written down above. If the body looks right, the next
-work is UVs, not geometry.
+**The character works. Do not re-open geometry, skinning or the tangent frame** — no bone
+census, no palette argument, no arm-swing tuning, no weight transfer. All settled above.
+
+The next step is **textures**, and it is blocked on one dump:
+
+1. `python material_probe.py --request` has already written 14 material tags to
+   `C:\Sunrise\bin\x64\Sunrise\dump\request.txt`. Material bodies are encrypted.
+2. Ask the user to launch once and reach the character screen, then quit.
+3. `python material_probe.py` — it lists every tag-range dword in each material body with its
+   class, size and package. That is how the texture slots get identified.
+4. Decode the texture entry format (expect a header entry plus a mip-pyramid data entry), convert
+   the GLB's PNG/JPEG maps into it, rewrite five materials to point at them, and split the mesh
+   into five parts using `character_body_groups.json`.
+
+If the user wants a quick win instead, the leftover glove and the bald race head are both
+cosmetic and independent of the texture work.
