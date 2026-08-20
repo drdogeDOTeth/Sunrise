@@ -12,10 +12,10 @@ Format reference lives in [PACKAGES.md](PACKAGES.md) (the Tiger container) and
 
 ---
 
-> **Status, 2026-08-19:** the write pipeline is proven correct (the game dumped our patched bytes
-> back byte-for-byte). Arrangement index → hash is solved (`0x81319329`). The remaining hop is
-> hash → entity-parent. Tower frames `0x80B9F855` / `0x80C23B5D` / `0x80FA2308` were a false
-> positive, retracted. See `../../HANDOFF.md`.
+> **Status, 2026-08-19:** write pipeline proven. Assignment hop **closed** (`0x81319329` →
+> `0x81613D23` → `0x80EC3F61` → sandbox Scatterhorn). Wrap of the equipped Scatterhorn set is
+> **installed** — see `../../HANDOFF.md`. Tower frames `0x80B9F855` / `0x80C23B5D` / `0x80FA2308`
+> are **not** the player. Do not run `wrap_player_body.py` for the playable Guardian.
 
 ## Rules that have each cost a session
 
@@ -29,14 +29,11 @@ Format reference lives in [PACKAGES.md](PACKAGES.md) (the Tiger container) and
 3. **Tags are additive, never OR.** `tag = 0x80800000 + (package_id << 13) + entry`. OR aliases every
    package at id `0x400` and above — that bug hid **96 packages / 4,126 entity models, 19.4% of the
    install**. `globals_06dc` is `0x815Bxxxx`, not `0x80DBxxxx`.
-4. **Judge in-world results in-world.** The inspect paperdoll and the in-world Guardian are separate
-   render paths. Two sessions of blank probes were judged by "did the inspect tunic change" and so
-   never tested the in-world body at all.
-4b. **Never confirm anything by eyeballing the Guardian.** It renders as a near-invisible dissolve
-   shell in every screenshot, before and after every patch. Confirm by **measurement**: write a
-   change, request that tag, launch, and byte-compare the dump against pristine and expected.
-   Reading *through* an installed patch is normally forbidden; for this one purpose it is the
-   instrument. Prove things on the **weapon**, which renders solidly.
+4. **Judge the playable Guardian on inspect / APPEARANCE only.** The in-world Guardian is a
+   permanent dissolve shell. The inspect paperdoll draws armour solidly — that is the live mesh
+   (Scatterhorn, not a globals body).
+4b. **Never confirm anything by eyeballing the in-world Guardian.** It is a dissolve shell in every
+   screenshot, before and after every patch. A `--match` negative is also not evidence (see 4c).
 4c. **A `--match` negative is not evidence.** It only sees models already dumped. Check the package
    histogram (`live_models.py` with no `--match`) before concluding anything is absent.
 5. **Never write packages while `destiny2.exe` is running** — `WinError 32`.
@@ -72,7 +69,7 @@ entity_models.py -> entity_models.py -> (game dumps) -> parse_models.py -> live_
 | `resolve.py` | Resolves a tag to class, size and package without decrypting. |
 | `inspect_entry.py` | Prints one dumped entry with the understood fields annotated. |
 | `classes.py` | Histograms entry classes across the install. Entry tables are plain, so this needs no keys. |
-| `lookup_arrangement.py` | Arrangement index → model tag. `--census` hunts 4,301-row sizes offline; `--request` dumps the missing 0x38 parents and assignment-map candidates. |
+| `lookup_arrangement.py` | Arrangement index → hash → assignment → entity-parent → model. Hop is **closed**. `--census` / `--request` / `--inspect` / no-args loadout walk. |
 
 ## Writing the container
 
@@ -105,9 +102,22 @@ on `\r` **or** `\n`, so either line ending works.
 | `glb.py` | Reads meshes from a `.glb` with no third-party dependency. |
 | `compare_silhouettes.py` | **New.** Renders OBJs as front/side silhouettes so a wrap can be judged before installing. Filters to face-referenced vertices, and uses one shared scale so a squash cannot hide. |
 | `preview_obj.py` | Contact sheet for identifying an unknown mesh. |
-| `wrap_player_body.py` | **New.** The current injection path — see below. |
-| `wrap_body.py` | Earlier wrap against a guessed investment set. Superseded: it only wraps `meshes[0]`, and it writes buffers to `package_of(model.tag)`, which corrupts an unrelated entry whenever a model references buffers in another package. |
+| `wrap_player_body.py` | Tower-frame wrap. **Not** the playable Guardian. Kept for the old false-positive target. |
+| `wrap_body.py` | Earlier injection: Scatterhorn chest/hood/gauntlets → custom GLB by smoothed displacement. Superseded by topology injection. |
+| `inject_scatterhorn.py` | **Current injection.** Whole custom body at its own topology on the chest draw, one bind frame, weighted across joints 1–28. `--dry-run` prints a per-joint drift audit. |
 | `fit_mask.py`, `shrinkwrap.py`, `reshape.py`, `decimate_mask.py`, `distort.py` | Earlier reshaping experiments, kept for reference. |
+
+## Skinning
+
+Bone indices are **one global skeleton index space** shared by every armour piece — see
+[GEOMETRY.md](GEOMETRY.md). These three tools establish and use that, all offline.
+
+| tool | what it does |
+|---|---|
+| `bone_frames.py` | Compares the centroid of each bone across the pieces that share it. Eight shared indices, eight agreements: the index space is global. Run this before ever believing a palette theory again. |
+| `bone_probe.py` | Dumps the raw 0x20-byte part records with the twenty bytes `parse_models` leaves undecoded, plus the bone set each part's own vertices use. Standalone — importing `parse_models` costs ~90s of package scanning. |
+| `skeleton.py` | Recovers the 25-joint bind skeleton from armour weights, estimating each joint at the parent blend rather than the bone centroid. Writes `objs/skeleton/rig.json` and `rig.obj`. |
+| `census_bones.py` | Per-piece bone sets → `objs/skeleton/palette.json`. Read as *where to take a weight from*, never as what a draw may pose. |
 
 ## Live tracing — the part that ended the guessing
 
@@ -164,6 +174,11 @@ buffers. Cheap, and now used to *confirm* an identification rather than search f
 
 ## Worked example: finding the in-world Guardian body
 
+**Retracted.** The triple `0x80B9F855` + `0x80C23B5D` + `0x80FA2308` is **Tower frames**, not the
+playable Guardian. The playable character is its equipped armour (Scatterhorn in `sandbox_037c` /
+`037d` / `0698`). Keep the write-up below as a record of how the live-trace loop works, not as an
+identification.
+
 The problem: 21,240 entity models, one bit of feedback per launch. Two sessions of blank probes had
 ruled out investment (343), the globals person-sized set (44), and `ui_037e` (21) — all against the
 wrong screen.
@@ -189,20 +204,30 @@ once covers both; `0x80FA2308`'s buffers live in `globals_0238`.
 
 ---
 
-## Injection: `wrap_player_body.py`
+## Injection: `wrap_body.py` (inspect armour)
 
-Rewrites **bytes 0–5 of each vertex and nothing else**. Bytes 6+ carry the `w` component, bone
-indices and weights, so leaving them untouched is what keeps the mesh rigged to Destiny's skeleton.
-Vertex count is unchanged, so the shipped index buffer, part table and UVs all stay valid.
+Current path for the playable Guardian. Rewrites **bytes 0–5 of each vertex and nothing else**.
+Bytes 6+ carry `w`, bone indices and weights. Vertex count is unchanged.
 
-Three things it does that `wrap_body.py` does not:
+It now does the three things that used to live only in `wrap_player_body.py`:
 
-- **Wraps every mesh**, not just `meshes[0]` — mesh 2 alone is 31,480 of the 33,877 vertices.
-- **Resolves the destination package from the buffer tag**, not the model tag. `0x80FA2308`'s entry
-  is in `globals_03d1` but its vertex data is in `globals_0238`; writing to the model's package would
-  corrupt an unrelated entry.
-- **Fits one AABB over the whole model**, never per-mesh. A per-mesh fit would crush the entire
-  character into mesh 3's 27 vertices.
+- **Wraps every mesh**, not just `meshes[0]` — Scatterhorn chest mesh 2 is the hanging panels.
+- **Resolves the destination package from the buffer tag**, not the model tag. Chest mesh 0 is
+  `sandbox_037d`; panels are `sandbox_0698`; gauntlets mesh 0 is `sandbox_037c`.
+- **Fits one AABB over the whole equipped set**, never per-mesh or per-slot. A per-hood fit would
+  crush the custom character into the helmet box.
+
+Laplacian-smooths the displacement (a raw nearest-point snap collapsed 40–50% of triangles on the
+full-body wrap). `--arm-swing` 55° matches the T-posed GLB to Destiny's bind pose.
+
+`wrap_player_body.py` still exists and still targets Tower frames. Do not run it for this.
+
+```powershell
+python wrap_body.py --dry-run
+python wrap_body.py
+# launch, judge inspect / APPEARANCE
+python inject_mesh.py --undo
+```
 
 ### The arm swing
 

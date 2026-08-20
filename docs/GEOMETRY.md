@@ -113,17 +113,29 @@ the investment packages:
 
 ## Finding a helmet without names
 
-The item → model link runs `item → artArrangementIndex → entity assignment → SEntity → resource →
-SEntityModel`. Charm decodes the second hop, but **only for Witch Queen and later**: it logs "API
-is not supported for versions below DESTINY2_WITCHQUEEN_6307", and its assignment-table class
-`0x808055CE` has **zero** entries in this install.
+The item → model link runs `item → artArrangementIndex → hash table → assignment table →
+entity-parent → SEntity → resource → SEntityModel`. Charm decodes the assignment hop **only for
+Witch Queen and later**: it logs "API is not supported for versions below DESTINY2_WITCHQUEEN_6307",
+and its assignment-table class `0x808055CE` has **zero** entries in this install.
+
+Shadowkeep tables (dumped, hop **closed** 2026-08-19):
+
+| tag | class | what |
+|---|---|---|
+| `0x81319329` | `0x80807546` | arrangement index → hash (`index * 4 + 48`) |
+| `0x81613D23` | `0x80805DF5` | hash → two assignment hashes (32-byte record; search by hash) |
+| `0x80EC3F61` | `0x808056EA` | assignment hash → entity-parent (stride 8, 11,519 rows) |
+| `0x8080744A` | | 24-byte parent; SEntity tag at **`+0x10`** (D1 layout) |
+
+Equipped Scatterhorn Robe is arrangement 2293, hash `0x4A8A34A0`, models `0x80EFA1CA` /
+`0x80EFA1A9` in **`sandbox_037d`**, not `investment_0361`. Scan the entity resource for class
+`0x808073A5` — the model tag is often at `+0x64C` / `+0x65C`. Full chain: `HANDOFF.md`.
 
 The first hop is already extracted. Sunrise's `build_data.bin` carries every item's arrangement
-index (`tools/pkg/lookup_item.py`). The investment root that names the second hop is
-`0x81327D22` (class `0x80807D84`, dumped). Tiger tags use an additive bias:
-`0x80800000 + (package_id << 13) + entry`. Thus package id `0x0593` (also stored at header
-offset `0x04`) correctly produces `0x813xxxxx`. Using bitwise OR instead aliases it to a wrong
-`0x80Bxxxxx` handle that the in-game dumper cannot find.
+index (`tools/pkg/lookup_item.py`). The investment root is `0x81327D22` (class `0x80807D84`).
+Tiger tags use an additive bias: `0x80800000 + (package_id << 13) + entry`. Thus package id
+`0x0593` (also stored at header offset `0x04`) correctly produces `0x813xxxxx`. Using bitwise OR
+instead aliases it to a wrong `0x80Bxxxxx` handle that the in-game dumper cannot find.
 
 Observed on the live Warlock loadout:
 
@@ -134,8 +146,8 @@ Observed on the live Warlock loadout:
 | swapped helmet | `0x0B117DAB` | 2290 |
 | ornament plug applied in-game | `0x231DBD19` | 1314 |
 
-`gearArtIndex` is unset (`0xFFFF`) on all of them — appearance is the arrangement index. The
-Witch Queen assignment table is the missing hop, not the item table.
+The Witch Queen assignment table is no longer the missing hop — see the table above. `gearArtIndex`
+is unset (`0xFFFF`) on armour; appearance is the arrangement index.
 
 The 52 "helmet-shaped" models are hard hats: span 0.15–0.55 m at ~1.72 m. Scatterhorn / Winterhart
 are hoods. Six dumped models sit at head height with a larger cowl box (span 0.59–0.74 m) and were
@@ -171,6 +183,51 @@ type: 3 for triangles, 5 for strips. `ELodCategory` 0 is the main geometry; 4, 7
 copies and 1, 2, 3 and 8 are attachments, so exporting every LOD at once buries a low-poly duplicate
 inside the model.
 
+## Bone indices are one global skeleton, not a per-mesh palette
+
+Stride 16 packs four weights then four bone indices, so every armour vertex names its joints.
+The obvious reading — that a draw can only pose the indices its own vertices already use, so
+each armour slot has a private palette — is **wrong**, and believing it cost a whole day of
+splitting a custom body across three slots.
+
+Three offline checks settle it, all in seconds and none needing a game launch:
+
+1. **`bone_frames.py`** — eight indices appear on more than one piece (1, 3, 4, 5 on chest and
+   legs; 15, 17, 19, 20 on chest and gauntlets). Dequantised model space is character space, so
+   their centroids are comparable, and **all eight agree on joint and side**. Bone 3 is the left
+   thigh whether the chest robe or the leg armour names it. A per-piece remap would scramble
+   sides; none does.
+2. **`bone_probe.py`** — parts inside one mesh share indices heavily instead of partitioning
+   them (bone 1 appears in nine separate chest parts), so there is no per-part palette either.
+   The twenty undecoded bytes of the 0x20-byte part record hold no palette selector.
+3. The character-select body `0x80B9F962` poses **51 joints spanning 1..63 from a single mesh**.
+
+What does bound a write is the index *range*. The shipped chest mesh already writes up to 28,
+and joints 1–28 are a complete humanoid — waist, thighs, shins, feet, toes, torso, chest,
+collars, head, shoulders, upper arms, forearms, hands. Everything above 28 is fingers, and 34–71
+are the only indices ever observed to misbehave when written somewhere new.
+
+## The rig, recovered from the armour bound to it
+
+Charm's FK/bind classes are nested inside an entity resource rather than being package entries,
+and Shadowkeep has no hardcoded player base hash, so there is no bind-pose table to read: the
+runtime pawn owns the rig. It does not matter. Every armour vertex carries its joints and its
+bind-pose position, so the skeleton is recoverable from the geometry hanging off it.
+
+`skeleton.py` estimates joints **at the blend, not the centroid**. Vertices dominated by one bone
+sit along the middle of the limb it drives, so their centroid is a mid-shaft point; the vertices
+carrying real weight on both a bone *and its parent* straddle the pivot, and their centroid lands
+on the joint. The difference is about 0.2 m on a limb — the difference between a knee and a shin.
+
+25 joints come out, and the proportions check: thigh 0.43 m, shin 0.40 m, standing height 1.87 m.
+Written to `tools/pkg/objs/skeleton/rig.json` and `rig.obj`, in the same character-space metres
+the injector places a custom mesh in. Bone 5 sits at y −0.120, so it is a right-of-centre torso
+bone rather than a true spine — the one name in the table that is a guess.
+
+The bind pose is an A-pose with the arms **forward**: shoulder `(−0.05, 0.19, 1.42)` to wrist
+`(0.30, 0.39, 1.15)`. A T-posed custom mesh swung about Z alone cannot match it, which is why
+hand joints 21/22 pick up no geometry from a nearest-donor transfer.
+
 ## Confirmed by looking at it
 
 ```powershell
@@ -199,7 +256,9 @@ place, each vertex keeps the bone weights it already had: a vertex weighted to t
 stays weighted to the left forearm whatever geometry is written there. A helmet is forgiving —
 near-rigid, essentially one bone. A body is not, and needs a region-aware resample rather than a
 nearest-point fit. Replacing an armour *set* piece by piece is the tractable route to a full custom
-character, and it sidesteps armour occlusion entirely.
+character, and it sidesteps armour occlusion entirely. **2026-08-19:** that wrap is installed on
+equipped Scatterhorn (chest, hood, gauntlets) via `wrap_body.py`. Judge on inspect. Legs models
+`0x80EFA93B` / `0x80EFA92E` are named but not dumped. See `HANDOFF.md`.
 
 ## What the inspect screen actually draws
 

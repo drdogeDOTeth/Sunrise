@@ -22,3 +22,15 @@ __pycache__/
 tools/pkg/gametest_receipt.json
 tools/pkg/cache_backup/
 reference/
+
+# Which patch files are installed on this machine, and where. Machine-local by nature.
+tools/pkg/inject_receipt.json
+
+# Extracted art and disassembly. Upstream commits no game data, and all of this is
+# regenerable: objs/ from skeleton.py and extract_mesh.py, requests from make_request.py.
+tools/pkg/objs/
+tools/pkg/_runtime_disasm/
+tools/pkg/*.glb
+tools/pkg/*.obj
+tools/pkg/*.bin
+tools/pkg/request_*.txt
