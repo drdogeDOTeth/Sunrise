@@ -91,6 +91,14 @@ BLANK = [
     0x80EFA93B, 0x80EFA92E,  # legs — and legs
 ]
 RIGID_BONE = 1
+# Model header fields the texcoord buffer is dequantised through, beside scale/translation.
+MODEL_TEXCOORD_SCALE = 0x70
+MODEL_TEXCOORD_TRANSLATION = 0x78
+# We rewrite the header, so we pick the texcoord frame too. 0.5/0.5 maps the full int16 range
+# onto exactly 0..1, which is where a UV lives, and costs nothing to decode.
+UV_SCALE = 0.5
+UV_TRANSLATION = 0.5
+TEXCOORD_STRIDE = 24
 # Destiny Z-up, metres, after the custom mesh is centred on the robe translation.
 LEG_Z = 0.98
 SMOOTH_ITERS = 4
@@ -263,6 +271,59 @@ def load_authored(mesh_path: Path) -> list[bytes] | None:
     print(f"  authored weights: {len(out):,} vertices, retargeted={data.get('retargeted')}"
           + (f", dropped {dropped} influences above bone {BODY_BONE_CEILING}" if dropped else ""))
     return out
+
+
+def load_frame(mesh_path: Path) -> np.ndarray | None:
+    """@return `(vertices, 9)` of u, v, normal xyz, tangent xyz, handedness, or None."""
+    path = mesh_path.with_name(mesh_path.stem + "_frame.bin")
+    if not path.is_file():
+        return None
+    frame = np.fromfile(path, dtype=np.float32).reshape(-1, 9).astype(np.float64)
+    print(f"  tangent frame: {len(frame):,} vertices, u {frame[:, 0].min():.3f}.."
+          f"{frame[:, 0].max():.3f}  v {frame[:, 1].min():.3f}..{frame[:, 1].max():.3f}")
+    return frame
+
+
+def original_uv2(uv_body: bytes, model: Model) -> tuple[float, float]:
+    """@return The mean secondary texcoord of the shipped buffer, in real UV units.
+
+    UV2 is all but constant across Scatterhorn - 0.773..0.795 - so whatever it selects, it
+    selects one thing. Carrying that value across rather than inventing one keeps the second
+    channel doing what it already did, under our own texcoord scale.
+    """
+    words = np.frombuffer(uv_body, dtype=np.int16).reshape(-1, TEXCOORD_STRIDE // 2)
+    scale = struct.unpack_from("<2f", model.data, MODEL_TEXCOORD_SCALE)
+    translation = struct.unpack_from("<2f", model.data, MODEL_TEXCOORD_TRANSLATION)
+    return (float(words[:, 10].mean()) / PACKED_MAX * scale[0] + translation[0],
+            float(words[:, 11].mean()) / PACKED_MAX * scale[1] + translation[1])
+
+
+def pack_texcoords(frame: np.ndarray, uv2: tuple[float, float]) -> bytes:
+    """@return A stride-24 second vertex buffer: the layout `decode_texcoords.py` verified.
+
+        0x00 u, 0x02 v          value/32767 * UV_SCALE + UV_TRANSLATION
+        0x04 nx ny nz, 0x0A 0   unit normal, /32767, then a zero
+        0x0C tx ty tz, 0x12 w   unit tangent, /32767, then +/-32767 handedness
+        0x14 u2, 0x16 v2        secondary texcoord
+    """
+    def quantise_uv(values, translation):
+        return np.clip(np.round((values - translation) / UV_SCALE * PACKED_MAX),
+                       -32767, 32767).astype(np.int16)
+
+    def quantise_unit(values):
+        return np.clip(np.round(values * PACKED_MAX), -32767, 32767).astype(np.int16)
+
+    count = len(frame)
+    words = np.zeros((count, TEXCOORD_STRIDE // 2), dtype=np.int16)
+    words[:, 0] = quantise_uv(frame[:, 0], UV_TRANSLATION)
+    words[:, 1] = quantise_uv(frame[:, 1], UV_TRANSLATION)
+    words[:, 2:5] = quantise_unit(frame[:, 2:5])
+    words[:, 5] = 0
+    words[:, 6:9] = quantise_unit(frame[:, 5:8])
+    words[:, 9] = np.where(frame[:, 8] >= 0.0, 32767, -32767).astype(np.int16)
+    words[:, 10] = quantise_uv(np.full(count, uv2[0]), UV_TRANSLATION)
+    words[:, 11] = quantise_uv(np.full(count, uv2[1]), UV_TRANSLATION)
+    return words.tobytes()
 
 
 def pack_authored(points: np.ndarray, stride: int, scale: float, translation,
@@ -564,11 +625,15 @@ def carrier_slots(mesh) -> list[int]:
 
 
 def rewrite_chest(model: Model, index_count: int, scale: float,
-                  translation: np.ndarray) -> tuple[bytes, list[int]]:
+                  translation: np.ndarray, own_texcoords: bool = False) -> tuple[bytes, list[int]]:
     out = bytearray(model.data)
     struct.pack_into("<4f", out, MODEL_SCALE, scale, scale, scale, 0.0)
     struct.pack_into("<4f", out, MODEL_TRANSLATION,
                      float(translation[0]), float(translation[1]), float(translation[2]), scale)
+    if own_texcoords:
+        # The texcoord frame is ours to choose once we write our own second vertex buffer.
+        struct.pack_into("<2f", out, MODEL_TEXCOORD_SCALE, UV_SCALE, UV_SCALE)
+        struct.pack_into("<2f", out, MODEL_TEXCOORD_TRANSLATION, UV_TRANSLATION, UV_TRANSLATION)
     chosen: list[int] = []
     for number, mesh in enumerate(model.meshes):
         slots = set(carrier_slots(mesh)) if number == 0 else set()
@@ -642,7 +707,8 @@ def clone_uvs(mesh, vert_count: int, fallback_header: bytes,
 def inject_mesh0(by_package: dict[Path, dict[int, bytes]], tag: int,
                  placed: np.ndarray, faces: np.ndarray, positions: bytes,
                  scale: float, translation: np.ndarray,
-                 uv_header_fb: bytes, uv_body_fb: bytes) -> None:
+                 uv_header_fb: bytes, uv_body_fb: bytes,
+                 frame: np.ndarray | None = None) -> None:
     model = load_model(tag)
     mesh = model.meshes[0]
     stride = vertex_stride(mesh.positions)
@@ -658,8 +724,20 @@ def inject_mesh0(by_package: dict[Path, dict[int, bytes]], tag: int,
         raise SystemExit(f"0x{tag:08X}: position/index headers not dumped")
     old_count = len(original) // stride
     indices = pack_indices(faces)
-    uv_header, uvs, uv_note = clone_uvs(mesh, len(placed), uv_header_fb, uv_body_fb)
-    model_blob, chosen = rewrite_chest(model, faces.size, scale, translation)
+    own_texcoords = frame is not None and len(frame) == len(placed)
+    if own_texcoords:
+        native = dumped(mesh.texcoord_buffer) or uv_body_fb
+        uvs = pack_texcoords(frame, original_uv2(native, model))
+        header = dumped(mesh.texcoords) or uv_header_fb
+        uv_header = rewrite_header(header, len(uvs), 0, "<I")
+        uv_note = f"authored UVs + tangent frame, stride {TEXCOORD_STRIDE}"
+    else:
+        if frame is not None:
+            raise SystemExit(
+                f"tangent frame has {len(frame):,} vertices for {len(placed):,} in the mesh - "
+                "rebuild both with retarget_mesh.py")
+        uv_header, uvs, uv_note = clone_uvs(mesh, len(placed), uv_header_fb, uv_body_fb)
+    model_blob, chosen = rewrite_chest(model, faces.size, scale, translation, own_texcoords)
     print(f"\n0x{tag:08X}: original {old_count:,} verts, stride {stride}  "
           f"-> {len(placed):,} verts / {len(faces):,} tris, scale {scale:.3f}")
     print(f"  positions {len(original):,} -> {len(positions):,} B")
@@ -679,7 +757,8 @@ def inject_slot(by_package: dict[Path, dict[int, bytes]], tag: int, kind: str,
                 world_points: np.ndarray, world_faces: np.ndarray,
                 pools: dict[str, tuple[np.ndarray, list[bytes]]],
                 uv_header_fb: bytes, uv_body_fb: bytes, rigid: bool,
-                authored: list[bytes] | None = None) -> None:
+                authored: list[bytes] | None = None,
+                frame: np.ndarray | None = None) -> None:
     model = load_model(tag)
     mesh = model.meshes[0]
     stride = vertex_stride(mesh.positions)
@@ -699,7 +778,7 @@ def inject_slot(by_package: dict[Path, dict[int, bytes]], tag: int, kind: str,
         positions = pack_banded(world_points, stride, scale, translation,
                                 pools, world_faces, kind)
     inject_mesh0(by_package, tag, world_points, world_faces, positions,
-                 scale, translation, uv_header_fb, uv_body_fb)
+                 scale, translation, uv_header_fb, uv_body_fb, frame)
 
 
 def main() -> None:
@@ -713,6 +792,7 @@ def main() -> None:
         )
     points, faces = read_obj(source)
     authored = None if "--no-authored" in sys.argv else load_authored(source)
+    frame = None if "--no-uvs" in sys.argv else load_frame(source)
     if authored is None:
         # Legacy path: an unposed T-pose mesh with no weights of its own, swung by hand and
         # skinned off the nearest donor. Kept only so an old mesh still builds.
@@ -758,7 +838,7 @@ def main() -> None:
         print(f"\n  body donors {['0x%08X' % t for t in donor_tags]}:")
         pools = {"body": load_donors(donor_tags, meshes=(0, 1), allowed=BODY_BONES)}
         inject_slot(by_package, tag, "body", placed, faces, pools,
-                    uv_header_fb, uv_body_fb, rigid, authored)
+                    uv_header_fb, uv_body_fb, rigid, authored, frame)
 
     for tag in BLANK:
         model = load_model(tag)

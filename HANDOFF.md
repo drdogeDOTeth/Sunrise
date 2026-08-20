@@ -31,9 +31,9 @@ Newest files win:
 
 | package | live | previous |
 |---|---|---|
-| `w64_sandbox_037c` | **`_20`** | `_19` |
-| `w64_sandbox_037d` | **`_20`** | `_19` |
-| `w64_sandbox_0698` | **`_19`** | `_18` |
+| `w64_sandbox_037c` | **`_21`** | `_20` (good body, chrome shading) |
+| `w64_sandbox_037d` | **`_21`** | `_20` |
+| `w64_sandbox_0698` | **`_20`** | `_19` |
 | `w64_sandbox_01e2` | `_6` | inert — legs are blanked |
 | `w64_sandbox_0699` | `_6` | inert — gauntlets are blanked |
 
@@ -384,25 +384,42 @@ drawing. Candidates, cheapest first:
 
 This is cosmetic and low-risk. Do not fix it in the same layer as a UV change.
 
-## Next: UVs and textures
+## `_21` — the stride-24 buffer is decoded, and we now write it
 
-Geometry and skinning are done. The body still **wears Scatterhorn's chrome** because
-`clone_uvs` only *resizes* the original stride-24 texcoord buffer to the new vertex count — it
-tiles garbage UVs rather than writing the mesh's own. That is the whole reason everything looks
-like polished metal.
+The "chrome" was never a texture problem. `clone_uvs` only *resized* the shipped second vertex
+buffer, so every **normal and tangent** in it was interpolated nonsense, and a broken tangent
+frame reads as reflective noise long before a wrong albedo does.
 
-What that needs, in order:
+The layout is in [docs/GEOMETRY.md](docs/GEOMETRY.md) and `decode_texcoords.py` re-verifies it on
+demand: UV pair, unit normal, zero pad, unit tangent, `+/-32767` handedness, secondary UV.
 
-1. **Export the GLB's UVs** alongside positions and weights in `retarget_mesh.py`. The loop is
-   already there; the mesh has a UV layer per object and they survive the join and the decimate.
-2. **Work out the stride-24 texcoord layout.** 24 bytes per vertex holds more than a UV pair —
-   normals and tangents live there too, and writing a UV without the normal will flat-shade or
-   invert the lighting. Dump `0x80EFA1C8`-family texcoord buffers and decode before writing.
-   `GEOMETRY.md` has the position layout; this one is not decoded yet.
-3. **Then textures.** Materials are class `0x80807140` (208 B, references `0x808071E8` +
-   `0x808071DC`) — that is the material/technique resource identified back when the "owner tags"
-   were retracted. A texture swap is a separate, easier problem than geometry and the writer
-   already handles arbitrary entry resizing.
+`_21` writes a real one. `retarget_mesh.py` exports `character_body_frame.bin` (9 float32 per
+vertex: u, v, normal xyz, tangent xyz, handedness) and `inject_scatterhorn.py` packs it, setting
+`texcoord_scale` / `texcoord_translation` to `0.5 / 0.5` so the int16 range covers exactly `0..1`.
+
+The buffer we write passes every check the shipped one does — unit lengths at std 0.00001, pad
+`{0}`, sign `{±32767}`, normal ⟂ tangent at mean `|dot|` 0.0000, UV round-trip error 8e-6 — and
+carries the original's near-constant `uv2` (0.782) across unchanged.
+
+**Expectation for `_21`:** the lighting should stop being liquid metal and start reading as a
+shaded character. The **albedo is still Scatterhorn's**, now sampled through the custom model's
+own UV layout, so it will look like robe texture laid over the body — different, not yet right.
+
+Two known limits, neither worth acting on before the Tower verdict:
+
+- **UV seams are welded shut.** 7,785 of 138,204 face corners disagreed with their vertex's UV.
+  Destiny stores one UV per vertex, so welding to 23,512 forces a pick. The fix, if seam smear
+  shows: inject the GLB **unwelded** at 61,908 vertices, which still fits under the 65,535 index
+  ceiling.
+- **The v-flip is the one unverified bit.** Blender's UV origin is bottom-left and Destiny is
+  assumed top-left, so `retarget_mesh.py` writes `1 - v`. Geometry cannot confirm this. If the
+  texture lands upside down, that line is why.
+
+## Then: textures
+
+Materials are class `0x80807140` (208 B, references `0x808071E8` + `0x808071DC`) — identified
+back when the "owner tags" were retracted. Swapping the texture an armour part samples is a
+separate and easier problem than geometry, and the writer already resizes entries freely.
 
 Mesh 1 (stride 12; chest bone 20, legs 25/26) is a separate packer. `rewrite_chest` zeros
 non-mesh-0 parts. Do not un-zero original extras.

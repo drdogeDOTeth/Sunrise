@@ -117,7 +117,7 @@ def meshes_of(data: bytes) -> list[dict]:
         at = start + index * MESH_STRIDE
         if at + MESH_STRIDE > len(data):
             break
-        positions, _texcoords, _weights = struct.unpack_from("<3I", data, at)
+        positions, texcoords, _weights = struct.unpack_from("<3I", data, at)
         (indices,) = struct.unpack_from("<I", data, at + 0x10)
         part_count, parts_at = array_at(data, at + PART_ARRAY)
         parts = []
@@ -128,7 +128,8 @@ def meshes_of(data: bytes) -> list[dict]:
             (primitive,) = struct.unpack_from("<h", data, part + 0x06)
             offset, indices_count = struct.unpack_from("<II", data, part + 0x08)
             parts.append((part, primitive, offset, indices_count, data[part + 0x1B]))
-        out.append({"positions": positions, "indices": indices, "parts": parts})
+        out.append({"positions": positions, "texcoords": texcoords, "indices": indices,
+                    "parts": parts, "record_at": at})
     return out
 
 

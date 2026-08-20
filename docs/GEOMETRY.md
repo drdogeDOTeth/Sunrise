@@ -178,6 +178,36 @@ So **skinning is inline in the position stride**, not in a paired buffer. The le
 tag is absent on 686 of 724 meshes here, which is why testing for a stride-8 weight buffer beside a
 stride-16 position buffer finds almost nothing — that pairing is the exception, not armour's shape.
 
+## The second vertex buffer: UVs, normals and tangents
+
+Stride 24, decoded 2026-08-20 by `decode_texcoords.py`:
+
+| offset | field | meaning |
+|---|---|---|
+| `0x00` | int16 u, v | primary texcoord, `value / 32767 * texcoord_scale + texcoord_translation` |
+| `0x04` | int16 nx, ny, nz | normal, unit length, `/32767` |
+| `0x0A` | int16 | always zero |
+| `0x0C` | int16 tx, ty, tz | tangent, unit length, `/32767` |
+| `0x12` | int16 | handedness, exactly `+/-32767` |
+| `0x14` | int16 u2, v2 | secondary texcoord — near-constant across a piece |
+
+`texcoord_scale` and `texcoord_translation` are the model header's, at `0x70` and `0x78`.
+
+**The decode validates itself against geometry**, which is what makes it trustworthy without a
+launch. Face normals are computable from the position and index buffers, both already decoded,
+so a candidate normal field is right exactly when it correlates with the normals the triangles
+have. Across the 4,100 vertices of the Scatterhorn chest: both int16 triples are unit length to
+five decimals on *every* vertex, `0x0A` has one distinct value, `0x12` has two, normal and
+tangent are perpendicular (mean `|dot|` 0.0125), and the normal agrees with the triangles at
+mean `|cos|` 0.742. Nothing but a tangent frame looks like that.
+
+This is why an injected mesh looked like liquid chrome. `clone_uvs` only *resized* the shipped
+buffer to the new vertex count, so every normal and tangent in it was interpolated nonsense —
+and a broken tangent frame reads as reflective noise long before a wrong albedo does.
+
+Since the injector rewrites the model header anyway, it sets `texcoord_scale` and
+`texcoord_translation` to `0.5 / 0.5`, which maps the full int16 range onto exactly `0..1`.
+
 Indices are 16-bit on every helmet candidate. A part declares its own index range and primitive
 type: 3 for triangles, 5 for strips. `ELodCategory` 0 is the main geometry; 4, 7 and 9 are cheaper
 copies and 1, 2, 3 and 8 are attachments, so exporting every LOD at once buries a low-poly duplicate

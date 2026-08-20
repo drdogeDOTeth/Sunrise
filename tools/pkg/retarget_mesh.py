@@ -96,6 +96,75 @@ def align(armature, name, direction_world):
     return current, direction_world.normalized()
 
 
+def corner_normal(mesh, loop, index):
+    """Blender moved split normals off MeshLoop; take whichever this build offers."""
+    corners = getattr(mesh, "corner_normals", None)
+    if corners is not None and len(corners):
+        return Vector(corners[index].vector)
+    return Vector(loop.normal)
+
+
+def write_frame(obj, mesh, matrix, path):
+    """Write the tangent frame Destiny's second vertex buffer wants, one row per vertex.
+
+    Nine float32 per vertex: u, v, normal xyz, tangent xyz, handedness. In Destiny axes, and
+    packed into the stride-24 layout by `inject_scatterhorn.py`, which owns the quantisation
+    because the scale and translation live in the model header it rewrites.
+
+    UV and tangent frame are **per face corner** in Blender and **per vertex** in Destiny, so a
+    vertex sitting on a UV seam has to pick one of its corners. That is a real limit of welding
+    the mesh down to 23,512: the GLB's 61,908 unwelded vertices would fit under the 65,535 index
+    ceiling and give exact seams, which is the upgrade if seam smear ever shows.
+    """
+    import array
+
+    uv_layer = mesh.uv_layers.active
+    if uv_layer is None:
+        print("WARNING no UV layer on the joined mesh; skipping the tangent frame")
+        return
+    try:
+        mesh.calc_tangents(uvmap=uv_layer.name)
+    except Exception as error:  # noqa: BLE001 - Blender raises bare RuntimeError here
+        print(f"WARNING calc_tangents failed ({error}); skipping the tangent frame")
+        return
+
+    rotation = matrix.to_3x3()
+    rows = [None] * len(mesh.vertices)
+    seams = 0
+    for loop in mesh.loops:
+        vertex = loop.vertex_index
+        uv = uv_layer.data[loop.index].uv
+        if rows[vertex] is not None:
+            if (abs(rows[vertex][0] - uv[0]) > 1e-4
+                    or abs(rows[vertex][1] - (1.0 - uv[1])) > 1e-4):
+                seams += 1
+            continue
+        normal = to_destiny((rotation @ corner_normal(mesh, loop, loop.index)).normalized())
+        tangent = to_destiny((rotation @ Vector(loop.tangent)).normalized())
+        # Blender's UV origin is bottom left; Destiny's texcoords run top down like every other
+        # DirectX-era engine, so v is flipped. This is the one part of the layout that geometry
+        # cannot confirm - if the texture lands upside down, this line is why.
+        rows[vertex] = (uv[0], 1.0 - uv[1],
+                        normal.x, normal.y, normal.z,
+                        tangent.x, tangent.y, tangent.z,
+                        float(loop.bitangent_sign))
+
+    missing = sum(1 for row in rows if row is None)
+    for index, row in enumerate(rows):
+        if row is None:
+            rows[index] = (0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0)
+
+    flat = array.array("f", [value for row in rows for value in row])
+    with open(path, "wb") as fh:
+        flat.tofile(fh)
+    print(f"wrote {path}: {len(rows):,} vertices x 9 float32 "
+          f"(u v nx ny nz tx ty tz sign)")
+    if seams:
+        print(f"  {seams:,} face corners disagreed with their vertex's UV (seams welded shut)")
+    if missing:
+        print(f"  WARNING {missing:,} vertices had no face corner; parked at uv 0,0")
+
+
 def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.gltf(filepath=GLB)
@@ -216,6 +285,8 @@ def main():
             if len(poly.vertices) == 3:
                 a, b, c = poly.vertices
                 fh.write(f"f {a + 1} {b + 1} {c + 1}\n")
+
+    write_frame(joined, mesh, matrix, os.path.splitext(OUT)[0] + "_frame.bin")
 
     weights_path = os.path.splitext(OUT)[0] + "_weights.json"
     with open(weights_path, "w") as fh:
