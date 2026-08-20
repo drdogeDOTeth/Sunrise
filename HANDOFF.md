@@ -5,6 +5,10 @@
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything."
 
+**`_22` confirmed too** — with the real tangent frame the body stops being liquid chrome and
+reads as a properly shaded character: defined gloves, sneakers, ribbed fabric, correct lighting
+in character select, character screen, the Tower and the EDZ. Albedo is still Scatterhorn's.
+
 The custom character renders correctly on the playable Guardian in **all three views** — Tower,
 character screen, and in-world on Mercury — with **no stretching**, correct proportions, and
 articulated hands, arms and legs. **The geometry and skinning problem is solved.** Do not
@@ -438,11 +442,50 @@ Two known limits, neither worth acting on before the Tower verdict:
   assumed top-left, so `retarget_mesh.py` writes `1 - v`. Geometry cannot confirm this. If the
   texture lands upside down, that line is why.
 
-## Then: textures
+## Then: textures — the shape of the problem
 
-Materials are class `0x80807140` (208 B, references `0x808071E8` + `0x808071DC`) — identified
-back when the "owner tags" were retracted. Swapping the texture an armour part samples is a
-separate and easier problem than geometry, and the writer already resizes entries freely.
+**Correction:** materials are class **`0x808071E8`**, 1,032–1,616 B. `0x80807140` (208 B) is the
+*technique/owner* that references them; the earlier note had the two the wrong way round.
+
+`material_probe.py` reads a part's first four bytes as its material tag, offline. The chest model
+has **14 distinct materials over 58 parts**, and the two carrier parts we write draw through:
+
+| carrier part | material | size | package |
+|---|---|---:|---|
+| 10 | `0x80EF98DB` | 1,616 B | `sandbox_037c` |
+| 32 | `0x80EF8C3C` | 1,184 B | `sandbox_037c` |
+
+**The structural problem: the custom model has five materials, each with its own UV atlas.**
+
+| group | source mesh | triangles | maps |
+|---|---|---:|---|
+| GLSLShader85 | BlackTankTop | 24,786 | base colour, normal, roughness |
+| GLSLShader13 | SkinTats (the body, incl. arms) | 14,222 | base colour, normal, roughness |
+| GLSLShader66 | GasMask | 3,858 | base colour, normal, roughness |
+| GLSLShader22 | Twirl | 2,012 | base colour, normal |
+| GLSLShader60 | Silver_Necklace | 1,190 | base colour, normal, roughness |
+
+A Destiny material samples **one** texture set, so two carrier parts can only ever wear two of
+those five. `retarget_mesh.py` now writes `character_body_groups.json` — the source material of
+every triangle, in the OBJ's face order — so the injector can sort faces into **five contiguous
+per-material index ranges** and give each its own part. The model has 58 parts to spend; we use 2.
+
+**Reuse existing material entries, do not invent new ones.** Pick five of the 14, rewrite each to
+point at textures we upload, and each carrier part keeps a material tag the game already trusts.
+
+### Next action: one game launch
+
+`python material_probe.py --request` has already written 14 material tags to
+`C:\Sunrise\bin\x64\Sunrise\dump\request.txt`. Material bodies are encrypted, so they need one
+launch to dump. Safe to dump — we never rewrite material entries, only the buffers beside them.
+
+Launch, reach the character screen, quit, then `python material_probe.py` again: it lists every
+tag-range dword in each material body with its class, size and package, which is how the texture
+slots get identified.
+
+After that: decode the texture entry format (expect a small header entry plus a mip-pyramid data
+entry — the "2 entries each, sizes halving" pattern seen in gear packages), convert the GLB's
+PNG/JPEG maps into it, and write them. The writer already resizes entries freely.
 
 Mesh 1 (stride 12; chest bone 20, legs 25/26) is a separate packer. `rewrite_chest` zeros
 non-mesh-0 parts. Do not un-zero original extras.
@@ -453,7 +496,9 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 | tool | what |
 |---|---|
-| `retarget_mesh.py` | **Current mesh build.** Blender: drops unrigged objects, poses the arms onto `rig.json`, welds/decimates, exports OBJ + real per-vertex weights on rig bone indices. |
+| `retarget_mesh.py` | **Current mesh build.** Blender: drops unrigged objects, poses the arms onto `rig.json`, welds/decimates, exports OBJ + per-vertex weights on rig bone indices + `_frame.bin` (tangent frame) + `_groups.json` (source material per triangle). |
+| `material_probe.py` | Reads each part's material tag offline, and writes the dump request for the material bodies. |
+| `decode_texcoords.py` | Decodes and re-verifies the stride-24 second vertex buffer against the geometry. |
 | `prepare_mesh.py` | Superseded. Joins every object including the unrigged icosphere, and throws the armature away. |
 | `inject_scatterhorn.py` | **Current injector.** Whole body, chest draw, joints 1–28, authored weights when a `_weights.json` sits beside the mesh. |
 | `bone_frames.py` | Proves the index space is global. Offline, seconds. |

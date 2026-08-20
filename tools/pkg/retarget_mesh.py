@@ -165,6 +165,37 @@ def write_frame(obj, mesh, matrix, path):
         print(f"  WARNING {missing:,} vertices had no face corner; parked at uv 0,0")
 
 
+def write_groups(obj, mesh, path):
+    """Record which source material each triangle belongs to.
+
+    The custom model has **five materials, each with its own UV atlas** - tank top, gas mask,
+    necklace, skin, and the twirl - and a Destiny material samples one texture set. So the body
+    cannot wear its own textures through the two carrier parts the injector currently writes: it
+    needs one part per source material, each pointing at a material we control.
+
+    Triangle order here is `mesh.polygons` order, which is exactly the OBJ's face order, so the
+    injector can sort faces into contiguous per-material index ranges without re-deriving
+    anything. Written even when the texture work is not done yet, because it costs nothing and
+    the alternative is rebuilding the mesh later just to learn this.
+    """
+    slots = [material.name if material else "<none>" for material in obj.data.materials]
+    faces = [poly.material_index for poly in mesh.polygons if len(poly.vertices) == 3]
+    counts = {}
+    for index in faces:
+        counts[index] = counts.get(index, 0) + 1
+    with open(path, "w") as fh:
+        json.dump({
+            "note": ("Per-triangle source material, in the OBJ's face order. One Destiny part "
+                     "per group is what lets each group keep its own texture set."),
+            "slots": slots,
+            "triangles": len(faces),
+            "face_material": faces,
+        }, fh)
+    print(f"wrote {path}: {len(slots)} material groups over {len(faces):,} triangles")
+    for index, name in enumerate(slots):
+        print(f"  [{index}] {name:<20} {counts.get(index, 0):>7,} tris")
+
+
 def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.gltf(filepath=GLB)
@@ -287,6 +318,7 @@ def main():
                 fh.write(f"f {a + 1} {b + 1} {c + 1}\n")
 
     write_frame(joined, mesh, matrix, os.path.splitext(OUT)[0] + "_frame.bin")
+    write_groups(joined, mesh, os.path.splitext(OUT)[0] + "_groups.json")
 
     weights_path = os.path.splitext(OUT)[0] + "_weights.json"
     with open(weights_path, "w") as fh:
