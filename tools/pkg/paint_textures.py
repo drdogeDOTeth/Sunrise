@@ -50,6 +50,13 @@ LEGEND = Path(__file__).with_name("texture_legend.json")
 # 2048x2048 BC7 with mips to 128, and the same at half. Both are exact across the install.
 TEXTURE_SIZES = (5_586_944, 2_793_472)
 FAMILIES = ("037c", "037d", "0698", "0699")
+# The packages the character-select live-handle histogram named, none of them ever painted. The
+# gear packages hold only 257 textures between them and the body ignored all of them, while the
+# dye textures the body *does* sample live in 01db / 01b5 - so Destiny keeps gear textures in
+# shared texture packages and merely names them from the gear. The albedo is very likely here.
+HOT_FAMILIES = ("globals_0238", "globals_03ed", "globals_03f5", "investment_0361",
+                "investment_01d3", "sandbox_0378", "sandbox_0379", "sandbox_037a",
+                "sandbox_037b")
 BC7_BLOCK_BYTES = 16
 # The entry start-block field is 14 bits, so a package cannot hold more than this many blocks.
 BLOCK_CEILING = 0x3FFF
@@ -171,6 +178,7 @@ def textures() -> list[tuple[int, int, str]]:
     entry - the one found here - is the right one to paint.
     """
     out, opened = [], {}
+    families = HOT_FAMILIES if "--hot" in sys.argv else FAMILIES
 
     def package(path: Path) -> Package:
         if path not in opened:
@@ -181,7 +189,7 @@ def textures() -> list[tuple[int, int, str]]:
     # body is in 037d with its header in 037c, and 0x80EFB8FC's header lives in 03c1 entirely
     # outside this set. Only the body's location decides whether we want to paint it.
     for package_id, path in sorted(INDEX.items()):
-        if not any(family in path.stem for family in FAMILIES):
+        if not any(family in path.stem for family in families):
             continue
         pkg = package(path)
         for index, body in enumerate(pkg.entries):
@@ -242,10 +250,11 @@ def narrow(found: list[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
 
 
 def known_textures() -> set[int]:
-    """@return The 55 bodies whose size is exactly a 2048 or 1024x2048 BC7 mip chain."""
+    """@return Bodies whose size is exactly a 2048 or 1024x2048 BC7 mip chain - certainly textures."""
     out = set()
+    families = HOT_FAMILIES if "--hot" in sys.argv else FAMILIES
     for package_id, path in sorted(INDEX.items()):
-        if not any(family in path.stem for family in FAMILIES):
+        if not any(family in path.stem for family in families):
             continue
         for index, entry in enumerate(Package(path).entries):
             if entry.size in TEXTURE_SIZES:
