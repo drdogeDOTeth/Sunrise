@@ -53,6 +53,13 @@ FAMILIES = ("037c", "037d", "0698", "0699")
 BC7_BLOCK_BYTES = 16
 # The entry start-block field is 14 bits, so a package cannot hold more than this many blocks.
 BLOCK_CEILING = 0x3FFF
+# `entry_type` from the plain entry table, so this costs no launch and no key. All 55 textures
+# found by exact mip-chain size are `(40, 1)` with a `(32, 1)` header, without exception.
+# **Geometry buffers are type 41** and pair a header with a body exactly as a texture does, so
+# pairing alone cannot tell them apart - painting 356 of them with flat BC7 made the GPU read
+# colour as vertex data and cost a device loss ("error code broccoli") at character select.
+TEXTURE_BODY_TYPE = 40
+TEXTURE_HEADER_TYPE = 32
 
 
 def bc7_mode6_flat(red: int, green: int, blue: int) -> bytes:
@@ -163,23 +170,32 @@ def textures() -> list[tuple[int, int, str]]:
     with the header holds the rest. Character select samples the remaining mips, so the paired
     entry - the one found here - is the right one to paint.
     """
-    out = []
+    out, opened = [], {}
+
+    def package(path: Path) -> Package:
+        if path not in opened:
+            opened[path] = Package(path)
+        return opened[path]
+
+    # Walk **bodies**, not headers. A pair may straddle packages in either direction: 0x80EFADA6's
+    # body is in 037d with its header in 037c, and 0x80EFB8FC's header lives in 03c1 entirely
+    # outside this set. Only the body's location decides whether we want to paint it.
     for package_id, path in sorted(INDEX.items()):
         if not any(family in path.stem for family in FAMILIES):
             continue
-        pkg = Package(path)
-        by_index = dict(enumerate(pkg.entries))
-        for index, entry in by_index.items():
-            if entry.size != 40:
+        pkg = package(path)
+        for index, body in enumerate(pkg.entries):
+            if body.entry_type != TEXTURE_BODY_TYPE or body.size < BC7_BLOCK_BYTES:
                 continue
-            partner = by_index.get((entry.reference - TAG_BASE) & 0x1FFF) \
-                if (entry.reference - TAG_BASE) >> TAG_ENTRY_BITS == package_id else None
-            tag = TAG_BASE + (package_id << TAG_ENTRY_BITS) + index
-            if partner is None or partner.reference != tag or partner.size < BC7_BLOCK_BYTES:
+            body_tag = TAG_BASE + (package_id << TAG_ENTRY_BITS) + index
+            header = entry_of(body.reference)
+            if header is None or header.size != 40 or header.entry_type != TEXTURE_HEADER_TYPE:
                 continue
-            if ours(pkg, partner) and not already_painted(pkg, partner):
+            if header.reference != body_tag:
                 continue
-            out.append((entry.reference, partner.size, path.stem))
+            if ours(pkg, body) and not already_painted(pkg, body):
+                continue
+            out.append((body_tag, body.size, path.stem))
     return sorted(out)
 
 
@@ -225,8 +241,30 @@ def narrow(found: list[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
     return found
 
 
+def known_textures() -> set[int]:
+    """@return The 55 bodies whose size is exactly a 2048 or 1024x2048 BC7 mip chain."""
+    out = set()
+    for package_id, path in sorted(INDEX.items()):
+        if not any(family in path.stem for family in FAMILIES):
+            continue
+        for index, entry in enumerate(Package(path).entries):
+            if entry.size in TEXTURE_SIZES:
+                out.add(TAG_BASE + (package_id << TAG_ENTRY_BITS) + index)
+    return out
+
+
 def main() -> None:
-    found = narrow(textures())
+    everything = textures()
+
+    # The type filter is what keeps geometry out. Check it did not also cut textures: every body
+    # whose size is exactly a BC7 mip chain is certainly a texture, so all 55 must survive it.
+    missing = known_textures() - {tag for tag, _size, _stem in everything}
+    if missing:
+        raise SystemExit(f"the type filter dropped {len(missing)} known textures, e.g. "
+                         + ", ".join(f"0x{tag:08X}" for tag in sorted(missing)[:4]))
+    print(f"type filter keeps all {len(known_textures())} known textures")
+
+    found = narrow(everything)
     if not found:
         raise SystemExit("no texture-shaped entry pairs found")
     colours = palette(len(found))
