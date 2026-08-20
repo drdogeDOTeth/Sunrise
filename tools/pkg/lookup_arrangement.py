@@ -1,18 +1,22 @@
 """
-Closes the remaining hop: art-arrangement index → SEntityModel tag.
+Closes the hop: art-arrangement index → SEntityModel tag.
 
-Charm does this for Witch Queen. Shadowkeep uses different class ids, so the tables are found by
-shape instead:
+Charm does this for Witch Queen. Shadowkeep uses different class ids; tables were found by shape
+and are now dumped. The hop is **closed**:
 
 * Arrangement indices in this install run 0..4300 (4,301 slots). Confirmed against `build_data.bin`.
-* `0x81319329` (class `0x80807546`) is exactly `4,301 × 4 + 48` bytes — Monteven's hash table, the
-  same `index * 4 + 48` layout.
-* `0x8080744A` is a 24-byte singleton class with 16,236 members, the size of Charm's entity-parent
-  stub. Average ~3.8 parents per arrangement.
+* `0x81319329` (class `0x80807546`) is exactly `4,301 × 4 + 48` bytes — Monteven's hash table,
+  `index * 4 + 48`.
+* `0x81613D23` (class `0x80805DF5`, package 0709) maps arrangement hash → two assignment hashes
+  (32-byte record: `{hash, 0, assignA, assignB, …}`). Search by hash; do not stride the DynamicArray
+  at 124 bytes (leftover padding).
+* `0x80EC3F61` (class `0x808056EA`, package 0361) is `{assignmentHash, entityParent}`, stride 8,
+  11,519 rows.
+* `0x8080744A` is a 24-byte entity-parent. D1 layout: SEntity tag at `+0x10`. Scatterhorn parents
+  live in `investment_0375`; SEntities and models live in **sandbox**, not `investment_0361`.
+* Scan the entity resource for class `0x808073A5` (often `+0x64C` / `+0x65C`).
 
-The assignment table that indexes those parents is still encrypted. `--request` writes a dump of
-the small set of tables that can be that table. After one launch this script reads the dumps and
-walks the equipped loadout.
+Do not `from resolve import ...` — that module runs CLI on import.
 
 Usage:
     python lookup_arrangement.py --request
@@ -97,6 +101,115 @@ SLOT4_SIBLING = 0x81327D0A
 PARENT_38_A = 0x8131914C
 PARENT_38_B = 0x81319343
 HASH_TABLE_SIBLING = 0x81319135
+# Last large undumped investment-root table (slot 19). The 0x38 parents were not the map.
+SLOT19_ASSIGNMENT_CANDIDATE = 0x81327CDE
+# 0361 cluster: model / resource / SEntity / parent. SEntity + parents already dumped.
+CLUSTER_MODEL = 0x80EC2012
+CLUSTER_RESOURCE = 0x80EC2013
+CLUSTER_ENTITY = 0x80EC2014
+CLUSTER_BUFFERS = tuple(range(0x80EC2000, 0x80EC2012))
+# Remaining 0593 schema tables (not the item table). Launch 3: none are the assignment map.
+REMAINING_0593 = (
+    0x81327CFE,
+    0x81327D2E,
+    0x81327D35,
+    0x81327D63,
+    0x81327D64,
+    0x81327D65,
+    0x81327D67,
+    0x81327D6B,
+    0x81327D6C,
+)
+# Launch 4: undumped investment schema singletons (one member per class, 64KB-3MB).
+# 0709/0914 are later globals packages; 0361 locals sit in the armour package.
+LAUNCH4_TABLES = (
+    0x81A28B23,
+    0x81613CF5,
+    0x81613D23,
+    0x81A291C2,
+    0x81613CF1,
+    0x81A2926C,
+    0x81613CFF,
+    0x81613D27,
+    0x81613CFC,
+    0x80EC3F60,
+    0x81613D28,
+    0x81613D24,
+    0x80EC3F61,
+    0x81613D01,
+)
+# Scatterhorn entity parents from 80EC3F61 (assignment hash -> parent).
+# Two hashes per piece (gender/race). Gender 0 is unknown until both are dumped.
+SCATTERHORN_PARENTS = (
+    0x80EEA8B7,  # chest A  assignment 0xCB405903
+    0x80EEA5D6,  # chest B  assignment 0x90273609
+    0x80EEAB01,  # gauntlets A
+    0x80EEA84A,  # gauntlets B
+    0x80EEA9FE,  # helmet A
+    0x80EEA959,  # helmet B
+    0x80BA693F,  # legs A
+    0x80B7585D,  # legs B
+    0x80EEA0AC,  # class item A  assignment 0x1C6FF94C
+    0x80EEA15C,  # class item B  assignment 0x2B84A9E6
+)
+# Sash-jacket cluster (lookalike). Parent 0x80BA7670 -> model 0x80BA7661. Not Scatterhorn.
+SASH_CLUSTER = (
+    0x80BA7662,
+    0x80BA766F,
+    0x80BA7670,
+    0x80EC2AB5,
+    0x80EC2AC2,
+)
+# Scatterhorn SEntities named by the parents (sandbox, not investment_0361).
+SCATTERHORN_SENTITIES = (
+    0x80EFA1D8,  # chest A
+    0x80EFA1B7,  # chest B
+    0x80EF9820,  # gauntlets A
+    0x80EF980B,  # gauntlets B
+    0x80EFA85B,  # helmet A
+    0x80EFA852,  # helmet B
+    0x80BC5221,  # legs A
+    0x80BC5206,  # legs B
+)
+# Chest A/B clusters: model, resource, SEntity, and neighbouring buffer-sized blobs.
+SCATTERHORN_CHEST_GEOMETRY = (
+    # chest A  sandbox_037d
+    0x80EFA1C7, 0x80EFA1CA, 0x80EFA1CB, 0x80EFA1CC, 0x80EFA1CD,
+    0x80EFA1CE, 0x80EFA1CF, 0x80EFA1D0, 0x80EFA1D1, 0x80EFA1D2,
+    0x80EFA1D3, 0x80EFA1D4, 0x80EFA1D5, 0x80EFA1D6, 0x80EFA1D7,
+    0x80EFA1D8,
+    # chest B
+    0x80EFA1A6, 0x80EFA1A9, 0x80EFA1AA, 0x80EFA1AB, 0x80EFA1AC,
+    0x80EFA1AD, 0x80EFA1AE, 0x80EFA1AF, 0x80EFA1B0, 0x80EFA1B1,
+    0x80EFA1B2, 0x80EFA1B3, 0x80EFA1B4, 0x80EFA1B5, 0x80EFA1B6,
+    0x80EFA1B7,
+    # gauntlets / helmets (model + resource + SEntity)
+    0x80EF981E, 0x80EF981F, 0x80EF9820,
+    0x80EF9809, 0x80EF980A, 0x80EF980B,
+    0x80EFA850, 0x80EFA851, 0x80EFA852,
+    0x80EFA859, 0x80EFA85A, 0x80EFA85B,
+    0x80EFA843, 0x80EFA844, 0x80EFA845,
+    0x80BC5220, 0x80BC5221, 0x80BC5205, 0x80BC5206,
+)
+# Vertex/index headers + remaining buffers (sandbox_0698 / 0699). Position data for
+# chest mesh 0 is already dumped; stride still lives in the 12-byte header.
+SCATTERHORN_BUFFERS = (
+    # chest A
+    0x81531ED4, 0x81531ED7, 0x81531ED8, 0x81531EDA, 0x81531ED9, 0x81531EDD,
+    0x81531EDC, 0x81531EDF, 0x81531EDE, 0x81531EE2, 0x81531EE1,
+    # chest B
+    0x81531EC5, 0x81531EC8, 0x81531EC9, 0x81531ECB, 0x81531ECA, 0x81531ECE,
+    0x81531ECD, 0x81531ED0, 0x81531ECF, 0x81531ED3, 0x81531ED2,
+    # helmet A/B
+    0x81532603, 0x80EFA857, 0x81532607, 0x81532606,
+    0x815325FE, 0x80EFA84F, 0x81532601, 0x81532602,
+    # gauntlets A
+    0x815315ED, 0x80EF981B, 0x815315F1, 0x815315F0, 0x815315F2, 0x815315F3,
+    0x815315F5, 0x815315F6, 0x815315F8, 0x815315F7, 0x815315FA, 0x815315FB,
+    # gauntlets B
+    0x815315DE, 0x80EF9806, 0x815315E1, 0x815315E2, 0x815315E3, 0x815315E4,
+    0x815315E7, 0x815315E6, 0x815315E9, 0x815315E8, 0x815315EC, 0x815315EB,
+)
 ENTITY_PARENT_CLASS = 0x8080744A
 ENTITY = 0x80809C0F
 ENTITY_RESOURCE = 0x80809C36
@@ -258,7 +371,7 @@ def follow_parent(tag: int, depth: int = 0) -> list[int]:
         return [tag]
     if class_id == ENTITY_PARENT_CLASS or len(data) == 0x18:
         for at, value in tags_in(data):
-            print(f"{indent}  +{at:02X} →")
+            print(f"{indent}  +{at:02X} ->")
             models.extend(follow_parent(value, depth + 1))
         return models
     if class_id == ENTITY:
@@ -335,16 +448,12 @@ def census_assignment_sizes() -> None:
 
 
 def parse_38_parent(data: bytes) -> None:
-    """Charm A44E8080: Tag64 at 0x10 (sandbox patterns), Tag64 at 0x28 (entity assignment map)."""
-    if len(data) < 0x38:
-        print(f"  0x38 parent is {len(data)} B, not 56")
+    """Shadowkeep 0x38 blobs are a 1-element DynamicArray, not Charm WQ Tag64 parents."""
+    print(f"  hex: {data.hex(' ')}")
+    count, start, element = array_at(data, 8)
+    if not count:
         return
-    for at, name in ((0x10, "sandboxPatternAssignments?"), (0x28, "entityAssignmentsMap?")):
-        (value,) = struct.unpack_from("<I", data, at)
-        extra = f"  {describe(value)}" if is_tag(value) else ""
-        print(f"  +{at:02X} {name}  0x{value:08X}{extra}")
-        if is_tag(value):
-            follow_parent(value)
+    print(f"  not an assignment-map parent (count {count}, element 0x{element:08X})")
 
 
 def scan_dumped_for_count(want: int = ARRANGEMENT_COUNT) -> None:
@@ -377,8 +486,9 @@ def walk_index(index: int) -> None:
         print(f"  artArrangementHash 0x{arrangement_hash:08X}" if arrangement_hash is not None
               else "  index past end of hash table")
         if arrangement_hash:
-            for tag in (SLOT4_ASSIGNMENT_CANDIDATE, HASH_TABLE_SIBLING, PARENT_38_A, PARENT_38_B,
-                        *MAP_CANDIDATES, *SIZE_MAP_CANDIDATES):
+            for tag in (SLOT4_ASSIGNMENT_CANDIDATE, SLOT19_ASSIGNMENT_CANDIDATE,
+                        HASH_TABLE_SIBLING, PARENT_38_A, PARENT_38_B,
+                        *MAP_CANDIDATES):
                 blob = dumped(tag)
                 if blob is None:
                     continue
@@ -427,30 +537,12 @@ def walk_index(index: int) -> None:
 
 def write_request() -> None:
     lines = [
-        "# Arrangement index -> SEntityModel. One launch, then python lookup_arrangement.py",
-        "# Bodies need the running game's block keys. Entry tables already named every tag.",
+        "# Arrangement hop, launch 7. python lookup_arrangement.py after close.",
+        "# No patch. Dump at investment refresh.",
         "",
-        "# Investment root - 1,912 B, every slot tag.",
-        f"tag 0x{INVESTMENT_ROOT:08X}",
-        "",
-        "# Art-arrangement index -> hash. 4,301 x 4 + 48. Monteven's +48 table.",
-        f"tag 0x{ARRANGEMENT_HASH_TABLE:08X}",
-        "",
-        "# 0x38 parents (Charm A44E8080 shape) - should name the assignment-map tag.",
-        f"tag 0x{PARENT_38_A:08X}",
-        f"tag 0x{PARENT_38_B:08X}",
-        f"tag 0x{HASH_TABLE_SIBLING:08X}   # 24-byte sibling of the hash table",
-        "",
-        "# Slot 4 is NOT the assignment table (1,170 rows). Dump it only if still missing.",
-        f"tag 0x{SLOT4_ASSIGNMENT_CANDIDATE:08X}",
-        f"tag 0x{SLOT4_SIBLING:08X}",
-        "",
-        "# Large undumped tables that can hold nested assignment rows.",
+        "# Scatterhorn vertex/index headers and remaining buffers (sandbox_0698 / 0699).",
     ]
-    for tag in MAP_CANDIDATES:
-        lines.append(f"tag 0x{tag:08X}")
-    lines += ["", "# Entity-parent samples. Class 0x8080744A, 16,236 x 24 B."]
-    for tag in ENTITY_PARENT_SAMPLES:
+    for tag in SCATTERHORN_BUFFERS:
         lines.append(f"tag 0x{tag:08X}")
     kept: list[str] = []
     skipped = 0
@@ -483,9 +575,7 @@ def main() -> None:
 
     print(f"dumps: {DUMP}")
     needed = [
-        PARENT_38_A,
-        PARENT_38_B,
-        *MAP_CANDIDATES,
+        *SCATTERHORN_BUFFERS,
     ]
     missing = [tag for tag in needed if dumped(tag) is None]
     if missing:
@@ -500,9 +590,12 @@ def main() -> None:
                    (ARRANGEMENT_HASH_TABLE, SLOT4_ASSIGNMENT_CANDIDATE, INVESTMENT_ROOT)):
             return
 
-    for tag in (INVESTMENT_ROOT, ARRANGEMENT_HASH_TABLE, PARENT_38_A, PARENT_38_B,
-                HASH_TABLE_SIBLING, SLOT4_ASSIGNMENT_CANDIDATE, SLOT4_SIBLING,
-                *ENTITY_PARENT_SAMPLES, *MAP_CANDIDATES, *SIZE_MAP_CANDIDATES):
+    for tag in (INVESTMENT_ROOT, ARRANGEMENT_HASH_TABLE, SLOT19_ASSIGNMENT_CANDIDATE,
+                CLUSTER_ENTITY, CLUSTER_RESOURCE, CLUSTER_MODEL,
+                0x80EC2015, 0x80EC2016,
+                PARENT_38_A, PARENT_38_B, HASH_TABLE_SIBLING,
+                SLOT4_ASSIGNMENT_CANDIDATE, SLOT4_SIBLING,
+                *ENTITY_PARENT_SAMPLES, *MAP_CANDIDATES):
         if dumped(tag) is not None:
             characterize(tag)
 

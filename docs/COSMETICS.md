@@ -11,7 +11,7 @@ Not all of "custom cosmetics" is equally reachable.
 |---|---|---|
 | Existing ornaments and shaders, applied normally | any plug the game already ships | works upstream, no changes needed |
 | Any plug on any item, regardless of pool or ownership | cross-class ornaments, unowned shaders | **this fork**, see below |
-| Genuinely new art — custom meshes and textures | a model that is not in the game | not reachable, see [Custom art](#custom-art) |
+| Genuinely new art — custom meshes and textures | a model that is not in the game | **in progress:** Scatterhorn wrap installed 2026-08-19; full-topology swap still blocked by vertex budget. See `HANDOFF.md`. |
 
 ## How the game decides what you look like
 

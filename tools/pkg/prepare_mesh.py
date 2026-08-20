@@ -35,18 +35,28 @@ bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
 bpy.ops.object.mode_set(mode='OBJECT')
 print(f"joined+welded: {len(joined.data.vertices):,} verts, {len(joined.data.polygons):,} tris")
 
-if len(joined.data.vertices) > TARGET:
+# glTF import can leave a leftover modifier; collapse must be first or the ratio misses.
+while joined.modifiers:
+    bpy.ops.object.modifier_apply(modifier=joined.modifiers[0].name)
+
+passes = 0
+while len(joined.data.vertices) > TARGET:
+    passes += 1
+    if passes > 8:
+        raise RuntimeError(
+            f"still {len(joined.data.vertices):,} verts after 8 collapses; target {TARGET:,}")
+    ratio = max(0.05, TARGET / max(len(joined.data.vertices), 1) * 0.92)
     modifier = joined.modifiers.new(name="dec", type='DECIMATE')
     modifier.decimate_type = 'COLLAPSE'
-    modifier.ratio = TARGET / len(joined.data.vertices)
+    modifier.ratio = ratio
     bpy.ops.object.modifier_apply(modifier="dec")
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')
     bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
     bpy.ops.object.mode_set(mode='OBJECT')
     print(f"decimated: {len(joined.data.vertices):,} verts, {len(joined.data.polygons):,} tris")
-else:
-    print(f"under budget ({TARGET:,}); no decimation needed")
+if len(joined.data.vertices) <= TARGET:
+    print(f"under budget ({TARGET:,})")
 
 mesh = joined.data
 matrix = joined.matrix_world

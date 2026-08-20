@@ -1,9 +1,27 @@
 """
-Shrink-wraps Destiny body meshes onto the custom character, keeping vertex count and skinning.
+Shrink-wraps the equipped Scatterhorn set onto the custom character.
 
-Helmet inject never hit the player because the inspect screen draws the body/head, not a helmet
-item. These person-sized investment models (span ~1.6-1.8 m) are the full-body cluster. Only
-bytes 0-5 of each stride-16 vertex are rewritten so bone weights stay put.
+This is the inspect-screen path. `wrap_player_body.py` targets Tower frames
+(`0x80B9F855` / `0x80FA2308`) which are **not** the playable Guardian — do not run it
+for this.
+
+Only bytes 0-5 of each vertex are rewritten, so bone weights stay put and buffer length
+does not change. Chest mesh 0 is ~4,100 skinned verts: this is a silhouette wrap, not a
+full-topology swap. A raw nearest-point snap collapses triangles (measured 40-50% degenerate
+on the full-body wrap); displacement is Laplacian-smoothed so topology survives.
+
+Fit is **one AABB over every loaded Scatterhorn piece**, never per-mesh or per-slot. A
+per-hood fit would crush the whole custom character into the helmet box. Hood / chest /
+gauntlet vertices then land on the matching region of the custom surface.
+
+Packages are resolved from the **position buffer** tag, not the model tag. Chest mesh 0
+lives in `sandbox_037d`; hanging-panel meshes live in `sandbox_0698`. Writing to the
+model's package would corrupt an unrelated entry.
+
+Judge on the character / inspect / APPEARANCE screen. The in-world Guardian is a dissolve
+shell and does not count. Helmet-hidden inspect still shows the Awoken head — the wrapped
+hood is only visible with the helmet shown. Legs (`0x80EFA93B` / `0x80EFA92E`) are not
+dumped yet and stay stock Scatterhorn.
 
 Usage:
     python wrap_body.py --dry-run
@@ -12,124 +30,144 @@ Usage:
 """
 from __future__ import annotations
 
-import json
-import struct
 import sys
 from pathlib import Path
 
 import numpy as np
 
 from extract_mesh import dumped, read_positions, vertex_stride
-from glb import load_mesh, mesh_names, read_glb
 from inject_mesh import entry_index_of, package_of, to_destiny, write_all
-from parse_models import models
+from parse_models import Model, TAG_MAX, TAG_MIN
+from wrap_player_body import (
+    DEFAULT_SMOOTHING,
+    DEFAULT_SWING,
+    SURFACE_SAMPLES,
+    adjacency,
+    load_character,
+    mesh_triangles,
+    nearest,
+    option,
+    sample_surface,
+    smooth_displacement,
+    swing_arms,
+    wrap_buffer,
+)
+
+DUMP = Path(r"C:\Sunrise\bin\x64\Sunrise\dump")
+
+# Both gender/race variants. Gender 0 mapping A vs B is unproven, so wrap both.
+BODIES = [
+    0x80EFA1CA, 0x80EFA1A9,  # Scatterhorn Robe
+    0x80EFA859, 0x80EFA850,  # Scatterhorn Hood
+    0x80EF981E, 0x80EF9809,  # Scatterhorn gauntlets
+]
+# Named, not dumped. wrap_body includes them automatically once the headers land.
+LEGS = [0x80EFA93B, 0x80EFA92E]
 
 
-def sample_surface(points: np.ndarray, triangles: np.ndarray, count: int) -> np.ndarray:
-    a, b, c = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
-    areas = np.linalg.norm(np.cross(b - a, c - a), axis=1) * 0.5
-    total = areas.sum()
-    if total <= 0:
-        raise SystemExit("model has zero surface area")
-    rng = np.random.default_rng(0xD2)
-    picked = rng.choice(len(triangles), size=count, p=areas / total)
-    u = rng.random((count, 1))
-    v = rng.random((count, 1))
-    over = (u + v) > 1.0
-    u[over] = 1.0 - u[over]
-    v[over] = 1.0 - v[over]
-    a, b, c = a[picked], b[picked], c[picked]
-    return (a + u * (b - a) + v * (c - a)).astype(np.float32)
-
-
-def nearest(queries: np.ndarray, cloud: np.ndarray, batch: int = 256) -> np.ndarray:
-    out = np.empty_like(queries)
-    squared = (cloud * cloud).sum(1)
-    for at in range(0, len(queries), batch):
-        chunk = queries[at:at + batch]
-        distance = squared[None, :] - 2.0 * (chunk @ cloud.T)
-        out[at:at + batch] = cloud[np.argmin(distance, axis=1)]
-    return out
-
-GLB = Path(r"C:\Chiliz\Destiny2SunriseCharacters\void_4003GasMask.glb")
-PACKED_MAX = 32767.0
-SURFACE_SAMPLES = 80_000
-# Person-sized investment bodies (stride 16, head verts at ~1.7 m). They did not show under
-# Scatterhorn; armour is now null so this is the undersuit the inspect screen actually draws.
-BODIES = {
-    0x80BA75A7, 0x80EC20BE, 0x80BA769C, 0x80EC2AB4,
-    0x80BA7661, 0x80BA75E3, 0x80EC342B, 0x80EC3824,
-}
-
-
-def load_character(path: Path) -> tuple[np.ndarray, np.ndarray]:
-    document, _ = read_glb(path)
-    chunks, faces, base = [], [], 0
-    for name in mesh_names(document):
-        points, tris = load_mesh(path, name)
-        chunks.append(points)
-        faces.append(tris + base)
-        base += len(points)
-    return np.concatenate(chunks), np.concatenate(faces)
-
-
-def wrap_buffer(original: bytes, dest_points: np.ndarray, stride: int,
-                scale: float, translation) -> bytes:
-    """@return The original buffer with only packed xyz replaced."""
-    packed = np.clip(
-        np.round((dest_points - np.asarray(translation)) / scale * PACKED_MAX),
-        -32768, 32767,
-    ).astype(np.int16)
-    out = bytearray(original)
-    for index, (x, y, z) in enumerate(packed):
-        struct.pack_into("<3h", out, index * stride, int(x), int(y), int(z))
-    return bytes(out)
+def load_dumped_model(tag: int) -> Model | None:
+    path = DUMP / f"tag_{tag:08X}.bin"
+    if not path.is_file():
+        return None
+    return Model(tag, path.read_bytes())
 
 
 def main() -> None:
-    source, faces = load_character(GLB)
+    source, faces = load_character()
     source = to_destiny(np.asarray(source, dtype=np.float64))
+    degrees = option("--arm-swing", DEFAULT_SWING)
+    source = swing_arms(source, degrees)
     cloud = sample_surface(source, faces, SURFACE_SAMPLES)
-    print(f"character {len(source):,} verts, {len(faces):,} tris, {len(cloud):,} surface samples")
+    print(
+        f"character {len(source):,} verts, {len(faces):,} tris, "
+        f"{len(cloud):,} surface samples, arms swung {degrees:g} deg"
+    )
+
+    targets = list(BODIES)
+    for tag in LEGS:
+        if (DUMP / f"tag_{tag:08X}.bin").is_file():
+            targets.append(tag)
+        else:
+            print(f"  legs 0x{tag:08X} not dumped - leaving stock")
+
+    loaded: list[tuple] = []
+    all_pts: list[np.ndarray] = []
+    for tag in targets:
+        model = load_dumped_model(tag)
+        if model is None or model.scale is None or model.translation is None:
+            print(f"  skip 0x{tag:08X}: header not dumped")
+            continue
+        translation = np.asarray(model.translation[:3], dtype=np.float64)
+        scale = model.scale[0]
+        meshes = []
+        for index, mesh in enumerate(model.meshes):
+            if not (TAG_MIN <= mesh.position_buffer <= TAG_MAX):
+                continue
+            stride = vertex_stride(mesh.positions)
+            raw = dumped(mesh.position_buffer)
+            if not stride or raw is None:
+                print(f"  skip 0x{tag:08X} mesh {index}: buffers not dumped")
+                continue
+            points = np.asarray(
+                read_positions(raw, stride, scale, tuple(translation)), dtype=np.float64)
+            meshes.append((index, mesh, stride, raw, points))
+        if not meshes:
+            continue
+        piece = np.concatenate([row[4] for row in meshes])
+        loaded.append((tag, model, scale, translation, meshes))
+        all_pts.append(piece)
+        z0, z1 = piece[:, 2].min(), piece[:, 2].max()
+        print(f"  loaded 0x{tag:08X}  {len(meshes)} meshes  {len(piece):,} verts  "
+              f"z {z0:.3f}..{z1:.3f} m")
+
+    if not all_pts:
+        raise SystemExit("nothing loadable")
+
+    every = np.concatenate(all_pts)
+    dst_min, dst_max = every.min(0), every.max(0)
+    src_min, src_max = source.min(0), source.max(0)
+    src_size = np.maximum(src_max - src_min, 1e-9)
+    dst_size = dst_max - dst_min
+    placed_cloud = (cloud - src_min) / src_size * dst_size + dst_min
+    print(
+        f"\nshared fit  {len(every):,} dest verts  "
+        f"box z {dst_min[2]:.3f}..{dst_max[2]:.3f} m  "
+        f"span {dst_size.max():.3f} m"
+    )
 
     by_package: dict[Path, dict[int, bytes]] = {}
-    chosen = [model for model in models if model.tag in BODIES]
-    if not chosen:
-        raise SystemExit("none of the body tags are in the parsed dump_models set")
+    smoothing = option("--smooth", DEFAULT_SMOOTHING)
+    for tag, model, scale, translation, meshes in loaded:
+        print(f"\n0x{tag:08X}")
+        for index, mesh, stride, raw, points in meshes:
+            displacement = nearest(points, placed_cloud) - points
+            triangles = mesh_triangles(mesh, len(points))
+            if triangles is None:
+                print(f"  mesh {index}: no index buffer, unsmoothed")
+            elif smoothing > 0:
+                edges, degree = adjacency(triangles, len(points))
+                displacement = smooth_displacement(displacement, edges, degree, smoothing)
+            wrapped = points + displacement
+            moved = float(np.linalg.norm(wrapped - points, axis=1).mean())
+            new_bytes = wrap_buffer(raw, wrapped, stride, scale, translation)
+            if len(new_bytes) != len(raw):
+                raise SystemExit(f"0x{tag:08X} mesh {index}: wrap changed buffer size")
+            package = package_of(mesh.position_buffer)
+            by_package.setdefault(package, {})[entry_index_of(mesh.position_buffer)] = new_bytes
+            print(
+                f"  mesh {index}: {len(points):>6,} verts  stride {stride}  "
+                f"moved {moved:.3f} m avg  -> {package.name}"
+            )
 
-    for model in chosen:
-        mesh = model.meshes[0]
-        stride = vertex_stride(mesh.positions)
-        raw = dumped(mesh.position_buffer)
-        if not stride or raw is None:
-            print(f"  skip 0x{model.tag:08X}: buffers not dumped")
-            continue
-        translation = np.asarray(model.translation[:3])
-        scale = model.scale[0]
-        original_pts = np.asarray(
-            read_positions(raw, stride, scale, tuple(translation)), dtype=np.float64)
-        # Fit the custom character's AABB onto this body's AABB so the wrap is in model space.
-        src_min, src_max = source.min(0), source.max(0)
-        dst_min, dst_max = original_pts.min(0), original_pts.max(0)
-        src_size = np.maximum(src_max - src_min, 1e-6)
-        dst_size = dst_max - dst_min
-        placed = (source - src_min) / src_size * dst_size + dst_min
-        placed_cloud = (cloud - src_min) / src_size * dst_size + dst_min
-        wrapped = nearest(original_pts, placed_cloud)
-        new_bytes = wrap_buffer(raw, wrapped, stride, scale, translation)
-        if len(new_bytes) != len(raw):
-            raise SystemExit(f"0x{model.tag:08X}: wrap changed buffer size")
-        by_package.setdefault(package_of(model.tag), {})[
-            entry_index_of(mesh.position_buffer)] = new_bytes
-        print(
-            f"  0x{model.tag:08X}  mesh0 {len(original_pts):,} verts  "
-            f"span {model.span:.3f}  stride {stride}"
-        )
-
-    print(f"{sum(len(v) for v in by_package.values())} buffers across {len(by_package)} packages")
+    total = sum(len(v) for v in by_package.values())
+    print(f"\n{total} buffers across {len(by_package)} packages")
+    for path, replacements in sorted(by_package.items()):
+        print(f"  {path.name}: {len(replacements)} entries")
     if "--dry-run" in sys.argv:
+        print("dry run; nothing written")
         return
     write_all(by_package, "")
+    print("\nLaunch and judge on inspect / APPEARANCE. Undo: python inject_mesh.py --undo")
 
 
 if __name__ == "__main__":

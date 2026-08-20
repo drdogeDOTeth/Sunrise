@@ -1,10 +1,16 @@
 """
 Shrink-wraps the confirmed in-world Guardian body onto the custom character.
 
+## Do not use this for the playable Guardian
+
+The targets below (`0x80B9F855` / `0x80FA2308`) are **Tower frames**, retracted 2026-08-19.
+The playable character is its equipped armour. Use `wrap_body.py` (Scatterhorn) instead.
+
 ## Why this exists next to wrap_body.py
 
-`wrap_body.py` was written against a guessed set of investment bodies and only ever wraps
-`meshes[0]`. Neither assumption survives the real target:
+`wrap_body.py` was originally written against a guessed investment set and only wrapped
+`meshes[0]`. That copy is now the Scatterhorn wrap and has the same mesh/package/AABB fixes.
+This file remains the Tower-frame experiment.
 
 - The Guardian body is **4 meshes**, and the one that matters is mesh 2 (15,740 of the 17,955
   vertices). Wrapping only mesh 0 would move 1,698 vertices and leave the body behind.
