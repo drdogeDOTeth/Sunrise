@@ -6,29 +6,20 @@ them offline, and each one's `reference` names its header. `sandbox_0699` alone 
 
 **A texture is a 40-byte header entry and a data entry that reference each other.** Confirmed by
 the pairing across all 55: `0x80EFAD60` (40 B) <-> `0x80EFAD63` (5,586,944 B), and so on for
-every one of them. That 40 is the same size as the entries a material points at, which settles
-what those are:
+every one of them. The header decodes completely - size at `+0x00`, the raw DXGI format enum at
+`+0x04` (98 = `BC7_UNORM`), `0xCAFE` at `+0x0C`, then width, height, depth, array size, and the
+mip count at `+0x17`. Five mips is why 2048x2048 comes to 5,586,944 bytes and not 5,592,405.
 
-    +0x048    40-byte texture header -> its data   (materials sample here)
-    +0x2C8    40-byte texture header -> its data
-    +0x4D0..   8-byte stub -> 52-byte entry in globals_0238 / environments_0235
+**A material does not name its textures**, which two earlier readings of this file got wrong. The
+40-byte entries at `+0x048`/`+0x2C8` are *shader* headers - their bodies start `44 58 42 43`,
+DXBC - and the 52-byte entries are each a `D3D11_SAMPLER_DESC`, field for field. Decomposed, a
+material is shaders, sampler refs and float4 constants, with no texture anywhere in it; searching
+all 12 dumped materials against every one of the game's 181,141 forty-byte entries returns only
+the two shaders.
 
-So materials **do** name their textures directly. The surprise is the size: our two carrier
-materials sample data entries of only 2-8 KB, not the 5.6 MB maps sitting in the same packages.
-
-**That is a consequence of our own inject, not a Destiny quirk.** Carrier parts 10 and 32 were
-originally minor pieces of the robe, so they carry minor detail materials, and forcing all 46,068
-of our triangles through them means the whole body wears a trim texture. When the mesh is split
-into five per-material parts, each part's material tag is ours to choose - pick materials that
-sample the big maps.
-
-The 8-byte -> 52-byte pairs in `globals_0238` / `environments_0235` are shared across materials
-and repeat within one material (part 10 references the same two five times), so they are far more
-likely to be samplers or fallbacks than the robe's skin.
-
-This writes the request that confirms the format: the four data entries our carriers sample, the
-shared 52-byte pairs, and one full texture header **with its 5.6 MB body**, so the header layout
-and the pixel format both get decoded in the same launch.
+So the binding lives above the material, and offline search cannot reach it: of 32,713 entries in
+these four packages only 48 are unencrypted. `paint_textures.py` answers the one question that
+matters - which texture entries reach the custom body - by giving each a flat colour and looking.
 
 Usage:
     python texture_probe.py             # list what is there

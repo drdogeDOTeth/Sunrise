@@ -32,20 +32,21 @@ Do **not** merge upstream Sunrise 0.3.2.
 
 Newest files win:
 
-| package | live | previous | note |
+| package | live | geometry | note |
 |---|---|---|---|
-| `w64_sandbox_037c` | **`_22`** | `_21` | `_21` BROKEN — shards |
-| `w64_sandbox_037d` | **`_22`** | `_21` | `_21` BROKEN — shards |
-| `w64_sandbox_0698` | **`_21`** | `_20` | its `_20` is the broken one |
+| `w64_sandbox_037c` | **`_23`** | `_22` | `_23` = flat-colour texture probe |
+| `w64_sandbox_037d` | **`_23`** | `_22` | `_23` = flat-colour texture probe |
+| `w64_sandbox_0698` | **`_22`** | `_21` | `_22` = flat-colour texture probe |
+| `w64_sandbox_0699` | **`_7`** | — | `_7` = flat-colour texture probe |
 | `w64_sandbox_01e2` | `_6` | — | inert; legs are blanked |
-| `w64_sandbox_0699` | `_6` | — | inert; gauntlets are blanked |
 
-**Package `0698` runs one layer behind `037c`/`037d`** — the injector writes each package its own
-next index, so "the `_22` inject" is `037c_22` + `037d_22` + `0698_21`. Do not read the numbers
-as a single version.
+**Package indices are per-package, not a version number** — the injector writes each package its
+own next index. "The `_22` inject" is `037c_22` + `037d_22` + `0698_21`; the texture probe on top
+of it is `037c_23` + `037d_23` + `0698_22` + `0699_7`. Do not read them as one number.
 
-`_22` is the good state and the one to branch from. `_21` shipped a stride bug and exploded;
-`_20` was the last good layer before it. If `_22` ever looks wrong, compare against `_20`.
+**Geometry lives in the `_22` layer and the probe does not touch it** — the probe rewrites only
+texture *bodies*, at their original sizes. `_22` is still the state to branch geometry from. `_21`
+shipped a stride bug and exploded; `_20` was the last good layer before it.
 
 Repo: `C:\Users\Round\OneDrive\Desktop\Destiny2ProjectSunrise\Sunrise` branch `cosmetics`.
 
@@ -525,41 +526,76 @@ per-material index ranges** and give each its own part. The model has 58 parts t
 **Reuse existing material entries, do not invent new ones.** Pick five of the 14, rewrite each to
 point at textures we upload, and each carrier part keeps a material tag the game already trusts.
 
-### The materials are dumped, and the texture hop is understood
+### A texture is two entries, and the 40-byte header is fully decoded
 
-**A texture is two entries that reference each other: a 40-byte header and its data.** True for
-all 55 in the Scatterhorn packages — `0x80EFAD60` (40 B) ↔ `0x80EFAD63` (5,586,944 B). Data is
-**5,586,944 B** (2048×2048 BC7 with a mip chain) or **2,793,472 B**, its half.
+**A texture is a 40-byte header entry and a data entry that reference each other.** True for all 55
+in the Scatterhorn packages — `0x80EFAD60` (40 B) ↔ `0x80EFAD63` (5,586,944 B). Data is
+**5,586,944 B** or **2,793,472 B**, its half. The header, dumped and read:
 
-That 40 is the same size as the entries a material points at, so **materials name their textures
-directly**, at `+0x048` and `+0x2C8`:
+| offset | value | field |
+|---|---:|---|
+| `+0x00` | 5,586,944 | data size, exactly the data entry's |
+| `+0x04` | 98 | **raw DXGI format enum** — `DXGI_FORMAT_BC7_UNORM` |
+| `+0x0C` | `0xCAFE` | magic |
+| `+0x0E` | 2048 | width |
+| `+0x10` | 2048 | height |
+| `+0x12` | 1 | depth |
+| `+0x14` | 1 | array size |
+| `+0x16` | `08 05` | ?, **mip count** |
 
-| material | +0x048 → data | +0x2C8 → data |
-|---|---|---|
-| `0x80EF98DB` (part 10) | `0x81532C61`, 2,952 B | `0x81532B04`, 8,452 B |
-| `0x80EF8C3C` (part 32) | `0x81532693`, 2,528 B | `0x81532C5F`, 2,056 B |
+Five mips is why the size is 5,586,944 and not 5,592,405: the chain stops at 128×128, and
+2048→128 sums to that byte for byte. The body confirms the format independently — every block
+begins with bit 6 set, which is BC7 **mode 6**.
 
-**Those are tiny, and that is our own doing.** Carrier parts 10 and 32 were originally minor
-pieces of the robe, so they carry minor *detail* materials — and we force all 46,068 triangles
-through them, so the whole body wears a trim texture. When the mesh is split into five
-per-material parts, each part's material tag is ours to choose: pick materials that sample the
-5.6 MB maps. `material_probe.py` lists all 14 with sizes and packages.
+### A material does **not** name its textures
 
-The `+0x4D0`-onward 8-byte → 52-byte pairs live in `globals_0238` / `environments_0235`, are
-shared between materials, and repeat within one material (part 10 references the same two five
-times). Samplers or fallbacks, not the robe's skin.
+Two earlier readings here were wrong and are corrected. The entries at `+0x048`/`+0x2C8` are not
+texture headers; they are 40-byte **shader** headers, and their bodies begin `44 58 42 43` —
+**DXBC**, with `ISGN` input signatures and `TEXCOORD` semantics. The `+0x4D0` 52-byte entries are
+not fallbacks; each is a **`D3D11_SAMPLER_DESC`**, field for field and exactly 52 bytes: filter
+`0x55` = ANISOTROPIC, address 3 = CLAMP ×3, MipLODBias `0xBF000000` = −0.5, MaxAnisotropy 4,
+border 0,0,0,0, MinLOD 0, MaxLOD `0x7F7FFFFF` = FLT_MAX.
 
-### Next action: one more launch
+Fully decomposed, `0x80EF98DB` accounts for all 1,616 of its bytes. Arrays are
+`[0x80809FBD][count, 0, elem_class, 0][data]`:
 
-`python texture_probe.py --request` has written 10 tags (5.6 MB) to
-`C:\Sunrise\bin\x64\Sunrise\dump\request.txt`: the four data entries our carriers sample, the
-shared 52-byte pairs, and **one full texture header with its 5.6 MB body** so the header layout
-and the pixel format are decoded in the same launch. None are entries we rewrite, so dumping is
-safe.
+| offset | element class | count | what |
+|---|---|---:|---|
+| `+0x048`, `+0x2C8` | — | 2 | vertex and pixel shader (640 B apart: two stage blocks) |
+| `+0x420` | `0x80800009` | 70 B | binding bytecode, 4-byte opcodes |
+| `+0x480` | `0x80800090` | 3 | float4 constants |
+| `+0x4D0` | `0x808073F3` | **5** | `{u32 tag, u32 pad, u64 hash64}` resource refs |
+| `+0x540` | `0x80800090` | 17 | float4 constants |
 
-Then: decode the 40-byte header (expect width, height, format, mip count), convert the GLB's
-PNG/JPEG maps to that pixel format, write the new data entries and headers, and split the mesh
-into five parts by `character_body_groups.json`. The writer already resizes entries freely.
+All five resource refs are **samplers** (`0x80C70B8E` ×2, `0x80C6B566` ×3). So a material names
+shaders, samplers and constants — **and no textures at all**. Two independent checks agree:
+searching all 12 dumped materials against every one of the game's 181,141 forty-byte entries
+returns only the two shaders, and the one 64-bit field that could hold a texture (`+0x60`) is
+`0xCBF29CE484222325`, the FNV-1a offset basis — the hash of nothing.
+
+The binding therefore lives *above* the material, most likely in the arrangement/dye data the
+appearance system already deals in. Offline search cannot reach it: of **32,713 entries in these
+four packages only 48 are unencrypted**, and none of them names a texture either.
+
+### Next action: the flat-colour probe is written, launch once
+
+`paint_textures.py` overwrote **all 55 texture bodies with a distinct flat colour** — layers
+`037c_23`, `037d_23`, `0698_22`, `0699_7`, 237.4 MB, all written and verified. Whatever colour
+appears on the Guardian names the entry that produced it; the map is `texture_legend.json`.
+
+Two properties make this safe and cheap. A flat colour in BC7 is **the same 16-byte block
+repeated**, so an entry is filled without knowing its width, height or mip count — nothing here
+rests on the header decode above. And **every entry keeps its original size**, so the 40-byte
+headers are not touched at all.
+
+`bc7_mode6_flat()` holds both endpoints equal and every index at zero, so all interpolations land
+on one colour; with both p-bits zero a channel is exactly `value << 1`, which is why the palette
+uses only even components. `unpack_mode6()` re-reads a packed block with separate code and the
+tool refuses to run unless all 55 round-trip.
+
+Then: use the result to pick which entries to overwrite with the GLB's atlases (converted to BC7
+mode 6 at the original dimensions, so sizes stay identical and headers stay untouched), and split
+the mesh into five parts by `character_body_groups.json`.
 
 Mesh 1 (stride 12; chest bone 20, legs 25/26) is a separate packer. `rewrite_chest` zeros
 non-mesh-0 parts. Do not un-zero original extras.
@@ -572,6 +608,8 @@ non-mesh-0 parts. Do not un-zero original extras.
 |---|---|
 | `retarget_mesh.py` | **Current mesh build.** Blender: drops unrigged objects, poses the arms onto `rig.json`, welds/decimates, exports OBJ + per-vertex weights on rig bone indices + `_frame.bin` (tangent frame) + `_groups.json` (source material per triangle). |
 | `material_probe.py` | Reads each part's material tag offline, and writes the dump request for the material bodies. |
+| `texture_probe.py` | Finds every texture pair offline (40-byte header ↔ data) and decodes the header. |
+| `paint_textures.py` | **Current texture step.** Overwrites all 55 texture bodies with distinct flat BC7 colours at their original sizes, and writes `texture_legend.json`. Includes a mode-6 packer and an independent unpacker that must agree before it writes. |
 | `decode_texcoords.py` | Decodes and re-verifies the stride-24 second vertex buffer against the geometry. |
 | `prepare_mesh.py` | Superseded. Joins every object including the unrigged icosphere, and throws the armature away. |
 | `inject_scatterhorn.py` | **Current injector.** Whole body, chest draw, joints 1–28, authored weights when a `_weights.json` sits beside the mesh. |
