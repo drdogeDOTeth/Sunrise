@@ -116,7 +116,8 @@ Bone indices are **one global skeleton index space** shared by every armour piec
 |---|---|
 | `bone_frames.py` | Compares the centroid of each bone across the pieces that share it. Eight shared indices, eight agreements: the index space is global. Run this before ever believing a palette theory again. |
 | `bone_probe.py` | Dumps the raw 0x20-byte part records with the twenty bytes `parse_models` leaves undecoded, plus the bone set each part's own vertices use. Standalone — importing `parse_models` costs ~90s of package scanning. |
-| `skeleton.py` | Recovers the 25-joint bind skeleton from armour weights, estimating each joint at the parent blend rather than the bone centroid. Writes `objs/skeleton/rig.json` and `rig.obj`. |
+| `skeleton.py` | Recovers the 25-joint bind skeleton from armour weights, estimating each joint at the parent blend rather than the bone centroid. Writes `objs/skeleton/rig.json`, `rig.obj` and `rig.svg`. |
+| `retarget_mesh.py` | Blender. Drops unrigged objects, poses the custom mesh's arms onto `rig.json`, then exports the OBJ **and its real per-vertex weights** already mapped to rig bone indices. Replaces `prepare_mesh.py`, which joined the GLB's unrigged icosphere into the body and discarded the armature. |
 | `census_bones.py` | Per-piece bone sets → `objs/skeleton/palette.json`. Read as *where to take a weight from*, never as what a draw may pose. |
 
 ## Live tracing — the part that ended the guessing

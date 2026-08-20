@@ -5,7 +5,10 @@ Offline rendering is the one visual judgement in this project that is trustworth
 Guardian draws as a translucent dissolve shell, which is why screenshots produced a false
 identification; a model extracted to triangles and drawn here shows exactly what it is.
 
-Views are orthographic front (x,z) and side (y,z), flat-shaded, drawn back to front.
+Two orthographic views, flat-shaded, drawn back to front. Destiny's x is **forward**, so the
+(x,z) projection is the **side** and (y,z) - left to right - is the **front**. The labels were
+the other way round until 2026-08-20; in a project that identifies content by looking at it, a
+mislabelled axis is a real trap.
 
 Usage:
     python render_obj.py out.png a.obj b.obj ...
@@ -102,8 +105,8 @@ def main() -> None:
         view(image, (left, top), points, faces, 0, scale, centre)
         view(image, (left + CELL, top), points, faces, 1, scale, centre)
         draw.rectangle([left, top, left + 2 * CELL, top + CELL], outline=(210, 210, 210))
-        draw.text((left + 6, top + CELL - 16), "front", fill=(90, 90, 90))
-        draw.text((left + CELL + 6, top + CELL - 16), "side", fill=(90, 90, 90))
+        draw.text((left + 6, top + CELL - 16), "side", fill=(90, 90, 90))
+        draw.text((left + CELL + 6, top + CELL - 16), "front", fill=(90, 90, 90))
     image.save(out)
     print(f"wrote {out}  ({image.size[0]}x{image.size[1]})")
 

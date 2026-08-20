@@ -35,6 +35,7 @@ Usage:
 from __future__ import annotations
 
 import collections
+import json
 import struct
 import sys
 from pathlib import Path
@@ -66,7 +67,7 @@ from wrap_player_body import (
 DUMP = Path(r"C:\Sunrise\bin\x64\Sunrise\dump")
 PACKED_MAX = 32767.0
 PACKED_W = 32767
-MESH = Path(__file__).with_name("character_chest.obj")
+MESH = Path(__file__).with_name("character_body.obj")
 CHESTS = [0x80EFA1CA, 0x80EFA1A9]
 # Matching gender/race side. Hands go on the gauntlet mesh so they can use bones 20–71.
 GAUNTLETS = {
@@ -225,6 +226,62 @@ def load_donors(tags: tuple[int, ...], meshes: tuple[int, ...] = (0,),
     if not points:
         raise SystemExit(f"no skinned donors in {['0x%08X' % tag for tag in tags]}")
     return np.asarray(points, dtype=np.float64), skins
+
+
+def load_authored(mesh_path: Path) -> list[bytes] | None:
+    """@return One 8-byte weight/bone tail per vertex from `retarget_mesh.py`, or None.
+
+    These are the artist's own weights, carried through the GLB armature and mapped onto the
+    rig's global bone indices. They beat any donor transfer outright, because a transfer can
+    only ever ask "which Scatterhorn vertex is nearest", and the answer is wrong wherever the
+    two bodies are not the same shape - which is how the hands ended up on the forearm bones.
+    """
+    path = mesh_path.with_name(mesh_path.stem + "_weights.json")
+    if not path.is_file():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    out: list[bytes] = []
+    dropped = 0
+    for skin in data["skins"]:
+        pairs = [(int(bone), int(weight)) for bone, weight in skin
+                 if weight > 0 and bone <= BODY_BONE_CEILING]
+        dropped += len(skin) - len(pairs)
+        pairs.sort(key=lambda pair: -pair[1])
+        pairs = pairs[:4]
+        total = sum(weight for _bone, weight in pairs)
+        if not pairs or total <= 0:
+            pairs = [(RIGID_BONE, 255)]
+            total = 255
+        # Requantise so the four bytes still sum to 255 after any clamp above.
+        weights = [int(round(weight / total * 255.0)) for _bone, weight in pairs]
+        weights[0] += 255 - sum(weights)
+        bones = [bone for bone, _weight in pairs]
+        while len(weights) < 4:
+            weights.append(0)
+            bones.append(0)
+        out.append(bytes(weights + bones))
+    print(f"  authored weights: {len(out):,} vertices, retargeted={data.get('retargeted')}"
+          + (f", dropped {dropped} influences above bone {BODY_BONE_CEILING}" if dropped else ""))
+    return out
+
+
+def pack_authored(points: np.ndarray, stride: int, scale: float, translation,
+                  skins: list[bytes]) -> bytes:
+    """@return Custom xyz carrying the mesh's own weights, with no donor lookup at all."""
+    if stride < 16:
+        raise SystemExit(f"need stride 16 for inline skinning, got {stride}")
+    if len(skins) != len(points):
+        raise SystemExit(f"{len(skins):,} weights for {len(points):,} vertices - rebuild the mesh")
+    packed = np.clip(
+        np.round((points - np.asarray(translation)) / scale * PACKED_MAX),
+        -32768, 32767,
+    ).astype(np.int64)
+    out = bytearray(len(points) * stride)
+    for index, (x, y, z) in enumerate(packed):
+        at = index * stride
+        struct.pack_into("<4h", out, at, int(x), int(y), int(z), PACKED_W)
+        out[at + 8 : at + 16] = skins[index]
+    return bytes(out)
 
 
 def pack_rigid(points: np.ndarray, stride: int, scale: float, translation) -> bytes:
@@ -621,7 +678,8 @@ def inject_mesh0(by_package: dict[Path, dict[int, bytes]], tag: int,
 def inject_slot(by_package: dict[Path, dict[int, bytes]], tag: int, kind: str,
                 world_points: np.ndarray, world_faces: np.ndarray,
                 pools: dict[str, tuple[np.ndarray, list[bytes]]],
-                uv_header_fb: bytes, uv_body_fb: bytes, rigid: bool) -> None:
+                uv_header_fb: bytes, uv_body_fb: bytes, rigid: bool,
+                authored: list[bytes] | None = None) -> None:
     model = load_model(tag)
     mesh = model.meshes[0]
     stride = vertex_stride(mesh.positions)
@@ -631,6 +689,12 @@ def inject_slot(by_package: dict[Path, dict[int, bytes]], tag: int, kind: str,
           f"scale {model.scale[0]:.3f} -> {scale:.3f}")
     if rigid and kind in ("chest", "body"):
         positions = pack_rigid(world_points, stride, scale, translation)
+    elif authored is not None:
+        positions = pack_authored(world_points, stride, scale, translation, authored)
+        # Donors are no longer the source of the weights, but they are still the yardstick:
+        # a joint whose custom vertices sit far from the donor vertices on the same joint is
+        # the `_18` failure, and the audit is the only thing that shows it before a launch.
+        audit(bytearray(positions), world_points, stride, *pools["body"])
     else:
         positions = pack_banded(world_points, stride, scale, translation,
                                 pools, world_faces, kind)
@@ -645,12 +709,19 @@ def main() -> None:
         raise SystemExit(
             f"custom mesh not found: {source}\n"
             r'Build it: "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" '
-            r"--background --python prepare_mesh.py -- 23512 character_chest.obj"
+            r"--background --python retarget_mesh.py -- 23512 character_body.obj"
         )
     points, faces = read_obj(source)
-    points = swing_arms(points, option("--arm-swing", ARM_SWING))
+    authored = None if "--no-authored" in sys.argv else load_authored(source)
+    if authored is None:
+        # Legacy path: an unposed T-pose mesh with no weights of its own, swung by hand and
+        # skinned off the nearest donor. Kept only so an old mesh still builds.
+        points = swing_arms(points, option("--arm-swing", ARM_SWING))
     print(f"custom mesh: {len(points):,} verts, {len(faces):,} tris from {source.name}")
     print(f"skin: one welded body on the chest draw, joints {sorted(BODY_BONES)}")
+    print("      " + ("authored weights, mesh already posed on the rig"
+                      if authored is not None else
+                      f"nearest-donor weights, arms swung {option('--arm-swing', ARM_SWING)} deg"))
     if len(points) > 0xFFFF:
         raise SystemExit(f"{len(points):,} vertices needs 32-bit indices")
 
@@ -660,10 +731,21 @@ def main() -> None:
     if uv_header_fb is None or uv_body_fb is None:
         raise SystemExit("chest UV buffer not dumped")
 
-    old_translation = np.asarray(chest0.translation[:3], dtype=np.float64)
-    low, high = points.min(0), points.max(0)
-    placed = points - (low + high) / 2 + old_translation
-    print(f"  placed aabb y {placed[:, 1].min():.3f}..{placed[:, 1].max():.3f}  "
+    # A retargeted mesh is already standing in character space - the same metres the rig and the
+    # donor clouds live in - so it is placed where it stands. Re-centring it on the chest model's
+    # bounding box, which is what the unposed path has to do, lifted the whole body 10.6 cm and
+    # left the feet hovering above the foot joints that drive them.
+    if authored is not None and "--recentre" not in sys.argv:
+        placed = points
+        placement = "absolute (rig space)"
+    else:
+        old_translation = np.asarray(chest0.translation[:3], dtype=np.float64)
+        low, high = points.min(0), points.max(0)
+        placed = points - (low + high) / 2 + old_translation
+        placement = "re-centred on the chest bounding box"
+    print(f"  placement: {placement}")
+    print(f"  placed aabb x {placed[:, 0].min():.3f}..{placed[:, 0].max():.3f}  "
+          f"y {placed[:, 1].min():.3f}..{placed[:, 1].max():.3f}  "
           f"z {placed[:, 2].min():.3f}..{placed[:, 2].max():.3f}")
 
     by_package: dict[Path, dict[int, bytes]] = {}
@@ -676,7 +758,7 @@ def main() -> None:
         print(f"\n  body donors {['0x%08X' % t for t in donor_tags]}:")
         pools = {"body": load_donors(donor_tags, meshes=(0, 1), allowed=BODY_BONES)}
         inject_slot(by_package, tag, "body", placed, faces, pools,
-                    uv_header_fb, uv_body_fb, rigid)
+                    uv_header_fb, uv_body_fb, rigid, authored)
 
     for tag in BLANK:
         model = load_model(tag)

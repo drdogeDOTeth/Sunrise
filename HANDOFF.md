@@ -1,8 +1,9 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-20 (later). **Status: `_19` written and awaiting a Tower verdict.** The
-whole 23,512-vertex body is back on the **chest draw alone**, one bind frame, but now weighted
-across the **full 1–28 joint rig** instead of 16 torso joints. `_18`'s three-slot split is gone.
+**Updated:** 2026-08-20 (evening). **Status: `_20` written, awaiting a Tower verdict.** The body
+is now **posed onto the recovered rig in Blender and carries the GLB's own skin weights**. No
+donor transfer, no hand-tuned arm swing. `_19` (whole body, chest draw, joints 1–28) rendered in
+the Tower as a recognisable chrome figure; `_20` fixes the arms and hands on top of it.
 
 **Goal:** custom `void_4003GasMask.glb` visibly rendering **and connected** on the playable
 Guardian. Inspect / character select / Tower all draw this inject. Race-head inspect is
@@ -18,11 +19,11 @@ Newest files win:
 
 | package | live | previous |
 |---|---|---|
-| `w64_sandbox_037c` | **`_19`** | `_18` (bad 3-slot) |
-| `w64_sandbox_037d` | **`_19`** | `_18` (bad 3-slot) |
-| `w64_sandbox_0698` | **`_18`** | `_17` |
-| `w64_sandbox_01e2` | `_6` | inert — legs are blanked now |
-| `w64_sandbox_0699` | `_6` | inert — gauntlets are blanked now |
+| `w64_sandbox_037c` | **`_20`** | `_19` |
+| `w64_sandbox_037d` | **`_20`** | `_19` |
+| `w64_sandbox_0698` | **`_19`** | `_18` |
+| `w64_sandbox_01e2` | `_6` | inert — legs are blanked |
+| `w64_sandbox_0699` | `_6` | inert — gauntlets are blanked |
 
 Repo: `C:\Users\Round\OneDrive\Desktop\Destiny2ProjectSunrise\Sunrise` branch `cosmetics`.
 
@@ -170,20 +171,57 @@ Dumped chest extras `0x81531EE8` / `EE9` are `0x80803EB6` / `0x80803EB7`, not FK
 `MAX_BONE = 80` is the packer's dense-weight array width, unrelated to what a draw can pose.
 `BODY_BONE_CEILING = 28` is the rule that matters.
 
-## The one thing `_19` does **not** fix
+## The retarget — what `_20` changed
 
-The custom mesh is a T-pose swung 70° about the shoulder. Destiny's bind pose is not that: the
-arm goes down, out **and forward** — shoulder `(−0.05, 0.19, 1.42)` → wrist `(0.30, 0.39, 1.15)`,
-length 0.48 m. Our swung wrists land at `z ≈ 0.91`, about 0.29 m low, which is why the dry-run
-audit shows drift 0.28–0.29 on bones 19/20 and why **bones 21/22 (hands) receive zero vertices** —
-the hand geometry is nearest to the forearm donors, not the hand donors.
+`retarget_mesh.py` replaces `prepare_mesh.py`. It runs in Blender, and it does three things the
+old script could not.
 
-Standing still this is invisible: at bind pose the skinning matrix is identity, so the mesh
-renders exactly where it was written. It only shows up as exaggerated arm motion once animated.
+**1. It poses the arms onto the rig.** The GLB is a T-pose; Destiny's bind pose is an A-pose with
+the arms angled **forward**. Each arm chain is rotated about its own joint so the custom
+shoulder→elbow and elbow→wrist directions match the rig's: upper arms turn 55°, elbows a further
+19–21°. Only the arms are touched — the GLB's legs and torso already land within a few
+centimetres of the rig (knee 0.529 vs 0.548, hips 1.031 vs pelvis 1.060, head 1.624 vs 1.606).
 
-**The fix is a retarget, not another swing angle.** Rotate each arm chain about its shoulder so
-the custom shoulder→wrist vector aligns with the rig's, using `rig.json`. Do that *after* the
-Tower verdict on `_19`, so the palette change is judged on its own.
+**Never retarget the torso.** Rig bone 5 sits at y −0.120, so pelvis→spine points sideways, and
+aligning to it tilts the whole body.
+
+**2. It exports the GLB's own weights.** Every vertex group maps to a rig bone index, so each
+vertex keeps the weights its artist gave it. Fingers fold onto the wrist (21/22) because the
+rig's finger joints are above the ceiling of 28. This replaces nearest-donor transfer entirely —
+a transfer can only ask "which Scatterhorn vertex is nearest", and that is wrong wherever the two
+bodies are different shapes.
+
+**3. It drops unrigged objects.** The GLB carries an `Icosphere` — 42 verts, no vertex groups, a
+2 m sphere on the origin. `prepare_mesh.py` welded it into the body. (It was *not* in the
+`character_chest.obj` that shipped in `_16`–`_19`, so it never reached the game — but the script
+the old recipe told you to run would have put it there.)
+
+A retargeted mesh is placed **absolutely**, in rig space, not re-centred on the chest model's
+bounding box. Re-centring lifted the whole body 10.6 cm and left the feet hovering above the
+joints that drive them.
+
+### What the audit says
+
+Per-joint drift, custom vertices against the donor vertices on the same joint:
+
+| joint | `_19` (donor weights, 70° swing) | `_20` (authored weights, retargeted) |
+|---|---:|---:|
+| 3 / 4 thigh | 0.215 / 0.242 | **0.065 / 0.061** |
+| 6 / 7 shin | 0.135 / 0.141 | **0.097 / 0.103** |
+| 9 / 10 foot | 0.072 / 0.071 | **0.003 / 0.003** |
+| 15 / 17 upper arm | 0.207 / 0.155 | **0.014 / 0.025** |
+| 19 / 20 forearm | 0.292 / 0.294 | **0.011 / 0.035** |
+| 21 / 22 hand | **no geometry at all** | **843 verts each**, 0.064 / 0.081 |
+| 25 / 26 toe | **no geometry at all** | **918 / 915 verts**, 0.001 |
+
+Worst drift fell from 0.294 m to 0.103 m, and every joint in the rig now carries geometry.
+
+Rebuild with:
+```
+blender --background --python retarget_mesh.py -- 23512 character_body.obj
+```
+`--no-retarget` leaves the T-pose, and `inject_scatterhorn.py --no-authored` falls back to donor
+weights — those two flags are how to bisect if `_20` looks wrong.
 
 ---
 
@@ -317,15 +355,25 @@ blender --background --python prepare_mesh.py -- 23512 character_chest.obj
 
 ---
 
-## Next, after the Tower verdict
+## Next: UVs and textures
 
-1. **Arm retarget** — rotate each arm chain onto the rig's shoulder→wrist vector from
-   `rig.json`, replacing the hard-coded 70° swing. This is what gives bones 21/22 real
-   geometry. See "the one thing `_19` does not fix".
-2. **Weights from the GLB's own armature.** `void_4003GasMask.glb` carries 48 named joints and
-   real weights. Mapping those names onto the recovered rig beats nearest-donor entirely,
-   because it never depends on the two bodies being the same shape.
-3. **UV bake** so the body stops wearing tiled Scatterhorn chrome.
+Geometry and skinning are done. The body still **wears Scatterhorn's chrome** because
+`clone_uvs` only *resizes* the original stride-24 texcoord buffer to the new vertex count — it
+tiles garbage UVs rather than writing the mesh's own. That is the whole reason everything looks
+like polished metal.
+
+What that needs, in order:
+
+1. **Export the GLB's UVs** alongside positions and weights in `retarget_mesh.py`. The loop is
+   already there; the mesh has a UV layer per object and they survive the join and the decimate.
+2. **Work out the stride-24 texcoord layout.** 24 bytes per vertex holds more than a UV pair —
+   normals and tangents live there too, and writing a UV without the normal will flat-shade or
+   invert the lighting. Dump `0x80EFA1C8`-family texcoord buffers and decode before writing.
+   `GEOMETRY.md` has the position layout; this one is not decoded yet.
+3. **Then textures.** Materials are class `0x80807140` (208 B, references `0x808071E8` +
+   `0x808071DC`) — that is the material/technique resource identified back when the "owner tags"
+   were retracted. A texture swap is a separate, easier problem than geometry and the writer
+   already handles arbitrary entry resizing.
 
 Mesh 1 (stride 12; chest bone 20, legs 25/26) is a separate packer. `rewrite_chest` zeros
 non-mesh-0 parts. Do not un-zero original extras.
@@ -336,7 +384,9 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 | tool | what |
 |---|---|
-| `inject_scatterhorn.py` | **Current injector.** Whole body, chest draw, joints 1–28. |
+| `retarget_mesh.py` | **Current mesh build.** Blender: drops unrigged objects, poses the arms onto `rig.json`, welds/decimates, exports OBJ + real per-vertex weights on rig bone indices. |
+| `prepare_mesh.py` | Superseded. Joins every object including the unrigged icosphere, and throws the armature away. |
+| `inject_scatterhorn.py` | **Current injector.** Whole body, chest draw, joints 1–28, authored weights when a `_weights.json` sits beside the mesh. |
 | `bone_frames.py` | Proves the index space is global. Offline, seconds. |
 | `bone_probe.py` | Raw part records + per-part bone sets. Standalone, no `parse_models`. |
 | `skeleton.py` | Recovers the rig → `objs/skeleton/rig.json` + `rig.obj` |
@@ -370,6 +420,7 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Suggested first message back to the user
 
-`_19` is installed. Launch, go to the Tower, and look at whether the **legs bend and the feet
-reach the ground** — that is the one thing this layer changed. Do not re-derive the bone census
-or re-argue the palette; both are settled and written down above.
+`_20` is installed. Launch, go to the Tower, and look at the **arms and hands** — that is what
+this layer changed. Do not re-derive the bone census, re-argue the palette, or re-tune an arm
+swing angle; all three are settled and written down above. If the body looks right, the next
+work is UVs, not geometry.
