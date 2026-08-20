@@ -1,6 +1,6 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-20 (evening). **Status: `_22` WORKS. The custom character is in the game.**
+**Updated:** 2026-08-20 (full texture sweep `_26`). **Status: `_22` geometry WORKS. `_24` and `_25` both showed nothing. The 55-swatch probe turns out to have covered only 3.4% of the textures in those packages — `_26` paints the other 527.**
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything." — on `_20`
@@ -17,8 +17,8 @@ bone palettes, arm angles or the tangent frame.
 
 Three things remain, none of them geometry:
 
-1. **Albedo is still Scatterhorn's.** The body wears the robe's colours through the custom
-   model's own UV layout. See "Then: textures".
+1. **Albedo is still Scatterhorn's, and it does not come from the 55 sandbox textures we
+   painted.** Those patches loaded; the Guardian never samples them. See "Then: textures".
 2. **The custom mesh has five texture atlases and we draw through two parts.** Structural, and
    it gates textures. Same section.
 3. **Gloves still draw over the custom hands**, and the bald race head still draws above the gas
@@ -34,11 +34,14 @@ Newest files win:
 
 | package | live | geometry | note |
 |---|---|---|---|
-| `w64_sandbox_037c` | **`_23`** | `_22` | `_23` = flat-colour texture probe |
-| `w64_sandbox_037d` | **`_23`** | `_22` | `_23` = flat-colour texture probe |
-| `w64_sandbox_0698` | **`_22`** | `_21` | `_22` = flat-colour texture probe |
-| `w64_sandbox_0699` | **`_7`** | — | `_7` = flat-colour texture probe |
+| `w64_sandbox_037c` | **`_26`** | `_22` | `_26` = full texture sweep; `_25` = t0 remap + sidecars; `_24` = inert tints |
+| `w64_sandbox_037d` | **`_24`** | `_22` | `_24` = full texture sweep; `_23` = the 55-swatch probe |
+| `w64_sandbox_0698` | **`_23`** | `_21` | `_23` = full texture sweep; `_22` = the 55-swatch probe |
+| `w64_sandbox_0699` | **`_8`** | — | `_8` = full texture sweep; `_7` = the 55-swatch probe |
 | `w64_sandbox_01e2` | `_6` | — | inert; legs are blanked |
+| `w64_sandbox_01db` | **`_6`** | — | dye paint plate t3 remaining mips |
+| `w64_sandbox_020c` | **`_6`** | — | dye paint cloth t7 remaining mips |
+| `w64_sandbox_020e` | **`_7`** | — | dye paint suit t5 remaining mips |
 
 **Package indices are per-package, not a version number** — the injector writes each package its
 own next index. "The `_22` inject" is `037c_22` + `037d_22` + `0698_21`; the texture probe on top
@@ -146,8 +149,10 @@ See "The retarget — what `_20` changed".
 - Do **not** copy robe weights by **height rank**.
 - Do **not** inject sash jacket `0x80EC2AB4`.
 - Do **not** dump patched sandbox tags whose **bodies we rewrote** (`037c` / `037d` /
-  `0698` mesh/position/UV, now also `01e2` / `0699` UV). Unpatched entries in a patched
-  package (e.g. `0x81531EE8` / `EE9` in 0698) are still safe.
+  `0698` mesh/position/UV, `01e2` / `0699` UV, dye remaining-mip sRGB in `01db` /
+  `020c` / `020e`, dye bodies `0x80EF9662` / `666` / `6AA`, plate/cloth DyeInfo
+  sidecars `0x80EF9661` / `0x80EF969D` in `037c_25`). Safe: `0x81531EE8` / `EE9`,
+  40-byte dye texture headers, DyeInfo **16-byte** headers, suit sidecar `0x80EF9663`.
 - Do **not** `from resolve import ...` (CLI on import).
 - Do **not** run `wrap_player_body.py` / `inject_player_body.py` (Tower frames).
 - Tags: `0x80800000 + (package_id << 13) + entry`. Never OR.
@@ -294,7 +299,9 @@ weights — those two flags are how to bisect if `_20` looks wrong.
 8. **Write the buffer's package, not the model's.** `package_of(position_buffer)`. Buffer
    *headers* live in `0698`; position buffers live in `037d`. They are different packages.
 9. **Do not dump rewritten mesh/position/UV tags** in `037c` / `037d` / `0698` / `01e2` /
-   `0699`. Exception: **`0x81531EE8` / `0x81531EE9`**, and material entries, which we never write.
+   `0699`. We **do** write dye bodies (`0x808071F3`) and DyeInfo sidecars now; do not dump
+   those either. Exception: **`0x81531EE8` / `0x81531EE9`**, materials, 40-byte dye
+   texture headers, DyeInfo 16-byte headers, suit sidecar `0x80EF9663`.
 
 **Version facts**
 
@@ -573,29 +580,150 @@ searching all 12 dumped materials against every one of the game's 181,141 forty-
 returns only the two shaders, and the one 64-bit field that could hold a texture (`+0x60`) is
 `0xCBF29CE484222325`, the FNV-1a offset basis — the hash of nothing.
 
-The binding therefore lives *above* the material, most likely in the arrangement/dye data the
-appearance system already deals in. Offline search cannot reach it: of **32,713 entries in these
-four packages only 48 are unencrypted**, and none of them names a texture either.
+The binding therefore lives *above* the material: the appearance system's **dye / shader** path.
 
-### Next action: the flat-colour probe is written, launch once
+### `_23` swatch probe: loaded, sampled by nobody
 
-`paint_textures.py` overwrote **all 55 texture bodies with a distinct flat colour** — layers
-`037c_23`, `037d_23`, `0698_22`, `0699_7`, 237.4 MB, all written and verified. Whatever colour
-appears on the Guardian names the entry that produced it; the map is `texture_legend.json`.
+User launched, closed, reported no swatch colour on the Guardian. That is a real negative, not a
+missed install.
 
-Two properties make this safe and cheap. A flat colour in BC7 is **the same 16-byte block
-repeated**, so an entry is filled without knowing its width, height or mip count — nothing here
-rests on the header decode above. And **every entry keeps its original size**, so the 40-byte
-headers are not touched at all.
+Proof the patches were live: this same launch dumped `0x80EFAD63` (one of the 55) at 5,586,944 B,
+and that dump is byte-for-byte the flat `#447A98` block we wrote into `037d_23`. Unique 16-byte
+blocks in the first kilobyte: **1**. Offline `Package.read_entry` of the same tag is plain,
+`patch_id=23`, flags 0. If the Guardian had sampled it, it would have been a solid slate blue.
 
-`bc7_mode6_flat()` holds both endpoints equal and every index at zero, so all interpolations land
-on one colour; with both p-bits zero a channel is exactly `value << 1`, which is why the palette
-uses only even components. `unpack_mode6()` re-reads a packed block with separate code and the
-tool refuses to run unless all 55 round-trip.
+What the "slot tables" actually were: `0x81532C61` / `0x81532B04` / `0x81532693` / `0x81532C5F`
+are **DXBC shader bodies**, paired with 40-byte shader headers the same way textures pair. They
+begin `44 58 42 43`. Charm's Shadowkeep material layout matches the dump: VS at `+0x48`, PS at
+`+0x2C8`, `VSTextures` at `+0x50` and `PSTextures` at `+0x2D0` — both **count 0, rel 0** on the
+two carrier materials.
 
-Then: use the result to pick which entries to overwrite with the GLB's atlases (converted to BC7
-mode 6 at the original dimensions, so sizes stay identical and headers stay untouched), and split
-the mesh into five parts by `character_body_groups.json`.
+The part-10 pixel shader (`0x81532B04`) still *declares* the slots it will sample. SHEX
+`dcl_resource_texture2d` (opcode `0x58`) names **t0, t1, t2, t5, t6**; `dcl_sampler` (opcode
+`0x5A`) names s1–s5, which is why the material's five resource refs are samplers. The GPU binds
+those t-slots at draw time from dyes, not from anything in the material.
+
+### Correction: the 55 were 3.4% of the textures, not all of them
+
+`paint_textures.py` originally found textures by matching **two exact byte sizes** — 5,586,944 and
+2,793,472, the totals a 2048² and a 1024×2048 BC7 mip chain happen to come to. That is not what a
+texture is.
+
+Found **structurally** instead — a 40-byte header entry and a body that reference each other, no
+size assumption — those four packages hold **1,638 textures**, sizes 184 B to 5,586,944 B:
+
+| package | textures | of those, painted in `_23` |
+|---|---:|---:|
+| `sandbox_037c` | 406 | 9 |
+| `sandbox_037d` | 429 | 10 |
+| `sandbox_0698` | 175 | 4 |
+| `sandbox_0699` | 628 | 31 |
+
+A texture is also allowed to be **split**: `+0x24` of the header names a buffer holding mip 0+1,
+and the entry paired with the header holds the remaining mips. Size-matching sees neither half.
+That is the same layout the dye textures use, and it is why sizes like 5,488 and 21,872 are
+normal rather than suspicious.
+
+So "those textures never bind to the Guardian" is only true of the 55. The sweep in `_26` paints
+the other **527** (the rest of the 1,638 are not a whole number of BC7 blocks and are left alone),
+in 12 contiguous colour buckets of ~40 tags each.
+
+`ours()` keeps the sweep off our own work: everything the writer emits is a **plain** block, and
+plain blocks are the only thing in a shipped destination package that is neither encrypted nor
+compressed. That excludes the injected vertex, index and UV buffers — which pair a header with a
+body exactly like a texture and would otherwise be repainted — and the dye bodies and sidecars
+written in `_25`.
+
+### How a Destiny shader actually paints the mesh
+
+A cosmetic shader is not composited onto a texture file. It is a **plug** whose art block
+publishes material pairs `(key, dyeIndex)`. `character_appearance_render.cpp` folds the base item
+then every plug, stage by stage, and only the first **six** distinct keys reach the appearance
+record. The gear renderer looks those six pairs up and binds each dye's textures onto the mesh
+material's empty t-slots.
+
+Scatterhorn Robe `0xF8689C4C` default pairs, from `build_data.bin`:
+
+| key | dye | channel (Charm names) |
+|---:|---:|---|
+| 0 | **6714** | ArmorPlate |
+| 1 | **6715** | ArmorSuit |
+| 2 | **6716** | ArmorCloth |
+
+Initial shader plug `0x491C30A4` (bucket 14, 30 override rows) maps the same three keys to dyes
+7101/7103/7102, and those three resolve to the **same entity-parents** as 6714/6715/6716. One
+dump covers both.
+
+### Dye hop (bodies dumped 2026-08-20; hop is closed)
+
+`0x81613D24` is the art-dye table, 12,506 × 8 B (`artDyeHash`, `dyeManifestHash`).
+`0x80EC3F60` maps a `dyeManifestHash` onto an entity-parent. Class `0x8080744A`, 24 B, child at
+`+0x10`, package `investment_0375`. For **armour** that child is an SEntity. For **dyes** it is
+not: WQ's `0x80806FA3` is zero here; SK uses class **`0x808071CD`**, 24 B, 4,966 of them, in
+`sandbox_0207`.
+
+`0x808071CD` layout (proven from the dump, not from Charm): FileSize at `+0x00`, channel index
+at **`+0x08`** (0 plate / 1 suit / 2 cloth), dye-body tag at **`+0x0C`**, `0xFFFFFFFF` at
+`+0x10`.
+
+| dye | entity-parent | stub (`0x808071CD`) | body (`0x808071F3`, 1,515 B) |
+|---:|---|---|---|
+| 6714 / 7101 | `0x80EEACFC` | `0x80C0F9A3` channel 0 | **`0x80EF9662`** `gear_dye_0` |
+| 6715 / 7103 | `0x80EEAD33` | `0x80C0F9A7` channel 1 | **`0x80EF9666`** `gear_dye_1` |
+| 6716 / 7102 | `0x80EEADF8` | `0x80C0F9DB` channel 2 | **`0x80EF96AA`** `gear_dye_2` |
+
+SK dye body, dumped, Charm `SDye` analogue:
+
+| offset | field |
+|---|---|
+| `+0x00` | FileSize 1515 |
+| `+0x08` | StringPointer → `gear_dye_N` |
+| `+0x40` | DyeTextures DynamicArray, element `0x80807211`, `{uint32 slot, FileHash header}` |
+| `+0x88` | DyeData DynamicArray, 27 × float4, element `0x80800090` |
+| `+0xB8` | uint32 (7 plate / 6 suit / 5 cloth) |
+| `+0xBC` | FileHash → 16-byte DyeInfo header; `entry.reference` is the **432 B sidecar** |
+
+| channel | slots | header | format | large (`+0x24`) | large size | remaining mips |
+|---|---|---|---|---|---:|---:|
+| plate | t3 | `0x80BB71AD` | BC7_UNORM_SRGB 256² | **`0x80B6A11D`** | 81,920 | 5,488 |
+| plate | t4 | `0x80B7B43E` | BC7_UNORM 256² | `0x80B361D2` | 81,920 | 5,488 |
+| suit | t5 | `0x80C1D3CA` | BC7_UNORM_SRGB 512² | **`0x80B3611C`** | 327,680 | 21,872 |
+| suit | t6 | `0x80C1D3CD` | BC7_UNORM 512² | `0x80B3611D` | 327,680 | 21,872 |
+| cloth | t7 | `0x80C184F9` | BC7_UNORM_SRGB 512² | **`0x80B763E8`** | 327,680 | 21,872 |
+| cloth | t8 | `0x80BB3BFD` | BC7_UNORM 512² | `0x80B6A137` | 327,680 | 21,872 |
+
+Charm `STextureHeader.LargeTextureBuffer` at `+0x24` holds mip 0+1. `entry.reference` holds the
+rest (64px-and-under, or 128px-and-under). Header `DataSize` is the sum.
+
+DyeInfo sidecars (not dumped before `_25`; Charm comments "Bungie stopped using the DyeInfo
+file" and copies from inline DyeData instead):
+
+| channel | 16-byte header | 432 B body (`entry.reference` of the header) |
+|---|---|---|
+| plate | `0x80EF9660` | `0x80EF9661` |
+| suit | `0x80EF9664` | `0x80EF9663` (still shipped; dump this one) |
+| cloth | `0x80EF96A9` | `0x80EF969D` |
+
+432 B = 27 × float4, same count as SK DyeData. WQ Charm `DyeInfo` is only 21 vec4s.
+
+### Probe log (do not repeat a row)
+
+| probe | layer | visual | conclusion |
+|---|---|---|---|
+| 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
+| **527× all remaining sandbox textures**, 12 colour buckets | **`037c_26` / `037d_24` / `0698_23` / `0699_8` (current)** | **awaiting launch** | a colour names a bucket of ~40; nothing means the albedo is not in these four packages at all |
+| remaining-mips **incl. normals** t4/t6/t8 | deleted | **clay-white + black splotches** | dye remaining-mips **are** sampled; do not flatten normals |
+| sRGB **top mips** t3/t5/t7 | deleted | grayscale zebra weave | character select is not sampling mip 0+1 |
+| sRGB **remaining-mips only** t3 red / t5 green / t7 blue | `01db_6` / `020c_6` / `020e_7` | **no colour** | those sRGB tiles are not visible albedo |
+| inline DyeData albedo vec4s | `037c_24` | **no colour** | Charm's inline copy is not the live colour path |
+| **t0 remap + DyeInfo sidecars** | **`037c_25` (current)** | **awaiting launch** | green = t0; red/blue = sidecar; nothing = neither |
+
+t0/t1/t2 are still unnamed by the dye. Part-10 PS declares t0, t1, t2, t5, t6. DyeTextures only
+name t3–t8. Material float4s on `0x80EF98DB` look like roughness knobs, not Scatterhorn
+grey-green albedo — do not patch those until `_25` returns.
+
+Leave `_23` installed. Leave remaining-mip sRGB paint installed (needed for the t0 test).
+Do not `--undo`. Geometry still `_22`.
 
 Mesh 1 (stride 12; chest bone 20, legs 25/26) is a separate packer. `rewrite_chest` zeros
 non-mesh-0 parts. Do not un-zero original extras.
@@ -609,7 +737,11 @@ non-mesh-0 parts. Do not un-zero original extras.
 | `retarget_mesh.py` | **Current mesh build.** Blender: drops unrigged objects, poses the arms onto `rig.json`, welds/decimates, exports OBJ + per-vertex weights on rig bone indices + `_frame.bin` (tangent frame) + `_groups.json` (source material per triangle). |
 | `material_probe.py` | Reads each part's material tag offline, and writes the dump request for the material bodies. |
 | `texture_probe.py` | Finds every texture pair offline (40-byte header ↔ data) and decodes the header. |
-| `paint_textures.py` | **Current texture step.** Overwrites all 55 texture bodies with distinct flat BC7 colours at their original sizes, and writes `texture_legend.json`. Includes a mode-6 packer and an independent unpacker that must agree before it writes. |
+| `paint_textures.py` | **Current texture step.** Flat-colour probe of every sandbox texture, found structurally (40-byte header ↔ mutual body), in 12 colour buckets. `ours()` skips plain blocks so it never repaints our own buffers. Its first version matched two byte sizes and covered 3.4%. |
+| `paint_dye_textures.py` | sRGB remaining-mips t3/t5/t7. **Done.** On disk, no visible colour. Leave installed for `_25`. |
+| `paint_dye_tints.py` | Inline DyeData tints. **`037c_24`. Failed visually. Do not rerun.** |
+| `paint_dye_bind.py` | **Current texture step.** `037c_25`: restore dye bodies, suit slot 5→0, plate/cloth DyeInfo sidecars. |
+| `dye_probe.py` | Dye index → entity-parent → `0x808071CD` stub (`+0x0C`) → `0x808071F3` body. Hop closed. |
 | `decode_texcoords.py` | Decodes and re-verifies the stride-24 second vertex buffer against the geometry. |
 | `prepare_mesh.py` | Superseded. Joins every object including the unrigged icosphere, and throws the armature away. |
 | `inject_scatterhorn.py` | **Current injector.** Whole body, chest draw, joints 1–28, authored weights when a `_weights.json` sits beside the mesh. |
@@ -646,19 +778,24 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**The character works. Do not re-open geometry, skinning or the tangent frame** — no bone
-census, no palette argument, no arm-swing tuning, no weight transfer. All settled above.
+**The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
+dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`.
 
-The next step is **textures**, and it is blocked on one dump:
+`_25` came back **no colour** — so neither the t0 remap nor the DyeInfo sidecars are the albedo
+path. Its dump did land: `0x80EF9663` (432 B suit sidecar) and the three 16-byte DyeInfo headers
+are on disk and still undecoded.
 
-1. `python material_probe.py --request` has already written 14 material tags to
-   `C:\Sunrise\bin\x64\Sunrise\dump\request.txt`. Material bodies are encrypted.
-2. Ask the user to launch once and reach the character screen, then quit.
-3. `python material_probe.py` — it lists every tag-range dword in each material body with its
-   class, size and package. That is how the texture slots get identified.
-4. Decode the texture entry format (expect a header entry plus a mip-pyramid data entry), convert
-   the GLB's PNG/JPEG maps into it, rewrite five materials to point at them, and split the mesh
-   into five parts using `character_body_groups.json`.
+1. Current: **`_26`**, the full 527-texture sweep via `paint_textures.py`. **One**
+   character-screen look, then quit:
+   - **any bucket colour on the body** — read the hex off the screenshot, and
+     `texture_legend.json` names the ~40 tags it could be. Re-run the sweep over just that
+     range to split it twelve ways again; two launches take 1,638 candidates to about a dozen.
+   - **nothing** — the albedo is genuinely not in these four packages, and the next move is the
+     package trace, not another paint. `live_models.py` with **no `--match`** gives a package
+     histogram from a capture that needs no dumps; `globals_0238` led it at 1,702 live handles
+     last time and has never been painted or dumped.
+2. Geometry stays `_22`. Remaining-mip sRGB paint stays.
+3. Floating hands / bald race head are still independent cosmetics.
 
 If the user wants a quick win instead, the leftover glove and the bald race head are both
 cosmetic and independent of the texture work.
