@@ -525,19 +525,41 @@ per-material index ranges** and give each its own part. The model has 58 parts t
 **Reuse existing material entries, do not invent new ones.** Pick five of the 14, rewrite each to
 point at textures we upload, and each carrier part keeps a material tag the game already trusts.
 
-### Next action: one game launch
+### The materials are dumped, and the texture hop is understood
 
-`python material_probe.py --request` has already written 14 material tags to
-`C:\Sunrise\bin\x64\Sunrise\dump\request.txt`. Material bodies are encrypted, so they need one
-launch to dump. Safe to dump — we never rewrite material entries, only the buffers beside them.
+**A texture is two entries that reference each other: a 40-byte header and its data.** True for
+all 55 in the Scatterhorn packages — `0x80EFAD60` (40 B) ↔ `0x80EFAD63` (5,586,944 B). Data is
+**5,586,944 B** (2048×2048 BC7 with a mip chain) or **2,793,472 B**, its half.
 
-Launch, reach the character screen, quit, then `python material_probe.py` again: it lists every
-tag-range dword in each material body with its class, size and package, which is how the texture
-slots get identified.
+That 40 is the same size as the entries a material points at, so **materials name their textures
+directly**, at `+0x048` and `+0x2C8`:
 
-After that: decode the texture entry format (expect a small header entry plus a mip-pyramid data
-entry — the "2 entries each, sizes halving" pattern seen in gear packages), convert the GLB's
-PNG/JPEG maps into it, and write them. The writer already resizes entries freely.
+| material | +0x048 → data | +0x2C8 → data |
+|---|---|---|
+| `0x80EF98DB` (part 10) | `0x81532C61`, 2,952 B | `0x81532B04`, 8,452 B |
+| `0x80EF8C3C` (part 32) | `0x81532693`, 2,528 B | `0x81532C5F`, 2,056 B |
+
+**Those are tiny, and that is our own doing.** Carrier parts 10 and 32 were originally minor
+pieces of the robe, so they carry minor *detail* materials — and we force all 46,068 triangles
+through them, so the whole body wears a trim texture. When the mesh is split into five
+per-material parts, each part's material tag is ours to choose: pick materials that sample the
+5.6 MB maps. `material_probe.py` lists all 14 with sizes and packages.
+
+The `+0x4D0`-onward 8-byte → 52-byte pairs live in `globals_0238` / `environments_0235`, are
+shared between materials, and repeat within one material (part 10 references the same two five
+times). Samplers or fallbacks, not the robe's skin.
+
+### Next action: one more launch
+
+`python texture_probe.py --request` has written 10 tags (5.6 MB) to
+`C:\Sunrise\bin\x64\Sunrise\dump\request.txt`: the four data entries our carriers sample, the
+shared 52-byte pairs, and **one full texture header with its 5.6 MB body** so the header layout
+and the pixel format are decoded in the same launch. None are entries we rewrite, so dumping is
+safe.
+
+Then: decode the 40-byte header (expect width, height, format, mip count), convert the GLB's
+PNG/JPEG maps to that pixel format, write the new data entries and headers, and split the mesh
+into five parts by `character_body_groups.json`. The writer already resizes entries freely.
 
 Mesh 1 (stride 12; chest bone 20, legs 25/26) is a separate packer. `rewrite_chest` zeros
 non-mesh-0 parts. Do not un-zero original extras.
