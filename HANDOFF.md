@@ -1,9 +1,21 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-20 (evening). **Status: `_20` written, awaiting a Tower verdict.** The body
-is now **posed onto the recovered rig in Blender and carries the GLB's own skin weights**. No
-donor transfer, no hand-tuned arm swing. `_19` (whole body, chest draw, joints 1–28) rendered in
-the Tower as a recognisable chrome figure; `_20` fixes the arms and hands on top of it.
+**Updated:** 2026-08-20 (evening). **Status: `_20` WORKS. User-confirmed in game.**
+
+> "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
+> world (i went to mercury) no stretching or anything."
+
+The custom character renders correctly on the playable Guardian in **all three views** — Tower,
+character screen, and in-world on Mercury — with **no stretching**, correct proportions, and
+articulated hands, arms and legs. **The geometry and skinning problem is solved.** Do not
+re-open it, and do not re-tune weights, bone palettes or arm angles.
+
+Two things remain, and neither is geometry:
+
+1. **Gloves still draw over the custom hands.** Some gauntlet-side model is still rendering
+   beyond the pair we blank. See "the leftover gloves" below.
+2. **The body wears tiled Scatterhorn texture.** UVs are the whole remaining problem. See
+   "Next: UVs and textures".
 
 **Goal:** custom `void_4003GasMask.glb` visibly rendering **and connected** on the playable
 Guardian. Inspect / character select / Tower all draw this inject. Race-head inspect is
@@ -30,8 +42,9 @@ Repo: `C:\Users\Round\OneDrive\Desktop\Destiny2ProjectSunrise\Sunrise` branch `c
 **Do not `--undo`.** `inject_mesh.py --undo` deletes *every* receipt patch and returns vanilla
 Scatterhorn. Write a **new layer** instead.
 
-Judge in the Tower. Success looks like a connected chrome humanoid whose **legs bend at the
-knee and whose feet sit on the ground** — that is the specific thing `_19` changed.
+**`_20` is a good state. Branch from it; do not regress it.** If a later layer breaks the body,
+the recipe that produced `_20` is: `retarget_mesh.py` for the mesh, then `inject_scatterhorn.py`
+with no flags.
 
 ---
 
@@ -354,6 +367,22 @@ blender --background --python prepare_mesh.py -- 23512 character_chest.obj
 ```
 
 ---
+
+## The leftover gloves
+
+The custom hands render correctly, but a glove still draws over them. The gauntlet models we
+blank are `0x80EF981E` / `0x80EF9809`, which came from arrangement 2292 — so something else is
+drawing. Candidates, cheapest first:
+
+1. **The gauntlet arrangement carries more than two models.** `lookup_arrangement.py` resolves an
+   arrangement hash to a pair; re-check whether 2292 yields further entity models beyond A/B, the
+   way the chest SEntity also carries the second robe `0x80EFA1D4` / `0x80EFA1B3`.
+2. **A sibling model on the same SEntity**, exactly like the second robe. Scan the gauntlet
+   SEntity's resource for every `0x808073A5` rather than taking the first.
+3. **Mesh 1 of the gauntlet models.** `blank_model` zeroes every part's index count across all
+   meshes, so this is unlikely, but worth confirming from the receipt.
+
+This is cosmetic and low-risk. Do not fix it in the same layer as a UV change.
 
 ## Next: UVs and textures
 
