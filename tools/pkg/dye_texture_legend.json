@@ -1,0 +1,50 @@
+[
+  {
+    "label": "plate_t3",
+    "channel": "plate",
+    "slot": 3,
+    "header": "0x80BB71AD",
+    "small": "0x80BB71AE",
+    "package": "w64_sandbox_01db_5",
+    "size": 5488,
+    "format": 99,
+    "rgb": [
+      254,
+      0,
+      0
+    ],
+    "hex": "#FE0000"
+  },
+  {
+    "label": "suit_t5",
+    "channel": "suit",
+    "slot": 5,
+    "header": "0x80C1D3CA",
+    "small": "0x80C1D3CB",
+    "package": "w64_sandbox_020e_6",
+    "size": 21872,
+    "format": 99,
+    "rgb": [
+      0,
+      254,
+      0
+    ],
+    "hex": "#00FE00"
+  },
+  {
+    "label": "cloth_t7",
+    "channel": "cloth",
+    "slot": 7,
+    "header": "0x80C184F9",
+    "small": "0x80C184FA",
+    "package": "w64_sandbox_020c_5",
+    "size": 21872,
+    "format": 99,
+    "rgb": [
+      0,
+      0,
+      254
+    ],
+    "hex": "#0000FE"
+  }
+]

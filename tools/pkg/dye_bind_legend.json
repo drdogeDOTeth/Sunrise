@@ -1,0 +1,37 @@
+{
+  "layer": "037c_25",
+  "tests": {
+    "green": "suit remaining-mip rebound t5 -> t0 (texture 0x80C1D3CB still painted #00FE00)",
+    "red": "plate DyeInfo sidecar 0x80EF9661, DyeData albedo slots",
+    "blue": "cloth DyeInfo sidecar 0x80EF969D, DyeData albedo slots"
+  },
+  "untouched": {
+    "suit_sidecar": "0x80EF9663",
+    "normals": "t4/t6/t8",
+    "sandbox_2048s": "_23 still installed, inert"
+  },
+  "entries": [
+    {
+      "tag": "0x80EF9662",
+      "what": "dye body restored from dump"
+    },
+    {
+      "tag": "0x80EF9666",
+      "what": "dye body restored + slot 5 -> 0"
+    },
+    {
+      "tag": "0x80EF96AA",
+      "what": "dye body restored from dump"
+    },
+    {
+      "tag": "0x80EF9661",
+      "what": "432 B sidecar tinted red",
+      "hex": "#FF0000"
+    },
+    {
+      "tag": "0x80EF969D",
+      "what": "432 B sidecar tinted blue",
+      "hex": "#0000FF"
+    }
+  ]
+}

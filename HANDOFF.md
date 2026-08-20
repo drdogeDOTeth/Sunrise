@@ -1,6 +1,6 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-20 (texture sweep `_26`, type-filtered). **Status: `_22` geometry WORKS. `_24` and `_25` both showed nothing. A first sweep that trusted entry *pairing* to identify textures painted 356 geometry buffers and caused a GPU device loss; it was reverted. `_26` paints the 228 entries that are `entry_type` 40.**
+**Updated:** 2026-08-20 (dye slot rebind `_27`). **Status: `_22` geometry WORKS. `_26` painted all 228 textures in the four packages and the WEAPON CHANGED COLOUR — paint reaches the GPU and shows. The body did not, so its albedo is not a texture in those packages: nothing is bound to its albedo slot. `_27` rebinds all three dye channels to t0.**
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything." — on `_20`
@@ -744,7 +744,8 @@ file" and copies from inline DyeData instead):
 |---|---|---|---|
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
-| **228× every `entry_type` 40 texture**, 12 buckets | **`037c_26` / `037d_24` / `0698_23` / `0699_8` (current)** | **awaiting launch** | a colour names a bucket of ~20; nothing means the albedo is not in these four packages at all |
+| 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
+| **all three dye channels' albedo tile rebound to t0**, both mip halves painted | **`037c_27` + six dye packages (current)** | **awaiting launch** | red = plate, green = suit, blue = cloth. Nothing = t0 is not the albedo slot, try `--slot 1` |
 | remaining-mips **incl. normals** t4/t6/t8 | deleted | **clay-white + black splotches** | dye remaining-mips **are** sampled; do not flatten normals |
 | sRGB **top mips** t3/t5/t7 | deleted | grayscale zebra weave | character select is not sampling mip 0+1 |
 | sRGB **remaining-mips only** t3 red / t5 green / t7 blue | `01db_6` / `020c_6` / `020e_7` | **no colour** | those sRGB tiles are not visible albedo |
@@ -771,6 +772,7 @@ non-mesh-0 parts. Do not un-zero original extras.
 | `material_probe.py` | Reads each part's material tag offline, and writes the dump request for the material bodies. |
 | `texture_probe.py` | Finds every texture pair offline (40-byte header ↔ data) and decodes the header. |
 | `paint_textures.py` | **Current texture step.** Flat-colour probe of every `entry_type` 40 texture in 12 colour buckets, `--only=A..B` to bisect one. `ours()` skips plain blocks so it never repaints our own buffers; `already_painted()` readmits our own flat paint so a bucket *can* be bisected. Asserts the 55 size-matched textures survive the filter. |
+| `paint_dye_slots.py` | **Current texture step.** Rebinds all three dye channels' albedo tile to one t-slot (`--slot`, default 0) and paints each channel's texture a distinct colour in **both** mip halves, so the channel reports itself and the mip level cannot confound it. |
 | `revert_layer.ps1` | **Recovery.** Moves each package's newest layer aside, reverting to the one beneath. `-Confirm` to act, `-Restore` to put it back. Refuses while destiny2 is running. |
 | `paint_dye_textures.py` | sRGB remaining-mips t3/t5/t7. **Done.** On disk, no visible colour. Leave installed for `_25`. |
 | `paint_dye_tints.py` | Inline DyeData tints. **`037c_24`. Failed visually. Do not rerun.** |
@@ -819,14 +821,26 @@ dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`.
 path. Its dump did land: `0x80EF9663` (432 B suit sidecar) and the three 16-byte DyeInfo headers
 are on disk and still undecoded.
 
-1. Current: **`_26`**, the 228-texture sweep via `paint_textures.py`, type-filtered. **One**
+**The body is white because nothing is bound to its albedo slot — not because the right texture
+has not been found.** That is now the reading the evidence supports, and it retires the whole
+"find and repaint" line of attack that `_23`, `_24` and `_26` all belonged to:
+
+- The part-10 pixel shader declares `t0, t1, t2, t5, t6`. DyeTextures only name `t3`–`t8`.
+- Painting the dye **normals** (t4/t6/t8) visibly changed the body — dye textures do reach it.
+- Painting the dye **sRGB albedo** tiles (t3/t5/t7) did not — the shader is not reading them.
+- `_26` painted all 228 textures in the four packages: **the weapon changed, the body did not.**
+
+So the visible albedo is `t0`/`t1`/`t2`, which nothing supplies. **Bind, do not find.**
+
+1. Current: **`_27`** via `paint_dye_slots.py`. All three dye channels' albedo tile rebound to
+   **t0**, with both mip halves painted so the answer cannot be ambiguous. `_25` tested this and
+   came back empty, but it remapped **only the suit channel** — if the carrier parts draw on
+   plate or cloth, that test could not have shown anything whatever the truth was. **One**
    character-screen look, then quit:
-   - **any bucket colour on the body** — read the hex off the screenshot, and
-     `texture_legend.json` names the ~20 tags it could be. Then
-     `python paint_textures.py --only=0xAAAA..0xBBBB` re-buckets just that range; two launches
-     take 228 candidates to two or three.
-   - **another crash** — revert with `.\revert_layer.ps1 -Confirm` and do not paint again
-     without narrowing what is being written.
+   - **red** = plate is the channel and t0 is the albedo. **green** = suit. **blue** = cloth.
+   - **nothing** = t0 is not the slot. `python paint_dye_slots.py --slot 1`, then `--slot 2`.
+     One variable per launch.
+   - **a crash** — `.\revert_layer.ps1 -Confirm` and narrow before writing again.
    - **nothing** — the albedo is genuinely not in these four packages, and the next move is the
      package trace, not another paint. `live_models.py` with **no `--match`** gives a package
      histogram from a capture that needs no dumps; `globals_0238` led it at 1,702 live handles

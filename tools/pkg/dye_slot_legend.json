@@ -1,0 +1,39 @@
+{
+  "layer": "next 037c",
+  "target_slot": "t0",
+  "channels": {
+    "plate": {
+      "body": "0x80EF9662",
+      "was": "t3",
+      "now": "t0",
+      "texture": "0x80BB71AD",
+      "painted": [
+        "0x80BB71AE remaining mips 5,488 B",
+        "0x80B6A11D mip 0+1 81,920 B"
+      ],
+      "expect": "red #FE0000"
+    },
+    "suit": {
+      "body": "0x80EF9666",
+      "was": "t5",
+      "now": "t0",
+      "texture": "0x80C1D3CA",
+      "painted": [
+        "0x80C1D3CB remaining mips 21,872 B",
+        "0x80B3611C mip 0+1 327,680 B"
+      ],
+      "expect": "green #00FE00"
+    },
+    "cloth": {
+      "body": "0x80EF96AA",
+      "was": "t7",
+      "now": "t0",
+      "texture": "0x80C184F9",
+      "painted": [
+        "0x80C184FA remaining mips 21,872 B",
+        "0x80B763E8 mip 0+1 327,680 B"
+      ],
+      "expect": "blue #0000FE"
+    }
+  }
+}
