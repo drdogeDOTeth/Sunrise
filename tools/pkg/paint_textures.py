@@ -32,6 +32,7 @@ What comes back is a legend: every colour seen on the Guardian names the entry t
 Usage:
     python paint_textures.py --dry-run    # sizes and block headroom, nothing written
     python paint_textures.py              # write the patch layer, then launch once
+    python paint_textures.py --only=0x80EFB30A..0x80EFB7EE   # re-bucket one bucket's range
 """
 from __future__ import annotations
 
@@ -43,7 +44,7 @@ from pathlib import Path
 
 from bone_probe import INDEX, entry_of
 from inject_mesh import entry_index_of, package_of, write_all
-from tigerpkg import BLOCK_SIZE, Package, TAG_BASE, TAG_ENTRY_BITS
+from tigerpkg import BLOCK_SIZE, Package, PackageError, TAG_BASE, TAG_ENTRY_BITS
 
 LEGEND = Path(__file__).with_name("texture_legend.json")
 # 2048x2048 BC7 with mips to 128, and the same at half. Both are exact across the install.
@@ -123,6 +124,33 @@ def ours(pkg: Package, entry) -> bool:
     return False
 
 
+def already_painted(pkg: Package, entry) -> bool:
+    """
+    @return True when this entry is a flat colour we painted on an earlier pass.
+
+    Our own paint has to stay *re*-paintable or a bucket can never be bisected - the second sweep
+    needs exactly the tags the first one already covered. Telling paint from geometry needs no
+    bookkeeping file, because the paint describes itself: it is one BC7 mode-6 block repeated, so
+    four consecutive blocks are byte-identical and the first is a valid mode 6. An injected vertex
+    or index buffer is neither. Only ever asked of plain entries, so a flat *shipped* texture -
+    encrypted, and never read here - cannot be mistaken for ours.
+    """
+    try:
+        body = pkg.block_body(entry.start_block)[entry.start_offset:entry.start_offset + 64]
+    except PackageError:
+        return False
+    if len(body) < 64:
+        return False
+    blocks = [body[at:at + BC7_BLOCK_BYTES] for at in range(0, 64, BC7_BLOCK_BYTES)]
+    if any(block != blocks[0] for block in blocks[1:]):
+        return False
+    try:
+        unpack_mode6(blocks[0])
+    except ValueError:
+        return False
+    return True
+
+
 def textures() -> list[tuple[int, int, str]]:
     """
     @return `(tag, size, package stem)` for every texture body in the Scatterhorn packages.
@@ -149,7 +177,7 @@ def textures() -> list[tuple[int, int, str]]:
             tag = TAG_BASE + (package_id << TAG_ENTRY_BITS) + index
             if partner is None or partner.reference != tag or partner.size < BC7_BLOCK_BYTES:
                 continue
-            if ours(pkg, partner) or ours(pkg, entry):
+            if ours(pkg, partner) and not already_painted(pkg, partner):
                 continue
             out.append((entry.reference, partner.size, path.stem))
     return sorted(out)
@@ -176,10 +204,31 @@ def palette(count: int) -> list[tuple[int, tuple[int, int, int]]]:
             for index in range(count)]
 
 
+def narrow(found: list[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
+    """
+    @return `found` cut to the `--only START..END` tag range, when one is given.
+
+    A bucket hit names ~40 tags. Re-running over just that range re-buckets it twelve ways, so a
+    second launch takes it to three or four - and the range comes straight off the legend, with no
+    edit to this file.
+    """
+    for argument in sys.argv:
+        if not argument.startswith("--only"):
+            continue
+        low, _, high = argument.partition("=")[2].partition("..")
+        first, last = int(low, 16), int(high, 16)
+        cut = [row for row in found if first <= row[0] <= last]
+        if not cut:
+            raise SystemExit(f"no textures in 0x{first:08X}..0x{last:08X}")
+        print(f"narrowed to 0x{first:08X}..0x{last:08X}: {len(cut)} of {len(found)} textures")
+        return cut
+    return found
+
+
 def main() -> None:
-    found = textures()
+    found = narrow(textures())
     if not found:
-        raise SystemExit("no texture-sized entries found")
+        raise SystemExit("no texture-shaped entry pairs found")
     colours = palette(len(found))
 
     # A flat block is its own proof: pack one, unpack it with separate code, compare.
@@ -218,8 +267,13 @@ def main() -> None:
             raise SystemExit("a package would exceed the block ceiling; paint fewer textures")
     print(f"  {'total':<28}     {' ' * 8} {total / 1e6:>7.1f} MB")
 
-    LEGEND.write_text(json.dumps(legend, indent=2), encoding="utf-8")
-    print(f"\nlegend -> {LEGEND}")
+    # Never on a dry run. The legend is the only key to the layer that is *installed*, and a dry
+    # run of a narrowed range would quietly replace it with a description of a layer nobody has.
+    if "--dry-run" not in sys.argv:
+        LEGEND.write_text(json.dumps(legend, indent=2), encoding="utf-8")
+        print(f"\nlegend -> {LEGEND}")
+    else:
+        print(f"\nlegend NOT written (dry run); {LEGEND.name} still describes the live layer")
     for bucket, (red, green, blue) in enumerate(BUCKET_COLOURS):
         members = [row for row in legend if row["bucket"] == bucket]
         if members:
