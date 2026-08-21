@@ -775,6 +775,8 @@ non-mesh-0 parts. Do not un-zero original extras.
 | `material_probe.py` | Reads each part's material tag offline, and writes the dump request for the material bodies. |
 | `texture_probe.py` | Finds every texture pair offline (40-byte header ↔ data) and decodes the header. |
 | `paint_textures.py` | **Current texture step.** Flat-colour probe of every `entry_type` 40 texture in 12 colour buckets, `--only=A..B` to bisect one. `ours()` skips plain blocks so it never repaints our own buffers; `already_painted()` readmits our own flat paint so a bucket *can* be bisected. Asserts the 55 size-matched textures survive the filter. |
+| `glb_textures.py` | Pulls the custom model's own atlases out of the GLB with no Blender and no glTF library, reporting dimensions and which material wears each. `--extract` writes them to `objs/textures/`. |
+| `encode_texture.py` | Encodes an atlas to a Destiny texture body: BC7 mode 6 with a mip chain, sized to an exact entry (`--tag` or `--size`). `--verify` decodes it back with independently written code and reports the error; `--self-test` checks flat colours round-trip. |
 | `trace_model_tags.py` | **Ask, do not guess.** Reads `model_class_trace`'s `r9tags` out of `sunrise.log` — every tag the game resolved per model, logged from process start with no F8 — and reports the textures among them. Writes `traced_textures.json`. |
 | `trace_textures.py` | The F8 package-read capture, mapped through the block table to entries and filtered to textures. Archives the log first, because it rotates one deep. Use when a model lookup names no texture. |
 | `paint_dye_slots.py` | Dye rebind step. Rebinds all three dye channels' albedo tile to one t-slot (`--slot`, default 0) and paints each channel's texture a distinct colour in **both** mip halves, so the channel reports itself and the mip level cannot confound it. |
@@ -866,6 +868,36 @@ considered.
 **Not every texture is BC7.** The traced set contains 43,704 and 87,408 — the same 5,463 blocks at
 8 and at 16 bytes — so `bc1_flat()` handles the 8-byte families (BC1, BC4) that a 16-byte-only
 painter silently skipped.
+
+### The art side is ready and waiting on the slot
+
+Nothing extracted from Destiny has ever been a texture — only geometry — and the material
+dependency set says why. But the custom model's own atlases were never pulled out either, and
+they are what actually goes on the body. `glb_textures.py` gets them with no Blender and no glTF
+library: a GLB is a header then a JSON chunk then a BIN chunk, images sit at a `bufferView`, and
+PNG/JPEG headers give dimensions without an image library.
+
+| material | mesh group | base colour | normal | roughness |
+|---|---|---|---|---|
+| GLSLShader85 | BlackTankTop | 2048² | 2048² | 2048² |
+| GLSLShader13 | SkinTats (body + arms) | 2048² | 2048² | 2048² |
+| GLSLShader66 | GasMask | 2048² | 2048² | 2048² |
+| GLSLShader60 | Silver_Necklace | 2048² | 2048² | 2048² |
+| GLSLShader22 | Twirl | 512² | 512² | — |
+
+**2048×2048 is exactly the top level of Destiny's 5,586,944-byte textures**, so an atlas goes in
+at native size with no resampling and the byte count already matches.
+
+`encode_texture.py` does the encode: BC7 mode 6 with a mip chain, hitting an exact entry size.
+Mode 6 because every block of the dumped `0x80EFAD63` is mode 6 and the flat-colour probe proved
+the game renders ours. The mip count is **derived from the target size, not assumed** — 2048²
+comes to 5,586,944 bytes at five levels and 5,592,405 at a full chain, and guessing wrong is a
+corrupt texture.
+
+Verified against a decoder written separately from the encoder, so agreement is evidence rather
+than tautology: **mean absolute error 0.72–0.79 of 255, 93–99% of pixels within 2, alpha exactly
+255 everywhere.** Worst-case blocks are those needing three or more distinct colours, which a
+single-line mode cannot fit.
 
 ### The tag graph never names the body's texture. The read trace does.
 
