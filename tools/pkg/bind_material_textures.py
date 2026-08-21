@@ -30,21 +30,29 @@ All five are exactly 5,586,944 B, which is the full five-level BC7 chain for 204
 encode lands at native size with no resampling and no entry resize. Their headers are rewritten
 from `0x80EFAD60`, a dumped and verified header for a texture of exactly those dimensions.
 
-**`--bind-only` is the bisect**, and it exists because the first attempt hung the game at character
-select. That layer changed three things at once: it resized five material blobs, rewrote five
-texture headers, and wrote five 5,586,944-byte texture bodies - 27.9 MB, where the largest write
-this pipeline had ever verified was 798 KB across four blocks. `docs/PACKAGES.md` already records
-oversized buffers hanging the loader while single-block ones load fine, so the big write is the
-first suspect and the material surgery is the second.
+**Entry size is not the cause, and neither is the self-length.** Both were suspected and both are
+dead. `verify_bind_layer.py` reads the shipped layer back and finds every invariant holding, and
+the layer *underneath* it - the five-part split the user confirmed working - already carries three
+of our own 5,586,944 B, 22-block plain entries from the `_26` texture sweep. A 21-block entry
+loads; the game has read one back byte-exact.
 
-`--bind-only` separates them: it patches the five materials and writes **no texture data at all**,
-pointing every one of them at a texture that already exists and was never touched. About 8 KB.
-If the game loads, the material surgery is sound and the 27.9 MB write is what hangs it. If it
-hangs anyway, the material surgery is at fault and the atlases are innocent. Either answer costs
-one launch, and it reports itself on screen - all five regions wear the same real texture.
+What has never loaded is the **material surgery**, and it is the only thing both hung layers share.
+`--bind-only` was meant to isolate it but changed two things at once - four materials grow by 32 B
+and a fifth is repointed in place - so it cannot say which half is at fault.
+
+**`--repoint-only` is the bisect that can.** `0x80EFA1DC` is the one carrier material that already
+owns a pixel-texture array, so binding it needs **four bytes and no resize**: slot 3 moves from the
+suit dye tile to `0x80EF89F1`, the gas mask's own header, which was never touched and still
+describes its original shape. Its body is already flat **red** from the `_26` sweep, so the test
+reports itself:
+
+- the gas mask turns red  -> binding works, and the fault is in the append/resize path;
+- it loads unchanged      -> that pixel shader reads a slot other than 3; no hang cause here;
+- it hangs                -> repointing alone hangs the loader and the append is innocent.
 
 Usage:
     python bind_material_textures.py --dry-run
+    python bind_material_textures.py --repoint-only [--dry-run]
     python bind_material_textures.py --bind-only [--dry-run]
     python bind_material_textures.py            # Destiny closed
 """
@@ -197,6 +205,53 @@ def atlas(group: Group) -> bytes:
     return data
 
 
+def repoint_only() -> None:
+    """Repoint one already-bound slot and change nothing else. See `--repoint-only` above."""
+    group = next(g for g in GROUPS if g.source == "GLSLShader66")
+    material = dumped(group.material)
+    if material is None:
+        raise SystemExit(f"0x{group.material:08X}: material not dumped")
+    found = texture_array(material)
+    if found is None:
+        raise SystemExit(f"0x{group.material:08X} has no pixel-texture array, so there is nothing "
+                         "to repoint. This bisect only works on the one material that does.")
+    marker, count = found
+
+    patched, how = bind(material, group.header)
+    if len(patched) != len(material):
+        raise SystemExit(f"repoint resized the blob {len(material):,} -> {len(patched):,} B; "
+                         "that is an append, which is the other half of the bisect")
+
+    # The whole point of this layer is that it touches one tag word and nothing else, so name the
+    # bytes allowed to move rather than counting them - the old and new tags may share a byte.
+    slot_at = next(marker + ARRAY_HEADER + i * ELEMENT_BYTES for i in range(count)
+                   if struct.unpack_from("<I", material, marker + ARRAY_HEADER + i * ELEMENT_BYTES)
+                   [0] == ALBEDO_SLOT)
+    allowed = range(slot_at + 4, slot_at + 8)
+    stray = [i for i, (a, b) in enumerate(zip(material, patched)) if a != b and i not in allowed]
+    if stray:
+        raise SystemExit(f"bytes changed outside the slot-{ALBEDO_SLOT} tag word at "
+                         f"+0x{slot_at + 4:03X}: {[hex(i) for i in stray[:8]]}")
+    changed = sum(a != b for a, b in zip(material, patched))
+    check(patched, group.header, group.material)
+
+    print(f"repoint-only: 0x{group.material:08X} ({group.what}) {how}")
+    print(f"  -> 0x{group.header:08X}, whose body 0x{group.body:08X} is flat red from the "
+          "_26 sweep")
+    print(f"  {len(patched):,} B, 1 entry, {changed} bytes changed at +0x{slot_at + 4:03X}, "
+          "no resize, no texture data written")
+
+    by_package: dict[Path, dict[int, bytes]] = {}
+    put(by_package, group.material, patched)
+    if "--dry-run" in sys.argv:
+        print("dry run; nothing written")
+        return
+    write_all(by_package, "")
+    print("\nGas mask red -> binding works, the append/resize is what hangs it.\n"
+          "Loads unchanged -> that pixel shader does not read slot 3.\n"
+          "Hangs           -> repointing alone hangs the loader; the append is innocent.")
+
+
 def bind_only() -> None:
     """Patch the five materials and write no texture data. See `--bind-only` above."""
     print(f"bind-only: every material -> existing texture 0x{HEADER_TEMPLATE:08X}, "
@@ -222,6 +277,9 @@ def bind_only() -> None:
 
 
 def main() -> None:
+    if "--repoint-only" in sys.argv:
+        repoint_only()
+        return
     if "--bind-only" in sys.argv:
         bind_only()
         return

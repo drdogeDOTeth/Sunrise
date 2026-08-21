@@ -1,6 +1,6 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-20 (hang found and fixed). **Status: the hang is SOLVED — a structured record carries its own byte length at `+0x00`, and the loader believes that over the entry size. Appending an array without updating it put the array outside the region the loader had, and character select hung. 2,715 of 2,718 dumped type-8 records declare their length there. Fixed, guarded against recurrence, and the corrected full atlas bind is live: `037c_29` + `037d_26` + `0698_25` + `0699_9`. See "The hang: a record declares its own length".**
+**Updated:** 2026-08-21. **Status: the corrected atlas bind (`037c_29` + `037d_26` + `0698_25` + `0699_9`) still hangs at character select. The self-length fix is real and is correctly present in the shipped bytes — `verify_bind_layer.py` reads all seventeen entries back and every invariant holds — so it was a real bug but not the only one. Entry size is now DISPROVEN as a cause, offline: the working layer underneath already carries three of our own 22-block, 5,586,944 B entries. The one thing that has never loaded is the material surgery. Next layer is `--repoint-only`: four bytes, one material, no resize. See "The hang, round two".**
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything." — on `_20`
@@ -42,6 +42,11 @@ Newest files win:
 | `w64_sandbox_01db` | **`_6`** | — | dye paint plate t3 remaining mips |
 | `w64_sandbox_020c` | **`_6`** | — | dye paint cloth t7 remaining mips |
 | `w64_sandbox_020e` | **`_7`** | — | dye paint suit t5 remaining mips |
+
+**The `_29` / `_26` / `_25` / `_9` atlas-bind row hangs and is on its way out.** Revert it to
+`_28` / `_25` / `_24` / `_8` — the working five-part split — before writing the next layer, or the
+atlases stay live underneath and defeat the bisect:
+`.\revert_layer.ps1 -Attic _reverted_atlas2 -Confirm`.
 
 **Package indices are per-package, not a version number** — the injector writes each package its
 own next index. "The `_22` inject" is `037c_22` + `037d_22` + `0698_21`; the texture probe on top
@@ -194,7 +199,77 @@ disagrees with its actual length. Negative-tested: stale the length and it raise
 must update `+0x00`. The writer will happily produce a file the registrar accepts and the loader
 hangs on, exactly as the null block SHA-1 once did.
 
-### How it was found, and the two launches it cost
+## The hang, round two — the fix landed and the hang stayed
+
+The corrected layer was launched 2026-08-20 23:48 and **hung identically**. Everything below was
+established from that log and from the installed packages, with **no further launches**.
+
+**The fix is genuinely in the shipped bytes.** `verify_bind_layer.py` opens the newest installed
+patch of every package, pulls all seventeen entries out of the block stream and checks what we know
+how to state: all five materials declare their own length at `+0x00` correctly, all five resolve a
+pixel-texture array with slot 3 pointing at the intended header, every block is plain with a
+matching SHA-1 and 0x800 alignment, and all four packages pass `Package.check()` with zero
+complaints. `diff_entry_rows.py` adds the half `verify_bind_layer.py` structurally cannot see — the
+entry-table **rows** — and every one preserves its original `reference` (the class id the loader
+dispatches on) and `type_info`. Only placement and, for the four appended materials, size moved.
+
+**Entry size is disproven, not merely unproven.** This was the leading suspect and the plan of
+record was to drop to 1024² atlases. It is wrong, and the proof needs no launch: the layer
+*underneath* the atlas bind — the five-part split the user confirmed working, necklace and all —
+already contains `0x80EF880E`, `0x80EF881F` and `0x80EF89F3` at **5,586,944 B across 22 blocks**,
+plain, in patch files **we wrote** (`037c_26`, `037d_24`, the 228-texture sweep). Row 3 of the probe
+log is that same layer rendering with the weapon magenta. A 21-block entry loads, and the game has
+already read one of ours back byte-exact (`0x80EFAD63`, recorded under `_23` above). **Do not spend
+a launch on 1024² atlases.**
+
+**Retracted: "none of our seventeen tags appear at all".** They do not appear in a **healthy**
+launch either — checked against `trace_archive/sunrise-20260820-205929.log`, zero hits for all
+seventeen. It is a property of what `model_class_trace` logs, not evidence about this layer. The
+discriminator that *does* work is volume past character select: a healthy launch logs **3,690**
+lines after `ev=bootflow stage=character_select result=held`, both hangs log **~270** and stop.
+
+**What is left is the material surgery**, the only thing both hung layers share and the only kind of
+write this pipeline has never landed:
+
+| write | ever shipped and loaded? |
+|---|---|
+| type-40 texture body, 5,586,944 B / 22 blocks | **yes** — `_26`/`_24` sweep |
+| type-32 header rewrite | yes |
+| type-8 record rewritten **at the same size** | **yes** — the chest models, five-part split |
+| type-8 record **resized** | **never** |
+| a texture binding **repointed** inside a material | **never** |
+
+Those last two are both untested and both present in both hung layers. `--bind-only` cannot
+separate them — it does both at once.
+
+### `--repoint-only` is the bisect that separates them
+
+`0x80EFA1DC` (GasMask) is the one carrier material that already owns a pixel-texture array, so
+binding it costs **four bytes and no resize**: slot 3 moves from the suit dye tile `0x80C1D3CD` to
+`0x80EF89F1`, the gas mask's own header, which is still the **original encrypted Scatterhorn
+header** and describes its original shape. Its body `0x80EF89F3` is already flat **red** —
+`(254, 0, 0)`, decoded from the BC7 block — left there by the `_26` sweep. So one entry, 1,408 B,
+three bytes actually different, and the test reports itself on screen:
+
+| outcome | conclusion |
+|---|---|
+| **gas mask turns red** | binding works; the fault is in the append/resize path |
+| loads, gas mask unchanged | that pixel shader does not read slot 3; no hang cause here |
+| hangs | repointing alone hangs the loader, and the append is innocent |
+
+Guards, both negative-tested: the edit is refused if it resizes the blob, or if any byte outside the
+slot-3 tag word moves.
+
+```powershell
+.\revert_layer.ps1 -Attic _reverted_atlas2 -Confirm   # back to the working split
+python bind_material_textures.py --repoint-only --dry-run
+python bind_material_textures.py --repoint-only
+```
+
+`revert_layer.ps1` now takes `-Attic`. Each reverted set needs its own, because `-Restore` moves
+back everything it finds and a shared attic restores a layer that never existed.
+
+### How the self-length bug was found, and the two launches it cost
 
 The first atlas layer changed three things at once: five material blobs resized, five texture
 headers rewritten, and 27.9 MB of texture bodies written. `--bind-only` split that — the same five
@@ -214,10 +289,9 @@ cannot put back a mixed set). The split underneath is live and good.
 
 **What the logs say.** `model_class_trace` stops dead mid-resolution — last event at t=33,719 on the
 fresh capture — then nothing but `application_state: Suspend` as the frozen window is clicked at,
-and no `ev=shutdown`. Across the whole launch **none of our seventeen tags appear at all**: not the
-chest models, not the five materials, not the ten texture entries. The game loads other Scatterhorn
-content (55–62 tags in the same four packages) but never reaches ours. Note the log rotates **by
-size at ~750 KB**, not per launch, so both halves must be read.
+and no `ev=shutdown`. ~~Across the whole launch none of our seventeen tags appear at all.~~
+**Retracted** — they appear in no launch, healthy ones included; see "The hang, round two". Note the
+log rotates **one deep on launch**, so two launches destroy a capture; archive it first.
 
 **Ruled out, offline, against the reverted layer:**
 
@@ -232,8 +306,8 @@ size at ~750 KB**, not per launch, so both halves must be read.
 **Entry size was the leading suspect and was wrong.** Each atlas is 5,586,944 B ≈ 21 blocks, against
 a previous verified maximum of 798 KB across four, and `docs/PACKAGES.md` records oversized Mercury
 buffers hanging the loader. It fit the evidence and it was not the cause — `--bind-only` wrote
-7,696 bytes and hung identically. Whether 21-block entries load is **still unproven**; the corrected
-layer is the first real test of it.
+7,696 bytes and hung identically. **Now fully disproven offline**: the working split layer already
+carries three of our own 22-block entries of exactly that size. See "The hang, round two".
 
 ---
 
@@ -909,6 +983,10 @@ file" and copies from inline DyeData instead):
 
 | probe | layer | visual | conclusion |
 |---|---|---|---|
+| atlas bind, self-length stale | `_reverted_atlas` | **hang at character select** | the `+0x00` bug; real, fixed |
+| bind-only, self-length stale | `_reverted_bindonly` | **hang** | cleared the atlases, not the surgery |
+| atlas bind, self-length fixed | `037c_29` / `037d_26` / `0698_25` / `0699_9` | **hang** | fix verified present in the shipped bytes; entry size disproven offline; surgery is what is left |
+| **repoint only, 4 B, one material** | **awaiting launch** | — | gas mask red = binding works |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
@@ -947,7 +1025,10 @@ non-mesh-0 parts. Do not un-zero original extras.
 | `trace_model_tags.py` | **Ask, do not guess.** Reads `model_class_trace`'s `r9tags` out of `sunrise.log` — every tag the game resolved per model, logged from process start with no F8 — and reports the textures among them. Writes `traced_textures.json`. |
 | `trace_textures.py` | The F8 package-read capture, mapped through the block table to entries and filtered to textures. Archives the log first, because it rotates one deep. Use when a model lookup names no texture. |
 | `paint_dye_slots.py` | Dye rebind step. Rebinds all three dye channels' albedo tile to one t-slot (`--slot`, default 0) and paints each channel's texture a distinct colour in **both** mip halves, so the channel reports itself and the mip level cannot confound it. |
-| `revert_layer.ps1` | **Recovery.** Moves each package's newest layer aside, reverting to the one beneath. `-Confirm` to act, `-Restore` to put it back. Refuses while destiny2 is running. |
+| `revert_layer.ps1` | **Recovery.** Moves each package's newest layer aside, reverting to the one beneath. `-Confirm` to act, `-Restore` to put it back, `-Attic` to give a set its own directory. Refuses while destiny2 is running. |
+| `bind_material_textures.py` | Binds an atlas to a carrier material's slot 3. `--repoint-only` is the **current bisect**: one material, four bytes, no resize, self-reporting in red. `--bind-only` does the append and the repoint together, so it cannot separate them. |
+| `verify_bind_layer.py` | Reads the shipped layer back out of the installed packages as the game would — entry sizes, `entry_type`, self-length, texture-array resolution, per-block SHA-1 and alignment. Offline; run it before every launch. |
+| `diff_entry_rows.py` | Diffs an entry's **table row** (`reference`, `type_info`, placement) against the layer beneath. The half `verify_bind_layer.py` cannot see, because it reads bodies *through* those rows. |
 | `paint_dye_textures.py` | sRGB remaining-mips t3/t5/t7. **Done.** On disk, no visible colour. Leave installed for `_25`. |
 | `paint_dye_tints.py` | Inline DyeData tints. **`037c_24`. Failed visually. Do not rerun.** |
 | `paint_dye_bind.py` | **Current texture step.** `037c_25`: restore dye bodies, suit slot 5→0, plate/cloth DyeInfo sidecars. |
@@ -988,8 +1069,13 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
+**Next launch is the `--repoint-only` bisect** — revert to the split, write four bytes, look at the
+gas mask. Commands and the outcome table are in "The hang, round two". Everything else below still
+stands.
+
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
-dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`.
+dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Do not drop the atlases to 1024² —
+entry size is disproven.
 
 `_25` came back **no colour** — so neither the t0 remap nor the DyeInfo sidecars are the albedo
 path. Its dump did land: `0x80EF9663` (432 B suit sidecar) and the three 16-byte DyeInfo headers

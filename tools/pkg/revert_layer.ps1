@@ -5,18 +5,23 @@
 # reversible, which matters because a bad layer's bytes cannot be regenerated from the game: the
 # originals were encrypted and were never dumped.
 #
+# Give each reverted set its own attic with -Attic. Sets from different layers must not share one:
+# -Restore moves back everything it finds, so a mixed attic puts back a layer that never existed.
+#
 #   .\revert_layer.ps1                      # what would move, nothing touched
 #   .\revert_layer.ps1 -Confirm             # move them
-#   .\revert_layer.ps1 -Restore             # put the last reverted set back
+#   .\revert_layer.ps1 -Attic _reverted_atlas -Confirm
+#   .\revert_layer.ps1 -Attic _reverted_atlas -Restore
 param(
     [string[]]$Stems = @("w64_sandbox_037c", "w64_sandbox_037d", "w64_sandbox_0698",
                          "w64_sandbox_0699"),
     [string]$Packages = "C:\Sunrise\packages",
+    [string]$Attic = "_reverted",
     [switch]$Confirm,
     [switch]$Restore
 )
 
-$attic = Join-Path $Packages "_reverted"
+$attic = Join-Path $Packages $Attic
 if (Get-Process destiny2 -ErrorAction SilentlyContinue) {
     Write-Error "destiny2 is running; close it before moving package files"
     exit 1
