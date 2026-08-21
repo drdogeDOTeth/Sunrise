@@ -6,7 +6,14 @@
 param([string]$Log = "C:\Sunrise\bin\x64\Sunrise\logs\sunrise.log")
 
 if (-not (Test-Path $Log)) { Write-Host "no log yet - has the game started?" -ForegroundColor Yellow; exit }
-$text = Get-Content $Log -Raw
+# The game holds the log open for writing, so a plain read intermittently fails and returns nothing.
+# Reporting that as "no progress" once contradicted a launch that had actually reached orbit.
+$text = $null
+try {
+    $stream = [System.IO.FileStream]::new($Log, 'Open', 'Read', 'ReadWrite')
+    try { $text = [System.IO.StreamReader]::new($stream).ReadToEnd() } finally { $stream.Dispose() }
+} catch { }
+if (-not $text) { Write-Host "log is locked right now - run it again in a second" -ForegroundColor Yellow; exit }
 $states = [regex]::Matches($text, "Entering state '([^']+)'") | ForEach-Object { $_.Groups[1].Value }
 $last = if ($states) { $states[-1] } else { '(none)' }
 $t = ([regex]::Matches($text, '\bt=(\d+)\b') | Select-Object -Last 1).Groups[1].Value
