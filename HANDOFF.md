@@ -1,6 +1,6 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-20 (traced textures). **Status: `_22` geometry WORKS. `_26` painted 228 textures and the WEAPON CHANGED COLOUR — paint reaches the GPU and shows. STOP SWEEPING: `model_class_trace` has been logging every tag the game resolves per model since process start, and `trace_model_tags.py` reads 39 textures in 10 packages straight out of `sunrise.log`. The current layer paints exactly those, 1.0 MB, one colour per package.**
+**Updated:** 2026-08-20 (five-part split). **Status: the body now draws as FIVE parts with five different Destiny materials, one per source atlas — `037c_28` + `037d_25` + `0698_24`. Before this, all 46,068 triangles went through a single part, so the whole body could only ever wear one texture set, which is why five encoded atlases had nowhere to go. Geometry is unchanged; only the part table moved. NEXT LAUNCH: the body should show five distinct materials rather than one flat surface — say what changes, per group.**
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything." — on `_20`
@@ -19,8 +19,8 @@ Three things remain, none of them geometry:
 
 1. **Albedo is still Scatterhorn's, and it does not come from the 55 sandbox textures we
    painted.** Those patches loaded; the Guardian never samples them. See "Then: textures".
-2. **The custom mesh has five texture atlases and we draw through two parts.** Structural, and
-   it gates textures. Same section.
+2. ~~**The custom mesh has five texture atlases and we draw through two parts.**~~ **Done** —
+   see "The five-part split" below. Five parts, five materials, one per atlas.
 3. **Gloves still draw over the custom hands**, and the bald race head still draws above the gas
    mask. Both cosmetic leftovers. See "the leftover gloves".
 
@@ -34,9 +34,9 @@ Newest files win:
 
 | package | live | geometry | note |
 |---|---|---|---|
-| `w64_sandbox_037c` | **`_26`** | `_22` | `_26` = full texture sweep; `_25` = t0 remap + sidecars; `_24` = inert tints |
-| `w64_sandbox_037d` | **`_24`** | `_22` | `_24` = full texture sweep; `_23` = the 55-swatch probe |
-| `w64_sandbox_0698` | **`_23`** | `_21` | `_23` = full texture sweep; `_22` = the 55-swatch probe |
+| `w64_sandbox_037c` | **`_28`** | **`_28`** | `_28` = **five-part split**; `_27` = dye rebind; `_26` = full texture sweep |
+| `w64_sandbox_037d` | **`_25`** | **`_25`** | `_25` = **five-part split**; `_24` = full texture sweep |
+| `w64_sandbox_0698` | **`_24`** | **`_24`** | `_24` = **five-part split**; `_23` = full texture sweep |
 | `w64_sandbox_0699` | **`_8`** | — | `_8` = full texture sweep; `_7` = the 55-swatch probe |
 | `w64_sandbox_01e2` | `_6` | — | inert; legs are blanked |
 | `w64_sandbox_01db` | **`_6`** | — | dye paint plate t3 remaining mips |
@@ -47,9 +47,11 @@ Newest files win:
 own next index. "The `_22` inject" is `037c_22` + `037d_22` + `0698_21`; the texture probe on top
 of it is `037c_23` + `037d_23` + `0698_22` + `0699_7`. Do not read them as one number.
 
-**Geometry lives in the `_22` layer and the probe does not touch it** — the probe rewrites only
-texture *bodies*, at their original sizes. `_22` is still the state to branch geometry from. `_21`
-shipped a stride bug and exploded; `_20` was the last good layer before it.
+**Geometry now lives in the five-part-split layer** (`037c_28` / `037d_25` / `0698_24`), which
+supersedes `_22`. The vertex buffers in it are byte-identical to `_22`'s — only the triangle order
+and the part table changed. The texture probes rewrite texture *bodies* only, at their original
+sizes, and are untouched by it. `_21` shipped a stride bug and exploded; `_20` was the last good
+layer before that.
 
 Repo: `C:\Users\Round\OneDrive\Desktop\Destiny2ProjectSunrise\Sunrise` branch `cosmetics`.
 
@@ -64,9 +66,62 @@ python inject_scatterhorn.py --dry-run
 python inject_scatterhorn.py
 ```
 
-No flags. `--no-retarget` (T-pose mesh), `--no-authored` (donor weights) and `--no-uvs` (resized
-Scatterhorn texcoords) each disable one half of the pipeline and exist only to bisect a
-regression.
+No flags. `--no-retarget` (T-pose mesh), `--no-authored` (donor weights), `--no-uvs` (resized
+Scatterhorn texcoords) and `--one-part` (the old single-carrier part table) each disable one half
+of the pipeline and exist only to bisect a regression.
+
+---
+
+## The five-part split
+
+**A Destiny part is a range of the index buffer plus one material, and a material holds one
+texture set.** Everything we injected went through a single part, so the body could wear exactly
+one texture set no matter how many atlases we encoded. This was the structural blocker under the
+whole texture effort, and no amount of correct BC7 would have moved it.
+
+The chest model `0x80EFA1CA` has **58 parts, 29 at LOD 0, and those 29 are three passes over the
+same seven index ranges** — Destiny's three ordered material stages:
+
+| pass | slots | materials |
+|---|---|---|
+| 1 | 0–20 | nine distinct: `0x81531EF0`, `0x81532AE0`, `0x80BFB5E5`, `0x80EF98DB`, `0x80EFA1F7`, `0x80EFA1DB`, `0x80EFA1DC`, `0x81531EEF`, `0x81531EEE` |
+| 2 | 22–42 | almost all `0x80EF938B` |
+| 3 | 44–56 | all `0x80EFAD53` |
+
+`carrier_slots()` picked the largest range — offset 3,465, count 3,087 — and that range appears in
+**both slot 10 and slot 32**. The "two carrier parts" this file used to describe were never two
+parts: they were **one range drawn twice, in two stages**.
+
+`retarget_mesh.py` already writes `character_body_groups.json` — per-triangle source material in
+the OBJ's face order. `inject_scatterhorn.py` now sorts triangles by that group so each source
+material is one contiguous run, then gives each run its own pass-1 part:
+
+| source material | tris | Destiny material | slot |
+|---|---|---|---|
+| `GLSLShader85` BlackTankTop | 24,786 | `0x80EF98DB` | 10 |
+| `GLSLShader13` SkinTats | 14,222 | `0x80EFA1F7` | 12 |
+| `GLSLShader66` GasMask | 3,858 | `0x80EFA1DC` | 16 |
+| `GLSLShader22` Twirl | 2,012 | `0x81532AE0` | 2 |
+| `GLSLShader60` Silver_Necklace | 1,190 | `0x81531EF0` | 0 |
+
+Sorting permutes **triangles only** — the vertex buffer, and with it the weights and the tangent
+frame, is byte-identical. Geometry, skinning and shading cannot regress from this change.
+
+Three things make it verifiable rather than hopeful:
+
+- **`GROUP_MATERIALS` keys on material tag, not slot number.** A slot number means nothing outside
+  the one model it was read from, and this mapping is applied to *both* chest models. They happen
+  to lay pass 1 out identically; `slot_for_material()` checks that instead of assuming it.
+- **Every other part is zeroed, including passes 2 and 3** over the ranges we keep. Otherwise the
+  same triangles draw again under a material we did not choose.
+- **`check_parts()` re-parses the bytes it is about to ship** and compares the drawn parts against
+  the plan. Written against the parser, not the plan, so agreement is evidence. Negative-tested:
+  feed it a mangled plan and it raises.
+
+**What this does not do yet:** each part now *has* its own material, but those five materials are
+still Scatterhorn's, holding Scatterhorn's textures. The next step is writing the encoded atlases
+into the textures these five materials sample — `encode_texture.py` already produces them, and
+`trace_model_tags.py` names what the game resolves per model.
 
 ---
 

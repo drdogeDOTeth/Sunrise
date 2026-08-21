@@ -624,8 +624,84 @@ def carrier_slots(mesh) -> list[int]:
     return [slot for slot, part in lod0 if part[2] == biggest[2] and part[3] == biggest[3]]
 
 
+# One LOD-0 part per source material, each carrying a *different* Destiny material.
+#
+# The chest model's 29 LOD-0 parts are three passes over the same seven index ranges - Destiny's
+# three ordered material stages. Slots 0-20 carry nine distinct materials, slots 22-42 are almost
+# all `0x80EF938B`, and slots 44-56 are all `0x80EFAD53`. `carrier_slots()` picks the largest range,
+# which is offset 3,465 count 3,087, and that range appears in **both** slot 10 and slot 32 - so the
+# "two carrier parts" were never two parts, they were one range drawn twice in two passes. Every
+# triangle we injected therefore wore one material, and a single material can only hold one texture
+# set, so five atlases had nowhere to go however well they were encoded.
+#
+# Carriers are named by material tag rather than by slot number, because a slot number means nothing
+# outside the one model it was read from, and this mapping is applied to both chest models. Both
+# happen to lay their pass-one slots out identically, but `slot_for_material()` checks that rather
+# than assuming it. Original index counts do not constrain the choice - offset and count are both
+# rewritten - so the five largest pass-one materials are used, largest group onto largest material.
+GROUP_MATERIALS = {
+    "GLSLShader85": 0x80EF98DB,   # BlackTankTop, 24,786 tris
+    "GLSLShader13": 0x80EFA1F7,   # SkinTats: body and arms
+    "GLSLShader66": 0x80EFA1DC,   # GasMask
+    "GLSLShader22": 0x81532AE0,   # Twirl
+    "GLSLShader60": 0x81531EF0,   # Silver_Necklace
+}
+
+
+def load_groups(mesh_path: Path) -> tuple[list[str], np.ndarray] | None:
+    """@return `(material names, per-triangle group index)` from the retargeter's groups file."""
+    path = mesh_path.with_name(mesh_path.stem + "_groups.json")
+    if not path.is_file():
+        return None
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return list(raw["slots"]), np.asarray(raw["face_material"], dtype=np.int64)
+
+
+def order_by_group(faces: np.ndarray, names: list[str],
+                   face_group: np.ndarray) -> tuple[np.ndarray, list[tuple[str, int, int, int]]]:
+    """
+    Sorts triangles so each source material is one contiguous run of indices.
+
+    @return The reordered faces, and `(name, material, index offset, index count)` per group.
+
+    A Destiny part is a range of the index buffer, so a material can only get its own part if its
+    triangles are contiguous. Sorting is all that takes, and it permutes triangles only - the vertex
+    buffer, and with it the weights and the tangent frame, is untouched.
+    """
+    if len(face_group) != len(faces):
+        raise SystemExit(f"groups file has {len(face_group):,} triangles, mesh has {len(faces):,}; "
+                         "rebuild both with retarget_mesh.py")
+    order = np.argsort(face_group, kind="stable")
+    groups: list[tuple[str, int, int, int]] = []
+    at = 0
+    for group, name in enumerate(names):
+        count = int((face_group == group).sum())
+        if not count:
+            print(f"  {name}: no triangles, no part")
+            continue
+        material = GROUP_MATERIALS.get(name)
+        if material is None:
+            raise SystemExit(f"no carrier material mapped for source material {name}; "
+                             f"add it to GROUP_MATERIALS")
+        groups.append((name, material, at * 3, count * 3))
+        at += count
+    return faces[order], groups
+
+
+def slot_for_material(mesh, material: int) -> int:
+    """@return The first LOD-0 part drawing with `material`, refusing if this model has none."""
+    for slot, part in enumerate(mesh.parts):
+        if part[0] == material and part[4] == 0:
+            return slot
+    raise SystemExit(f"no LOD-0 part uses material 0x{material:08X}; this model lays its parts out "
+                     f"differently from the one GROUP_MATERIALS was read off")
+
+
 def rewrite_chest(model: Model, index_count: int, scale: float,
-                  translation: np.ndarray, own_texcoords: bool = False) -> tuple[bytes, list[int]]:
+                  translation: np.ndarray, own_texcoords: bool = False,
+                  groups: list[tuple[str, int, int, int]] | None = None
+                  ) -> tuple[bytes, list[tuple[str, int, int, int, int]]]:
+    """@return The rewritten model, and `(name, slot, material, offset, count)` per drawn part."""
     out = bytearray(model.data)
     struct.pack_into("<4f", out, MODEL_SCALE, scale, scale, scale, 0.0)
     struct.pack_into("<4f", out, MODEL_TRANSLATION,
@@ -634,23 +710,62 @@ def rewrite_chest(model: Model, index_count: int, scale: float,
         # The texcoord frame is ours to choose once we write our own second vertex buffer.
         struct.pack_into("<2f", out, MODEL_TEXCOORD_SCALE, UV_SCALE, UV_SCALE)
         struct.pack_into("<2f", out, MODEL_TEXCOORD_TRANSLATION, UV_TRANSLATION, UV_TRANSLATION)
-    chosen: list[int] = []
+    chosen: list[tuple[str, int, int, int, int]] = []
     for number, mesh in enumerate(model.meshes):
-        slots = set(carrier_slots(mesh)) if number == 0 else set()
-        if number == 0:
-            chosen = sorted(slots)
+        if number != 0:
+            plan: dict[int, tuple[int, int]] = {}
+        elif groups:
+            plan = {}
+            for name, material, offset, count in groups:
+                slot = slot_for_material(mesh, material)
+                if slot in plan:
+                    raise SystemExit(f"{name} resolved to slot {slot}, already taken; two groups "
+                                     "cannot share one material")
+                plan[slot] = (offset, count)
+                chosen.append((name, slot, material, offset, count))
+        else:
+            plan = {slot: (0, index_count) for slot in carrier_slots(mesh)}
+            chosen = [(f"all {index_count // 3:,} tris", slot, mesh.parts[slot][0], 0, index_count)
+                      for slot in sorted(plan)]
         for slot in range(mesh.part_count):
             at = mesh.parts_at + slot * PART_STRIDE
             if at + PART_STRIDE > len(out):
                 break
-            if slot in slots:
+            if slot in plan:
+                offset, count = plan[slot]
                 struct.pack_into("<h", out, at + PART_PRIMITIVE, TRIANGLES)
-                struct.pack_into("<I", out, at + PART_INDEX_OFFSET, 0)
-                struct.pack_into("<I", out, at + PART_INDEX_COUNT, index_count)
+                struct.pack_into("<I", out, at + PART_INDEX_OFFSET, offset)
+                struct.pack_into("<I", out, at + PART_INDEX_COUNT, count)
                 out[at + PART_LOD] = 0
             else:
+                # Zeroed, and that includes the second and third passes over the ranges we keep -
+                # otherwise the same triangles draw again under a material we did not choose.
                 struct.pack_into("<I", out, at + PART_INDEX_COUNT, 0)
-    return bytes(out), chosen
+    blob = bytes(out)
+    check_parts(model, blob, chosen)
+    return blob, chosen
+
+
+def check_parts(model: Model, blob: bytes,
+                chosen: list[tuple[str, int, int, int, int]]) -> None:
+    """Re-read the part table out of the bytes we are about to ship and confirm what draws.
+
+    Written against the parser rather than against the plan, because the plan is what we meant and
+    the bytes are what the game sees. The failure this catches is a slot resolved off one model's
+    part list and packed into another's - a mistake that leaves every printed line correct.
+    """
+    reparsed = Model(model.tag, blob)
+    drawn = {(slot, part[0], part[2], part[3])
+             for mesh in reparsed.meshes
+             for slot, part in enumerate(mesh.parts) if part[3]}
+    planned = {(slot, material, offset, count) for _, slot, material, offset, count in chosen}
+    if drawn != planned:
+        extra = "\n".join(f"    drawn but not planned: slot {s} mat 0x{m:08X} {o:,}+{c:,}"
+                          for s, m, o, c in sorted(drawn - planned))
+        missing = "\n".join(f"    planned but not drawn: slot {s} mat 0x{m:08X} {o:,}+{c:,}"
+                            for s, m, o, c in sorted(planned - drawn))
+        raise SystemExit(f"0x{model.tag:08X}: part table does not read back as planned\n"
+                         f"{extra}\n{missing}".rstrip())
 
 
 def put(by_package: dict[Path, dict[int, bytes]], tag: int, data: bytes) -> None:
@@ -708,7 +823,8 @@ def inject_mesh0(by_package: dict[Path, dict[int, bytes]], tag: int,
                  placed: np.ndarray, faces: np.ndarray, positions: bytes,
                  scale: float, translation: np.ndarray,
                  uv_header_fb: bytes, uv_body_fb: bytes,
-                 frame: np.ndarray | None = None) -> None:
+                 frame: np.ndarray | None = None,
+                 groups: list[tuple[str, int, int, int]] | None = None) -> None:
     model = load_model(tag)
     mesh = model.meshes[0]
     stride = vertex_stride(mesh.positions)
@@ -737,13 +853,20 @@ def inject_mesh0(by_package: dict[Path, dict[int, bytes]], tag: int,
                 f"tangent frame has {len(frame):,} vertices for {len(placed):,} in the mesh - "
                 "rebuild both with retarget_mesh.py")
         uv_header, uvs, uv_note = clone_uvs(mesh, len(placed), uv_header_fb, uv_body_fb)
-    model_blob, chosen = rewrite_chest(model, faces.size, scale, translation, own_texcoords)
+    model_blob, chosen = rewrite_chest(model, faces.size, scale, translation, own_texcoords,
+                                       groups)
     print(f"\n0x{tag:08X}: original {old_count:,} verts, stride {stride}  "
           f"-> {len(placed):,} verts / {len(faces):,} tris, scale {scale:.3f}")
     print(f"  positions {len(original):,} -> {len(positions):,} B")
     print(f"  indices   {len(dumped(mesh.index_buffer) or b''):,} -> {len(indices):,} B")
     print(f"  uvs       {len(uvs):,} B ({uv_note})")
-    print(f"  carrier parts {chosen} -> {faces.size:,} indices; others zeroed")
+    print("  carrier parts, all others zeroed:")
+    for name, slot, material, offset, count in chosen:
+        print(f"    slot {slot:>2}  mat 0x{material:08X}  indices {offset:>7,}..{offset + count:>7,}"
+              f"  {count // 3:>6,} tris  {name}")
+    drawn = sum(count for _, _, _, _, count in chosen)
+    if drawn != faces.size:
+        raise SystemExit(f"parts draw {drawn:,} indices but the buffer holds {faces.size:,}")
     put(by_package, mesh.position_buffer, positions)
     put(by_package, mesh.positions, rewrite_header(position_header, len(positions), 0, "<I"))
     put(by_package, mesh.index_buffer, indices)
@@ -785,7 +908,8 @@ def inject_slot(by_package: dict[Path, dict[int, bytes]], tag: int, kind: str,
                 pools: dict[str, tuple[np.ndarray, list[bytes]]],
                 uv_header_fb: bytes, uv_body_fb: bytes, rigid: bool,
                 authored: list[bytes] | None = None,
-                frame: np.ndarray | None = None) -> None:
+                frame: np.ndarray | None = None,
+                groups: list[tuple[str, int, int, int]] | None = None) -> None:
     model = load_model(tag)
     mesh = model.meshes[0]
     stride = vertex_stride(mesh.positions)
@@ -805,7 +929,7 @@ def inject_slot(by_package: dict[Path, dict[int, bytes]], tag: int, kind: str,
         positions = pack_banded(world_points, stride, scale, translation,
                                 pools, world_faces, kind)
     inject_mesh0(by_package, tag, world_points, world_faces, positions,
-                 scale, translation, uv_header_fb, uv_body_fb, frame)
+                 scale, translation, uv_header_fb, uv_body_fb, frame, groups)
 
 
 def main() -> None:
@@ -824,7 +948,18 @@ def main() -> None:
         # Legacy path: an unposed T-pose mesh with no weights of its own, swung by hand and
         # skinned off the nearest donor. Kept only so an old mesh still builds.
         points = swing_arms(points, option("--arm-swing", ARM_SWING))
+    groups = None
+    if "--one-part" not in sys.argv:
+        loaded = load_groups(source)
+        if loaded is None:
+            print(f"no {source.stem}_groups.json; the whole body goes on one part and can only "
+                  "wear one texture set. Rebuild with retarget_mesh.py to split it.")
+        else:
+            names, face_group = loaded
+            faces, groups = order_by_group(faces, names, face_group)
     print(f"custom mesh: {len(points):,} verts, {len(faces):,} tris from {source.name}")
+    if groups:
+        print(f"parts: {len(groups)} - one per source material, sorted into contiguous ranges")
     print(f"skin: one welded body on the chest draw, joints {sorted(BODY_BONES)}")
     print("      " + ("authored weights, mesh already posed on the rig"
                       if authored is not None else
@@ -865,7 +1000,7 @@ def main() -> None:
         print(f"\n  body donors {['0x%08X' % t for t in donor_tags]}:")
         pools = {"body": load_donors(donor_tags, meshes=(0, 1), allowed=BODY_BONES)}
         inject_slot(by_package, tag, "body", placed, faces, pools,
-                    uv_header_fb, uv_body_fb, rigid, authored, frame)
+                    uv_header_fb, uv_body_fb, rigid, authored, frame, groups)
 
     for tag in BLANK:
         model = load_model(tag)
