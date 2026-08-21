@@ -30,8 +30,22 @@ All five are exactly 5,586,944 B, which is the full five-level BC7 chain for 204
 encode lands at native size with no resampling and no entry resize. Their headers are rewritten
 from `0x80EFAD60`, a dumped and verified header for a texture of exactly those dimensions.
 
+**`--bind-only` is the bisect**, and it exists because the first attempt hung the game at character
+select. That layer changed three things at once: it resized five material blobs, rewrote five
+texture headers, and wrote five 5,586,944-byte texture bodies - 27.9 MB, where the largest write
+this pipeline had ever verified was 798 KB across four blocks. `docs/PACKAGES.md` already records
+oversized buffers hanging the loader while single-block ones load fine, so the big write is the
+first suspect and the material surgery is the second.
+
+`--bind-only` separates them: it patches the five materials and writes **no texture data at all**,
+pointing every one of them at a texture that already exists and was never touched. About 8 KB.
+If the game loads, the material surgery is sound and the 27.9 MB write is what hangs it. If it
+hangs anyway, the material surgery is at fault and the atlases are innocent. Either answer costs
+one launch, and it reports itself on screen - all five regions wear the same real texture.
+
 Usage:
     python bind_material_textures.py --dry-run
+    python bind_material_textures.py --bind-only [--dry-run]
     python bind_material_textures.py            # Destiny closed
 """
 from __future__ import annotations
@@ -171,7 +185,34 @@ def atlas(group: Group) -> bytes:
     return data
 
 
+def bind_only() -> None:
+    """Patch the five materials and write no texture data. See `--bind-only` above."""
+    print(f"bind-only: every material -> existing texture 0x{HEADER_TEMPLATE:08X}, "
+          "no texture bytes written")
+    by_package: dict[Path, dict[int, bytes]] = {}
+    for group in GROUPS:
+        material = dumped(group.material)
+        if material is None:
+            raise SystemExit(f"0x{group.material:08X}: material not dumped")
+        patched, how = bind(material, HEADER_TEMPLATE)
+        check(patched, HEADER_TEMPLATE, group.material)
+        print(f"  {group.source:<14} 0x{group.material:08X}: {how}")
+        put(by_package, group.material, patched)
+    total = sum(len(b) for entries in by_package.values() for b in entries.values())
+    print(f"\n{sum(len(v) for v in by_package.values())} entries, {total:,} B, "
+          f"{len(by_package)} packages")
+    if "--dry-run" in sys.argv:
+        print("dry run; nothing written")
+        return
+    write_all(by_package, "")
+    print("\nIf this loads, the material surgery is sound and the 27.9 MB texture write is what "
+          "hangs it. If it hangs, the surgery is at fault.")
+
+
 def main() -> None:
+    if "--bind-only" in sys.argv:
+        bind_only()
+        return
     template = dumped(HEADER_TEMPLATE)
     if template is None or len(template) != 40:
         raise SystemExit(f"0x{HEADER_TEMPLATE:08X}: need the 40-byte reference header dumped")

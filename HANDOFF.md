@@ -1,6 +1,6 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-20 (atlases bound). **Status: the five-part split is CONFIRMED IN GAME — the body draws as five distinct materials, the necklace is visible, the arms are separate from the tank. On top of it, all five of the model's own atlases are now BOUND into those five materials at sampler slot 3 — `037c_29` + `037d_26` + `0698_25` + `0699_9`. The albedo was never findable because four of the five materials name no texture at all; it had to be *bound*, and the material's pixel-texture array is now written. NEXT LAUNCH: any group showing its real artwork is done; any group still Scatterhorn-coloured reads a slot other than 3, and only that group needs a slot sweep.**
+**Updated:** 2026-08-20 (atlas bind HANGS; bisecting). **Status: the five-part split is CONFIRMED IN GAME and is the good state to stand on. The atlas bind on top of it HANGS the game at character select — reproduced three times — and has been moved to `packages\_reverted_atlas`. Live now is a `--bind-only` bisect layer: the same five material patches, 7,696 B, pointing at a texture that already exists, writing no texture data. If it loads, the material surgery is sound and the 27.9 MB texture write is the cause. If it hangs, the surgery is. See "The atlas bind hangs".**
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything." — on `_20`
@@ -172,6 +172,43 @@ shares one target size.
 
 **If it crashes or renders wrong:** `.\revert_layer.ps1 -Confirm` on the four packages drops back to
 the split. Never `--undo`.
+
+---
+
+## The atlas bind hangs — what is ruled out
+
+The atlas layer **hangs the game at character select**, reproduced three times. It is a *hang*, not
+a crash: no error, no dialog, the window stops responding and the log simply stops. Moved aside to
+`packages\_reverted_atlas` (a separate attic from `_reverted` and `_reverted_26`, so `-Restore`
+cannot put back a mixed set). The split underneath is live and good.
+
+**What the logs say.** `model_class_trace` stops dead mid-resolution — last event at t=33,719 on the
+fresh capture — then nothing but `application_state: Suspend` as the frozen window is clicked at,
+and no `ev=shutdown`. Across the whole launch **none of our seventeen tags appear at all**: not the
+chest models, not the five materials, not the ten texture entries. The game loads other Scatterhorn
+content (55–62 tags in the same four packages) but never reaches ours. Note the log rotates **by
+size at ~750 KB**, not per launch, so both halves must be read.
+
+**Ruled out, offline, against the reverted layer:**
+
+- **Container malformation.** It reads back clean: 8,192 entries, 858 blocks, and every one of our
+  entries has the right size, the right `entry_type` (40 body / 32 header / 8 material) and intact
+  mutual references.
+- **The null SHA-1**, which is this project's one recorded cause of a *hang* rather than a crash.
+  `patch.py` writes `sha1(chunk)` per block record and has since the Mercury work.
+- **`blockInfo` overflow.** `encode_block_info` bounds-checks the two 14-bit fields, and size gets
+  36 bits; 5,586,944 round-trips correctly, which the read-back proves.
+
+**Still open, in order of suspicion:**
+
+1. **Entry size.** Each atlas is 5,586,944 B ≈ 21 blocks. The largest write this pipeline had ever
+   verified was **798 KB across four blocks** — 7× smaller per entry. `docs/PACKAGES.md` already
+   records five oversized Mercury buffers hanging the loader with mainloop hitches while 183
+   single-block buffers loaded fine. Same signature, same suspicion.
+2. **The material resize.** Four blobs grew by 48 bytes. If the loader sizes its allocation from the
+   class rather than the entry, the appended array is past the end of what it read.
+
+`--bind-only` separates these two and costs one launch.
 
 ---
 
