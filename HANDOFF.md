@@ -1,6 +1,6 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-21. **Status: the corrected atlas bind (`037c_29` + `037d_26` + `0698_25` + `0699_9`) still hangs at character select. The self-length fix is real and is correctly present in the shipped bytes — `verify_bind_layer.py` reads all seventeen entries back and every invariant holds — so it was a real bug but not the only one. Entry size is NOT disproven — that was an over-claim; a 22-block entry can be present and readable without ever being bound and streamed. The one thing that has never loaded is the material surgery. The repoint bisect then showed the Hunter loads and the Warlock stalls, so three bytes are enough and the append is innocent. Live layer is the size control. See "The hang, round two".**
+**Updated:** 2026-08-21. **Status: the corrected atlas bind (`037c_29` + `037d_26` + `0698_25` + `0699_9`) still hangs at character select. The self-length fix is real and is correctly present in the shipped bytes — `verify_bind_layer.py` reads all seventeen entries back and every invariant holds — so it was a real bug but not the only one. Entry size is NOT disproven — that was an over-claim; a 22-block entry can be present and readable without ever being bound and streamed. The one thing that has never loaded is the material surgery. Three bytes are enough and the append is innocent; size and package locality are ruled out too. Live layer is the residency test. See "The hang, round two".**
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything." — on `_20`
@@ -44,8 +44,8 @@ Newest files win:
 | `w64_sandbox_020e` | **`_7`** | — | dye paint suit t5 remaining mips |
 
 **The `_29` / `_26` / `_25` / `_9` atlas-bind row is reverted** to `_reverted_atlas2`. Live is
-`037c_28` / **`037d_27`** / `0698_24` / `0699_8`: the working five-part split, plus one material
-entry repointed. `037d_26` and `_27` each change that one entry and nothing else.
+`037c_28` / **`037d_28`** / `0698_24` / `0699_8`: the working five-part split, plus one material
+entry repointed. `037d_26`, `_27` and `_28` each change that one entry and nothing else.
 
 **Package indices are per-package, not a version number** — the injector writes each package its
 own next index. "The `_22` inject" is `037c_22` + `037d_22` + `0698_21`; the texture probe on top
@@ -299,23 +299,64 @@ type 32/sub 1, 40 bytes. The difference between them is what they point at:
 | worked | `0x80C1D3CC` dye tile, split | ~350 KB total | 1 |
 | stalled | `0x80EF89F3` | **5,586,944 B** | **22** |
 
-### The size control (live, awaiting launch)
+### Size is out too. What is left is residency.
+
+The size control **stalled identically** — Titan and Hunter loaded, Warlock froze. So a 174,592 B
+single-block target in the *same package as the material* fails exactly like a 5,586,944 B
+twenty-two-block one in another package. That closes the whole "what we point at, physically" axis:
+
+| axis | status |
+|---|---|
+| entry size / block count | **ruled out** — 22 blocks and 1 block stall identically |
+| package locality | **ruled out** — the working binding is cross-package; a same-package target stalls |
+| self-declared length | ruled out — unchanged, and verified correct in the shipped bytes |
+| resize / append | ruled out — three bytes with no resize is enough |
+| our writer's container output | ruled out — Hunter and Titan build from the same files |
+
+**The material references the tag exactly once.** Mapped every tag-like word in the blob: the only
+occurrence of `0x80C1D3CD` is at `+0x424`, the word we change. There is no second table to keep in
+sync. The other three arrays in the material are samplers (`0x808073F3`, six elements pointing at
+`0x80C70B8E` / `0x80C6B566`), an int array and a float4 array — none name a texture.
+
+**Two hypotheses survive:**
+
+- **(A) Residency.** A material may only bind a texture something already loads. Every texture we
+  ever saw *sampled* was one already referenced by the thing sampling it — the `_26` sweep turned
+  the weapon magenta by painting a texture the weapon's own material already named. Pointing at a
+  texture nothing requests makes the loader demand-load it, and the fiber waits forever.
+- **(B) Materials cannot be rewritten at all.** Never once landed. Note what *has*: type-8 **model**
+  records (the five-part split), texture bodies and headers, geometry buffers, dye bodies. And note
+  what has never landed anywhere: **changing a texture *tag*.** The dye work only ever changed slot
+  *numbers*, never which texture a slot points at.
+
+### The residency test (live, awaiting launch)
+
+Same three bytes, same slot, same material. Slot 3 now points at **`0x80C184F9`** — the cloth `t7`
+dye texture. It is the tightest possible control: the *same kind of object* as the binding that
+works (a dye texture this Warlock loads to render the Scatterhorn Robe), the same 21,872 B in one
+block, the same split layout — differing only in **identity**. And our own dye probe already painted
+it flat **blue `(0, 0, 254)`**, so it reports itself.
+
+Live: `037c_28` / **`037d_28`** / `0698_24` / `0699_8`.
+
+| outcome | conclusion |
+|---|---|
+| **gas mask turns blue** | **(B) dead, (A) confirmed.** Rewriting materials is fine; the target must be resident. Route: get our atlas into a texture the character already loads |
+| loads, gas mask unchanged | **(B) dead** — slot 3 is not what that shader samples. Sweep slots for this group |
+| **stalls again** | **(A) dead.** Rewriting a material stalls whatever it says. Next is the null control: write the material back byte-identical |
+
+Either of the first two outcomes kills (B) without spending a launch on the null control, which is
+why this goes first.
+
+### The superseded size control
 
 Same three bytes, same slot, same material — **only the size of the target changes**. Slot 3 now
 points at `0x80EFB535`, whose body `0x80EFB534` is **174,592 B in one block**, in the same package
 as the material, painted flat **yellow-green `(128, 254, 0)`** by our own sweep. 32× smaller, one
 block instead of twenty-two.
 
-Live: `037c_28` / **`037d_27`** / `0698_24` / `0699_8`.
-
-| outcome | conclusion |
-|---|---|
-| **gas mask turns yellow-green** | binding works; **size is the constraint** — re-encode the atlases small and the whole route opens |
-| loads, gas mask unchanged | slot 3 is not what that shader reads; sweep slots for this group |
-| **stalls again** | size is not it either; the stall is in binding *any* replacement texture |
-
-Click the **Warlock** — the Hunter is the control and will load either way. If it stalls, let it sit
-past t≈95 s so the assert lands.
+Shipped as `037d_27`. **Stalled.** Superseded by the residency test above; kept because it is what
+ruled size out.
 
 ```powershell
 .\revert_layer.ps1 -Attic _reverted_atlas2 -Confirm   # back to the working split
@@ -331,7 +372,7 @@ is `w64_sandbox_037d_26.pkg` — the same name as the atlas layer now sitting in
 `-Restore` refuses on that collision rather than overwriting the newer layer; move the live file
 aside first if you really mean to put the atlas back. Guard negative-tested.
 
-**Live now:** `037c_28` / **`037d_27` (size control)** / `0698_24` / `0699_8`.
+**Live now:** `037c_28` / **`037d_28` (residency test)** / `0698_24` / `0699_8`.
 The other four materials read back encrypted and original at their pre-append sizes — unpatched,
 as intended. `0x80EF89F3` is still one flat red block, 5,586,944 B.
 
@@ -1052,9 +1093,10 @@ file" and copies from inline DyeData instead):
 |---|---|---|---|
 | atlas bind, self-length stale | `_reverted_atlas` | **hang at character select** | the `+0x00` bug; real, fixed |
 | bind-only, self-length stale | `_reverted_bindonly` | **hang** | cleared the atlases, not the surgery |
-| atlas bind, self-length fixed | `037c_29` / `037d_26` / `0698_25` / `0699_9` | **hang** | fix verified present in the shipped bytes; entry size disproven offline; surgery is what is left |
+| atlas bind, self-length fixed | `037c_29` / `037d_26` / `0698_25` / `0699_9` | **hang** | fix verified present in the shipped bytes; surgery is what is left |
 | repoint only, 3 B, 22-block target | `037d_26` | **Hunter loaded; clicking Warlock stalled** | three bytes are enough; the append is innocent; it is our content, not the container |
-| **same repoint, 1-block target** | **`037d_27` (current)** | — | yellow-green = size is the constraint |
+| same repoint, 1-block target | `037d_27` | **Titan + Hunter loaded; Warlock stalled** | size and package locality both ruled out |
+| **same repoint, resident dye target** | **`037d_28` (current)** | — | blue = residency is the rule |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
@@ -1137,12 +1179,12 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch is the size control in `037d_27`** — click the **Warlock**, look at the gas mask for
-flat yellow-green. Outcome table is in "Warlock only". Everything else below still stands.
+**Next launch is the residency test in `037d_28`** — click the **Warlock**, look at the gas mask for
+flat blue. Outcome table is in "The residency test". Everything else below still stands.
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
 dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is
-exactly what `037d_27` is testing — do not pre-empt it either way.
+already answered: size is not the constraint. `037d_28` tests residency.
 
 `_25` came back **no colour** — so neither the t0 remap nor the DyeInfo sidecars are the albedo
 path. Its dump did land: `0x80EF9663` (432 B suit sidecar) and the three 16-byte DyeInfo headers
