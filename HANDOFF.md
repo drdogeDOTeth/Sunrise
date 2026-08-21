@@ -204,6 +204,18 @@ hangs on, exactly as the null block SHA-1 once did.
 The corrected layer was launched 2026-08-20 23:48 and **hung identically**. Everything below was
 established from that log and from the installed packages, with **no further launches**.
 
+**The game names the failure**, in a third launch left running long enough for the assert to fire
+(`trace_archive/sunrise-20260821-1441-hang-atlas-fixed-with-assert.log`):
+
+```
+ev=assert stage=hit text=hitch detected: mainloop world controller state character:signin
+    job fiber:{{!0x00834002!}} phase:{{!-1!}} iteration:0x0 stalled     (x512)
+```
+
+A **job fiber deadlocks in `character:signin`** — a stall waiting on something that never arrives,
+not a crash and not a bad dereference. Leave the next hang running past t≈87 s; the first two
+launches were closed at ~45 s and the assert never fired.
+
 **The fix is genuinely in the shipped bytes.** `verify_bind_layer.py` opens the newest installed
 patch of every package, pulls all seventeen entries out of the block stream and checks what we know
 how to state: all five materials declare their own length at `+0x00` correctly, all five resolve a
@@ -268,6 +280,15 @@ python bind_material_textures.py --repoint-only
 
 `revert_layer.ps1` now takes `-Attic`. Each reverted set needs its own, because `-Restore` moves
 back everything it finds and a shared attic restores a layer that never existed.
+
+**Reverting frees an index, and the next layer written takes the same filename.** The repoint layer
+is `w64_sandbox_037d_26.pkg` — the same name as the atlas layer now sitting in `_reverted_atlas2`.
+`-Restore` refuses on that collision rather than overwriting the newer layer; move the live file
+aside first if you really mean to put the atlas back. Guard negative-tested.
+
+**Live after the revert + repoint:** `037c_28` / **`037d_26` (repoint)** / `0698_24` / `0699_8`.
+The other four materials read back encrypted and original at their pre-append sizes — unpatched,
+as intended. `0x80EF89F3` is still one flat red block, 5,586,944 B.
 
 ### How the self-length bug was found, and the two launches it cost
 

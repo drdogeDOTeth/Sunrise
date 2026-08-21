@@ -29,8 +29,19 @@ if (Get-Process destiny2 -ErrorAction SilentlyContinue) {
 
 if ($Restore) {
     if (-not (Test-Path $attic)) { Write-Error "nothing in $attic to restore"; exit 1 }
+    # Reverting frees an index, so the next layer written takes the same filename. Restoring over
+    # it would destroy that layer and leave a file whose name says one thing and bytes say another.
+    $collisions = Get-ChildItem $attic -Filter *.pkg | Where-Object {
+        Test-Path (Join-Path $Packages $_.Name)
+    }
+    if ($collisions) {
+        Write-Error ("$($collisions.Count) file(s) in $Attic would overwrite a live layer of the " +
+                     "same name: $($collisions.Name -join ', '). A newer layer reused the index. " +
+                     "Move the live one aside first.")
+        exit 1
+    }
     Get-ChildItem $attic -Filter *.pkg | ForEach-Object {
-        Move-Item $_.FullName $Packages -Force
+        Move-Item $_.FullName $Packages
         "restored $($_.Name)"
     }
     exit 0
