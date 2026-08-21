@@ -1,6 +1,6 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-21. **Status: the corrected atlas bind (`037c_29` + `037d_26` + `0698_25` + `0699_9`) still hangs at character select. The self-length fix is real and is correctly present in the shipped bytes — `verify_bind_layer.py` reads all seventeen entries back and every invariant holds — so it was a real bug but not the only one. Entry size is NOT disproven — that was an over-claim; a 22-block entry can be present and readable without ever being bound and streamed. The one thing that has never loaded is the material surgery. Three bytes are enough, and size, package locality and residency are all ruled out. Live layer is the byte-identical null control. See "The hang, round two".**
+**Updated:** 2026-08-21. **Status: the corrected atlas bind (`037c_29` + `037d_26` + `0698_25` + `0699_9`) still hangs at character select. The self-length fix is real and is correctly present in the shipped bytes — `verify_bind_layer.py` reads all seventeen entries back and every invariant holds — so it was a real bug but not the only one. Entry size is NOT disproven — that was an over-claim; a 22-block entry can be present and readable without ever being bound and streamed. The one thing that has never loaded is the material surgery. Materials ARE writable - the byte-identical null control rendered the Warlock and reached `cleanup`. A changed tag value is specifically what kills the preview. Live layer is the no-material baseline. See "The hang, round two".**
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything." — on `_20`
@@ -44,8 +44,8 @@ Newest files win:
 | `w64_sandbox_020e` | **`_7`** | — | dye paint suit t5 remaining mips |
 
 **The `_29` / `_26` / `_25` / `_9` atlas-bind row is reverted** to `_reverted_atlas2`. Live is
-`037c_28` / **`037d_29`** / `0698_24` / `0699_8`: the working five-part split, plus one material
-entry rewritten. `037d_26` through `_29` each touch that one entry and nothing else.
+`037c_28` / **`037d_25`** / `0698_24` / `0699_8`: the working five-part split, no material patch.
+`037d_26` through `_29` are in `_reverted_material`; each touched one material entry and nothing else.
 
 **Package indices are per-package, not a version number** — the injector writes each package its
 own next index. "The `_22` inject" is `037c_22` + `037d_22` + `0698_21`; the texture probe on top
@@ -352,13 +352,64 @@ shipped `0x80C1D3CD` and the self-length agrees.
 type-8 records in `w64_manifest_068f`. Our material is type 8 in `037d`, and `037d`'s tail is
 **empty**. Not the mechanism. `patch.py` already carries the tail through unchanged.
 
-### The null control (live, awaiting launch)
+## The null control PASSED. Materials are writable.
 
-`037d_29` writes `0x80EFA1DC` back **byte-identical** — verified equal to the pristine dump, same
-1,408 B, slot 3 still `0x80C1D3CD`, zero complaints. The only difference from a launch that works
-is that our writer emitted this entry.
+**`037d_29` rendered the Warlock at character select and went on to enter `cleanup`** — the only
+launch in this whole sequence to complete `character:signin` at all. All three repoints died inside
+it. So:
 
-Live: `037c_28` / **`037d_29`** / `0698_24` / `0699_8`.
+- **Rewriting a material entry is sound.** The write, the block placement, the plain-block
+  substitution, our whole container path for a type-8 material — all fine.
+- **A changed tag value is specifically fatal**, and it is fatal to the *character-select preview*.
+  Whatever validates that word lives outside the material and outside anything we have decoded.
+
+**Correction, because it nearly sent this the wrong way:** `character:signin` logged
+`Total time spent: [75680] ms` and that is **not** a stall. `character:signin` is the state the game
+holds in *while the character select screen is up waiting for a click*. Seventy-five seconds is how
+long the user looked at the screen. Never read that number as performance.
+
+### The `cleanup` stall is a different animal, and may not be a stall
+
+Selecting the Warlock enters `cleanup`, and there the assert is a different job entirely —
+`job name: 'resourcerer process events', owner: 'system owner'`, not the anonymous
+`job fiber:0x00834002` of the preview stalls. And **work was still completing when the game was
+closed**:
+
+```
+Completed task 'ENUM(22)' after '25745ms'
+Completed task 'ENUM(55)' after '25851ms'
+state:cleanup: After 25851ms, status: '2', tasks active: '0x0020000800000000',
+               pending: '0x0000000000000000', requested: '0x00e0010c30fbdf3c'
+```
+
+Two twenty-five-second tasks **finished**, in the last logged moment, with nothing pending. That is
+grinding, not deadlock. It may simply need minutes.
+
+**And its provenance is unknown**, which is the real gap: *this stack has never been taken to orbit
+without a material patch on it.* The `_22` inject reached the Tower and Mercury, but that predates
+the 228-texture sweep — `0699_8` alone is 186 MB. So `cleanup` being slow may be the baseline.
+
+### The baseline (live, awaiting launch)
+
+All four material layers moved to `_reverted_material`. Live is the **clean five-part split** with
+**no material patch at all**: `037c_28` / **`037d_25`** / `0698_24` / `0699_8`. Verified — entry 476
+is back on its original block (patch 3, flags `0x0003`, compressed + encrypted), the chest model at
+458 is still ours, zero complaints.
+
+| outcome | conclusion |
+|---|---|
+| **reaches orbit** | `cleanup` is ours. The material rewrite has a second, later cost — and now there is a timing baseline to compare against |
+| **same 25 s grind, then orbit** | `cleanup` is **baseline**, unrelated to materials, and the null control is a clean pass end to end |
+| **never reaches orbit** | the split layer itself cannot reach orbit, which is a bigger and much older problem than the binding, and it moves to the front |
+
+**Give it several minutes before judging.** Every "hang" in this log so far was called after 45–125
+seconds, and the one launch that was allowed to run longer moved on to a new state. Note roughly how
+long orbit takes.
+
+### The superseded null control
+
+Shipped as `037d_29`, byte-identical to the pristine dump. **Passed** — see above. Kept because it
+is what proved the write sound.
 
 | outcome | conclusion |
 |---|---|
@@ -410,7 +461,7 @@ is `w64_sandbox_037d_26.pkg` — the same name as the atlas layer now sitting in
 `-Restore` refuses on that collision rather than overwriting the newer layer; move the live file
 aside first if you really mean to put the atlas back. Guard negative-tested.
 
-**Live now:** `037c_28` / **`037d_29` (null control)** / `0698_24` / `0699_8`.
+**Live now:** `037c_28` / **`037d_25` (clean split, no material patch)** / `0698_24` / `0699_8`.
 The other four materials read back encrypted and original at their pre-append sizes — unpatched,
 as intended. `0x80EF89F3` is still one flat red block, 5,586,944 B.
 
@@ -1135,7 +1186,8 @@ file" and copies from inline DyeData instead):
 | repoint only, 3 B, 22-block target | `037d_26` | **Hunter loaded; clicking Warlock stalled** | three bytes are enough; the append is innocent; it is our content, not the container |
 | same repoint, 1-block target | `037d_27` | **Titan + Hunter loaded; Warlock stalled** | size and package locality both ruled out |
 | same repoint, resident dye target | `037d_28` | **Warlock stalled** | residency ruled out; nothing about the target explains it |
-| **null control, material written back byte-identical** | **`037d_29` (current)** | — | loads = the tag value is validated elsewhere; stalls = materials cannot be rewritten |
+| null control, material byte-identical | `037d_29` | **Warlock rendered; reached `cleanup`; ground there** | **materials ARE writable**; a changed tag value is what kills the preview |
+| **baseline: no material patch at all** | **`037d_25` (current)** | — | does the clean split reach orbit, and how slowly? |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
@@ -1218,9 +1270,9 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch is the null control in `037d_29`** — click the **Warlock**. Nothing visual to look for;
-it either reaches the character screen or it does not. Outcome table is in "The null control".
-Everything else below still stands.
+**Next launch is the baseline** — no material patch at all. Click the **Warlock**, go to orbit, and
+**wait several minutes** before judging. Outcome table is in "The baseline". Everything else below
+still stands.
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
 dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is
