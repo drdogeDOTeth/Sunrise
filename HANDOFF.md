@@ -389,7 +389,54 @@ grinding, not deadlock. It may simply need minutes.
 without a material patch on it.* The `_22` inject reached the Tower and Mercury, but that predates
 the 228-texture sweep — `0699_8` alone is 186 MB. So `cleanup` being slow may be the baseline.
 
-## The orbit "hang" was closed too early, twice
+## The orbit stall IS a deadlock, and it does no I/O
+
+**Correction to the section below: the orbit stall is real.** The "closed too early" reading was
+wrong — it explained the *first two* reports, but a launch left running for two minutes settles it.
+From t=72,812 to t=162,844 the state prints the identical line every fifteen seconds:
+
+```
+state:cleanup: After 116067ms, status: '2', tasks active: '0x0020000800000000',
+               pending: '0x0000000000000000', requested: '0x00e0010c30fbdf3c'
+```
+
+**Tasks 35 and 53 start and never complete** — 50 started, 48 completed, and the stuck mask
+`0x0020000800000000` is exactly bits 35 and 53. Nothing pending, nothing changing.
+
+### The F8 capture: no package I/O at all during the stall
+
+Armed at character select (t=44,140), `cleanup` entered at t=46,781, first hitch at t=67,625,
+capture stopped at t=162,719. **203 reads in the whole window**, and the *last* one is at
+**t=47,437** — twenty seconds before the stall is even reported, and ninety before it ends.
+
+| file | reads |
+|---|---:|
+| `w64_video_01e5_0.pkg` | 99 |
+| `w64_investment_globals_client_*` | ~50 across ten packages |
+| `w64_ui_01a3_7.pkg` | 5 |
+| `w64_shared_manifest_070d_6.pkg` | last read, t=47,437 |
+
+**The game reads nothing while it is stuck**, so this was never a streaming or package problem, and
+none of our patched content is implicated by it. The hitch names `resourcerer process events`, but
+the resourcerer has no I/O outstanding — it is blocked on something else.
+
+This also means the raised capture limit was not needed: 203 reads never approached even the old
+8,192. The raise is harmless and stays, because a capture that *does* run long should not truncate.
+
+### The control never run: take a different character to orbit
+
+Every orbit attempt in this file has used the **Warlock**. The Hunter and Titan reach character
+select fine but have never been taken further. That splits the whole question in one launch:
+
+| outcome | conclusion |
+|---|---|
+| **Hunter reaches orbit** | the stall is Warlock-specific, so it *is* our armour work, and the search narrows to what the Warlock loads that the others do not |
+| **Hunter stalls the same** | nothing to do with any of this work — it is the mod or the install, and the cosmetics thread is unblocked the moment it is fixed |
+
+No F8 needed; I/O is already ruled out. `orbit_status.ps1` gives the verdict without watching the
+window.
+
+## Superseded: "the orbit hang was closed too early"
 
 The baseline — **no material patch at all** — stalled in `cleanup` identically: same job
 (`resourcerer process events`), same ~25 s `ENUM(55)`. So the `cleanup` behaviour is **baseline**,
@@ -1217,7 +1264,8 @@ file" and copies from inline DyeData instead):
 | same repoint, resident dye target | `037d_28` | **Warlock stalled** | residency ruled out; nothing about the target explains it |
 | null control, material byte-identical | `037d_29` | **Warlock rendered; reached `cleanup`; ground there** | **materials ARE writable**; a changed tag value is what kills the preview |
 | baseline: no material patch at all | `037d_25` | **same `cleanup` grind** | `cleanup` is **baseline**, not ours; the null control passed end to end |
-| **same baseline, allowed to run** | **`037d_25` (current)** | — | does orbit arrive if given five minutes? |
+| same baseline, allowed to run + F8 | `037d_25` | **genuine deadlock: tasks 35 and 53 never complete, zero package I/O for 90 s** | not streaming, not our patches being read |
+| **Hunter to orbit (control never run)** | **`037d_25` (current)** | — | Warlock-specific, or the mod itself? |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
@@ -1300,9 +1348,8 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch: relaunch as-is and wait.** Nothing to write — live is already the clean split. Run
-`.\watch_load.ps1` in a second terminal, click the **Warlock**, and give orbit five minutes. See
-"The orbit hang was closed too early".
+**Next launch: pick the HUNTER, not the Warlock, and go to orbit.** Nothing to write — live is
+already the clean split. This is the control that has never been run; see "The control never run".
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
 dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is
