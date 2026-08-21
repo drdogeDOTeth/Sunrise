@@ -47,6 +47,7 @@ from inject_mesh import entry_index_of, package_of, write_all
 from tigerpkg import BLOCK_SIZE, Package, PackageError, TAG_BASE, TAG_ENTRY_BITS
 
 LEGEND = Path(__file__).with_name("texture_legend.json")
+TRACED = Path(__file__).with_name("traced_textures.json")
 # 2048x2048 BC7 with mips to 128, and the same at half. Both are exact across the install.
 TEXTURE_SIZES = (5_586_944, 2_793_472)
 FAMILIES = ("037c", "037d", "0698", "0699")
@@ -105,6 +106,35 @@ def bc7_mode6_flat(red: int, green: int, blue: int) -> bytes:
     return bits.to_bytes(BC7_BLOCK_BYTES, "little")
 
 
+BC1_BLOCK_BYTES = 8
+
+
+def bc1_flat(red: int, green: int, blue: int) -> bytes:
+    """
+    @return One BC1 block that decodes to a single colour.
+
+    Not every texture is a 16-byte-block format. The traced set contains sizes like 43,704 and
+    87,408 - the same 5,463 blocks at 8 and at 16 bytes each - so the 8-byte families (BC1, BC4)
+    are in use alongside BC7 and a 16-byte-only painter simply skips them.
+
+    A BC1 block is two RGB565 endpoints and sixteen 2-bit indices. With `colour0 > colour1` the
+    block is in four-colour mode and index 0 selects `colour0`, so all-zero indices give a flat
+    field. RGB565 quantises, so the colour returned is near the request rather than exact - fine
+    for reading a hue off a screenshot, and the legend records what was asked for.
+    """
+    packed = ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
+    return struct.pack("<HHI", packed, 0, 0)
+
+
+def flat_body(size: int, rgb: tuple[int, int, int]) -> bytes | None:
+    """@return `size` bytes of one flat colour, or None when the size fits no block format."""
+    if size % BC7_BLOCK_BYTES == 0:
+        return bc7_mode6_flat(*rgb) * (size // BC7_BLOCK_BYTES)
+    if size % BC1_BLOCK_BYTES == 0:
+        return bc1_flat(*rgb) * (size // BC1_BLOCK_BYTES)
+    return None
+
+
 def unpack_mode6(block: bytes) -> tuple[int, int, int, int]:
     """@return The first endpoint of a mode-6 block, decoded independently of the packer."""
     bits = int.from_bytes(block, "little")
@@ -155,14 +185,11 @@ def already_painted(pkg: Package, entry) -> bool:
         return False
     if len(body) < 64:
         return False
-    blocks = [body[at:at + BC7_BLOCK_BYTES] for at in range(0, 64, BC7_BLOCK_BYTES)]
-    if any(block != blocks[0] for block in blocks[1:]):
-        return False
-    try:
-        unpack_mode6(blocks[0])
-    except ValueError:
-        return False
-    return True
+    for width in (BC7_BLOCK_BYTES, BC1_BLOCK_BYTES):
+        blocks = [body[at:at + width] for at in range(0, 64, width)]
+        if all(block == blocks[0] for block in blocks[1:]):
+            return True
+    return False
 
 
 def textures() -> list[tuple[int, int, str]]:
@@ -262,16 +289,38 @@ def known_textures() -> set[int]:
     return out
 
 
-def main() -> None:
-    everything = textures()
+def traced() -> list[tuple[int, int, str]]:
+    """
+    @return The textures `trace_model_tags.py` saw the game resolve, from `traced_textures.json`.
 
-    # The type filter is what keeps geometry out. Check it did not also cut textures: every body
-    # whose size is exactly a BC7 mip chain is certainly a texture, so all 55 must survive it.
-    missing = known_textures() - {tag for tag, _size, _stem in everything}
-    if missing:
-        raise SystemExit(f"the type filter dropped {len(missing)} known textures, e.g. "
-                         + ", ".join(f"0x{tag:08X}" for tag in sorted(missing)[:4]))
-    print(f"type filter keeps all {len(known_textures())} known textures")
+    This is the only selection here that is not a guess about where to look. Every other mode
+    paints a package and hopes; this paints what the game asked for.
+    """
+    if not TRACED.is_file():
+        raise SystemExit(f"no {TRACED.name}; run trace_model_tags.py first")
+    out = []
+    for row in json.loads(TRACED.read_text(encoding="utf-8")):
+        tag = int(row["tag"], 16)
+        entry = entry_of(tag)
+        if entry is None:
+            raise SystemExit(f"0x{tag:08X} from {TRACED.name} is not an installed entry")
+        out.append((tag, entry.size, row["package"]))
+    return sorted(out)
+
+
+def main() -> None:
+    if "--traced" in sys.argv:
+        everything = traced()
+        print(f"{len(everything)} textures the game was observed to resolve")
+    else:
+        everything = textures()
+        # The type filter is what keeps geometry out. Check it did not also cut textures: every
+        # body whose size is exactly a BC7 mip chain is certainly a texture, so all must survive.
+        missing = known_textures() - {tag for tag, _size, _stem in everything}
+        if missing:
+            raise SystemExit(f"the type filter dropped {len(missing)} known textures, e.g. "
+                             + ", ".join(f"0x{tag:08X}" for tag in sorted(missing)[:4]))
+        print(f"type filter keeps all {len(known_textures())} known textures")
 
     found = narrow(everything)
     if not found:
@@ -287,12 +336,20 @@ def main() -> None:
 
     by_package: dict[Path, dict[int, bytes]] = {}
     legend = []
+    # In traced mode the colour names the package, since there are few enough packages to read off
+    # a screenshot directly and that is more useful than a position in a tag range.
+    if "--traced" in sys.argv:
+        order = sorted({stem for _tag, _size, stem in found})
+        colours = [(order.index(stem), BUCKET_COLOURS[order.index(stem) % len(BUCKET_COLOURS)])
+                   for _tag, _size, stem in found]
+
     for (tag, size, stem), (bucket, (red, green, blue)) in zip(found, colours):
-        if size % BC7_BLOCK_BYTES:
-            # A texture body is a whole number of BC7 blocks. Anything else is not one, whatever
-            # its entry pairing looks like, so leave it alone rather than write ragged bytes.
+        body = flat_body(size, (red, green, blue))
+        if body is None:
+            # Not a whole number of blocks in any format we can author. Leave it alone rather
+            # than write ragged bytes over something we have not identified.
+            print(f"  skipped 0x{tag:08X}: {size:,} B fits no block size")
             continue
-        body = bc7_mode6_flat(red, green, blue) * (size // BC7_BLOCK_BYTES)
         path = package_of(tag)
         by_package.setdefault(path, {})[entry_index_of(tag)] = body
         legend.append({"tag": f"0x{tag:08X}", "package": stem, "size": size, "bucket": bucket,

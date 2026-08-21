@@ -1,0 +1,197 @@
+[
+  {
+    "tag": "0x80B3B26E",
+    "size": 87380,
+    "package": "w64_fx_019d_5"
+  },
+  {
+    "tag": "0x80B3B502",
+    "size": 32768,
+    "package": "w64_fx_019d_5"
+  },
+  {
+    "tag": "0x80BC81F3",
+    "size": 5488,
+    "package": "w64_sandbox_01e4_5"
+  },
+  {
+    "tag": "0x80BC81F5",
+    "size": 5488,
+    "package": "w64_sandbox_01e4_5"
+  },
+  {
+    "tag": "0x80BC8264",
+    "size": 21872,
+    "package": "w64_sandbox_01e4_5"
+  },
+  {
+    "tag": "0x80BC84DE",
+    "size": 65536,
+    "package": "w64_sandbox_01e4_5"
+  },
+  {
+    "tag": "0x80BDE380",
+    "size": 712,
+    "package": "w64_sandbox_01ef_5"
+  },
+  {
+    "tag": "0x80C0E81A",
+    "size": 32768,
+    "package": "w64_sandbox_0207_6"
+  },
+  {
+    "tag": "0x80C0E822",
+    "size": 32768,
+    "package": "w64_sandbox_0207_6"
+  },
+  {
+    "tag": "0x80C19783",
+    "size": 136,
+    "package": "w64_sandbox_020c_7"
+  },
+  {
+    "tag": "0x80C1980A",
+    "size": 712,
+    "package": "w64_sandbox_020c_7"
+  },
+  {
+    "tag": "0x80C238E5",
+    "size": 32768,
+    "package": "w64_globals_0211_5"
+  },
+  {
+    "tag": "0x80C238F8",
+    "size": 508,
+    "package": "w64_globals_0211_5"
+  },
+  {
+    "tag": "0x80C238F9",
+    "size": 21844,
+    "package": "w64_globals_0211_5"
+  },
+  {
+    "tag": "0x80C238FC",
+    "size": 5480,
+    "package": "w64_globals_0211_5"
+  },
+  {
+    "tag": "0x80C23905",
+    "size": 10936,
+    "package": "w64_globals_0211_5"
+  },
+  {
+    "tag": "0x80C23907",
+    "size": 16384,
+    "package": "w64_globals_0211_5"
+  },
+  {
+    "tag": "0x80EF0193",
+    "size": 2760,
+    "package": "w64_sandbox_0378_5"
+  },
+  {
+    "tag": "0x80EF1BAB",
+    "size": 65584,
+    "package": "w64_sandbox_0378_5"
+  },
+  {
+    "tag": "0x80EF1BAE",
+    "size": 65584,
+    "package": "w64_sandbox_0378_5"
+  },
+  {
+    "tag": "0x80EF6EA2",
+    "size": 32768,
+    "package": "w64_sandbox_037b_5"
+  },
+  {
+    "tag": "0x80EF6FD5",
+    "size": 8192,
+    "package": "w64_sandbox_037b_5"
+  },
+  {
+    "tag": "0x80EF6FE9",
+    "size": 16384,
+    "package": "w64_sandbox_037b_5"
+  },
+  {
+    "tag": "0x80EF7BA4",
+    "size": 32768,
+    "package": "w64_sandbox_037b_5"
+  },
+  {
+    "tag": "0x8152593A",
+    "size": 43704,
+    "package": "w64_sandbox_0692_5"
+  },
+  {
+    "tag": "0x8152593B",
+    "size": 87408,
+    "package": "w64_sandbox_0692_5"
+  },
+  {
+    "tag": "0x8152593E",
+    "size": 10952,
+    "package": "w64_sandbox_0692_5"
+  },
+  {
+    "tag": "0x81525941",
+    "size": 21904,
+    "package": "w64_sandbox_0692_5"
+  },
+  {
+    "tag": "0x81525942",
+    "size": 21904,
+    "package": "w64_sandbox_0692_5"
+  },
+  {
+    "tag": "0x8152594F",
+    "size": 43704,
+    "package": "w64_sandbox_0692_5"
+  },
+  {
+    "tag": "0x81525952",
+    "size": 87408,
+    "package": "w64_sandbox_0692_5"
+  },
+  {
+    "tag": "0x81525955",
+    "size": 10952,
+    "package": "w64_sandbox_0692_5"
+  },
+  {
+    "tag": "0x81525956",
+    "size": 21904,
+    "package": "w64_sandbox_0692_5"
+  },
+  {
+    "tag": "0x81525958",
+    "size": 21904,
+    "package": "w64_sandbox_0692_5"
+  },
+  {
+    "tag": "0x8152596F",
+    "size": 43704,
+    "package": "w64_sandbox_0692_5"
+  },
+  {
+    "tag": "0x81525971",
+    "size": 10936,
+    "package": "w64_sandbox_0692_5"
+  },
+  {
+    "tag": "0x81525973",
+    "size": 87408,
+    "package": "w64_sandbox_0692_5"
+  },
+  {
+    "tag": "0x815259E5",
+    "size": 712,
+    "package": "w64_sandbox_0692_5"
+  },
+  {
+    "tag": "0x8152BBD5",
+    "size": 2744,
+    "package": "w64_sandbox_0695_6"
+  }
+]

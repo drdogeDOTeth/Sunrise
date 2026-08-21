@@ -1,6 +1,6 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-20 (hot-package sweep). **Status: `_22` geometry WORKS. `_26` painted all 228 textures in the four gear packages and the WEAPON CHANGED COLOUR — paint reaches the GPU and shows. The body did not, and `_27`'s t0 rebind on all three dye channels also showed nothing. Current layer paints the 384 textures in `globals_0238`, both investment packages and `sandbox_0378`–`037b`.**
+**Updated:** 2026-08-20 (traced textures). **Status: `_22` geometry WORKS. `_26` painted 228 textures and the WEAPON CHANGED COLOUR — paint reaches the GPU and shows. STOP SWEEPING: `model_class_trace` has been logging every tag the game resolves per model since process start, and `trace_model_tags.py` reads 39 textures in 10 packages straight out of `sunrise.log`. The current layer paints exactly those, 1.0 MB, one colour per package.**
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything." — on `_20`
@@ -746,7 +746,8 @@ file" and copies from inline DyeData instead):
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
 | all three dye channels' albedo tile rebound to t0, both mip halves painted | `037c_27` + six dye packages | **nothing** | t0 is not the albedo slot for any of the three channels. The dye tiles are inert, so any colour seen from here is not them |
-| **384× every texture in the character-select hot packages**, 12 buckets | **`globals_0238_7`, `globals_03ed_6`, `investment_01d3_7`, `investment_0361_7`, `sandbox_0378_6` / `0379_6` / `037a_7` / `037b_6` (current)** | **awaiting launch** | a colour names a bucket of ~10–48; nothing sends this to the package trace |
+| 384× every texture in the "hot" packages, 12 buckets | **reverted, never launched** | — | a guess about *where* to look, replaced by the measurement below before it cost a launch |
+| **36× exactly the textures the game was recorded loading**, one colour per package | **`fx_019d_6`, `globals_0211_6`, `sandbox_01e4_6` / `01ef_6` / `0207_7` / `020c_8` / `0378_6` / `037b_6` / `0692_6` / `0695_7` (current)** | **awaiting launch** | the colour names the package the body's albedo comes from |
 | remaining-mips **incl. normals** t4/t6/t8 | deleted | **clay-white + black splotches** | dye remaining-mips **are** sampled; do not flatten normals |
 | sRGB **top mips** t3/t5/t7 | deleted | grayscale zebra weave | character select is not sampling mip 0+1 |
 | sRGB **remaining-mips only** t3 red / t5 green / t7 blue | `01db_6` / `020c_6` / `020e_7` | **no colour** | those sRGB tiles are not visible albedo |
@@ -773,7 +774,9 @@ non-mesh-0 parts. Do not un-zero original extras.
 | `material_probe.py` | Reads each part's material tag offline, and writes the dump request for the material bodies. |
 | `texture_probe.py` | Finds every texture pair offline (40-byte header ↔ data) and decodes the header. |
 | `paint_textures.py` | **Current texture step.** Flat-colour probe of every `entry_type` 40 texture in 12 colour buckets, `--only=A..B` to bisect one. `ours()` skips plain blocks so it never repaints our own buffers; `already_painted()` readmits our own flat paint so a bucket *can* be bisected. Asserts the 55 size-matched textures survive the filter. |
-| `paint_dye_slots.py` | **Current texture step.** Rebinds all three dye channels' albedo tile to one t-slot (`--slot`, default 0) and paints each channel's texture a distinct colour in **both** mip halves, so the channel reports itself and the mip level cannot confound it. |
+| `trace_model_tags.py` | **Ask, do not guess.** Reads `model_class_trace`'s `r9tags` out of `sunrise.log` — every tag the game resolved per model, logged from process start with no F8 — and reports the textures among them. Writes `traced_textures.json`. |
+| `trace_textures.py` | The F8 package-read capture, mapped through the block table to entries and filtered to textures. Archives the log first, because it rotates one deep. Use when a model lookup names no texture. |
+| `paint_dye_slots.py` | Dye rebind step. Rebinds all three dye channels' albedo tile to one t-slot (`--slot`, default 0) and paints each channel's texture a distinct colour in **both** mip halves, so the channel reports itself and the mip level cannot confound it. |
 | `revert_layer.ps1` | **Recovery.** Moves each package's newest layer aside, reverting to the one beneath. `-Confirm` to act, `-Restore` to put it back. Refuses while destiny2 is running. |
 | `paint_dye_textures.py` | sRGB remaining-mips t3/t5/t7. **Done.** On disk, no visible colour. Leave installed for `_25`. |
 | `paint_dye_tints.py` | Inline DyeData tints. **`037c_24`. Failed visually. Do not rerun.** |
@@ -833,30 +836,45 @@ has not been found.** That is now the reading the evidence supports, and it reti
 
 So the visible albedo is `t0`/`t1`/`t2`, which nothing supplies. **Bind, do not find.**
 
-`_27` rebound all three channels to **t0** and showed nothing, so t0 is not the albedo slot for
-any channel. `--slot 1` and `--slot 2` remain untried and are cheap, but the weapon result argues
-for finishing the search first: **find-and-repaint demonstrably works when the texture is in a
-package we painted**, so "the slot is empty" may simply be "the texture is somewhere we have never
-touched". Two facts point the same way:
+## Stop sweeping. The log already says which textures the game loads.
 
-- The four gear packages hold only **257** textures between them, which is far too few to dress
-  the whole Scatterhorn set.
-- The dye textures the body *does* sample live in **`01db` / `01b5`**, not in the gear package —
-  Destiny keeps gear textures in shared texture packages and only *names* them from the gear.
+**`model_class_trace` logs an `r9tags=` list on every `SEntityModel` lookup — every tag the game
+resolved while building that model — from process start, with no F8 window needed.** It has been
+writing that to `sunrise.log` the whole time. Four sweeps painted well over a thousand textures
+across twelve packages to find the albedo by elimination, and every one was a guess about *where*
+to look, when the answer was already on disk.
 
-1. Current: **the hot-package sweep**, `python paint_textures.py --hot`. 384 textures across
-   `globals_0238` (the top package in the character-select live-handle histogram), both
-   **investment** packages (the armour), and the `sandbox_0378`–`037b` run. 667.8 MB, all block
-   ceilings clear. **One** character-screen look, then quit:
-   - **any bucket colour on the body** — read the hex off the sheet, then
-     `python paint_textures.py --hot --only=0xAAAA..0xBBBB` to bisect that bucket.
-   - **nothing** — the search is out of cheap guesses and the next move is the **package trace**:
-     `live_models.py` with no `--match` gives a live-handle histogram needing no dumps. Painting
-     all 97,609 type-40 textures install-wide is not an option.
-   - **a crash** — `.\revert_layer.ps1 -Confirm -Stems <the eight above>` and narrow first.
+`trace_model_tags.py` reads it. From the `_27` launch: **1,470 model lookups, 39 distinct
+textures**, in ten packages — and **`sandbox_0692` holds 14 of them**, a package no sweep had ever
+considered.
 
-   Revert for this layer:
-   `.\revert_layer.ps1 -Stems w64_globals_0238,w64_globals_03ed,w64_investment_01d3,w64_investment_0361,w64_sandbox_0378,w64_sandbox_0379,w64_sandbox_037a,w64_sandbox_037b -Confirm`
+| package | textures |
+|---|---:|
+| `sandbox_0692` | 14 |
+| `globals_0211` | 6 |
+| `sandbox_01e4` | 4 |
+| `sandbox_037b` | 4 |
+| `sandbox_0378` | 3 |
+| `fx_019d`, `sandbox_0207`, `020c` | 2 each |
+| `sandbox_01ef`, `0695` | 1 each |
+
+`paint_textures.py --traced` paints exactly those, one colour per package: **1.0 MB**, against
+667.8 MB for the sweep it replaced. Three are skipped as 4-byte-but-not-8 sizes (87,380 / 508 /
+21,844) and are not authored rather than written ragged.
+
+**Not every texture is BC7.** The traced set contains 43,704 and 87,408 — the same 5,463 blocks at
+8 and at 16 bytes — so `bc1_flat()` handles the 8-byte families (BC1, BC4) that a 16-byte-only
+painter silently skipped.
+
+1. Current: **`paint_textures.py --traced`**. **One** character-screen look, then quit. The colour
+   on the body names the package; `texture_legend.json` lists its tags, usually one to fourteen.
+2. If nothing shows, the capture was too narrow rather than the idea being wrong — take an **F8
+   capture** with `trace_textures.py` (launch, F8 at SELECT CHARACTER, click through all three
+   characters, F8 again, quit), which maps file reads to entries and catches textures no model
+   lookup named.
+3. `_27` rebound all three dye channels to **t0** and showed nothing, so t0 is not the albedo slot.
+   `--slot 1` / `--slot 2` are still untried and cheap, but only worth it once the trace has been
+   exhausted.
    - **nothing** — the albedo is genuinely not in these four packages, and the next move is the
      package trace, not another paint. `live_models.py` with **no `--match`** gives a package
      histogram from a capture that needs no dumps; `globals_0238` led it at 1,702 live handles
