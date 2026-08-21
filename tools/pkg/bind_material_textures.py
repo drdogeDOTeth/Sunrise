@@ -30,29 +30,32 @@ All five are exactly 5,586,944 B, which is the full five-level BC7 chain for 204
 encode lands at native size with no resampling and no entry resize. Their headers are rewritten
 from `0x80EFAD60`, a dumped and verified header for a texture of exactly those dimensions.
 
-**Entry size is not the cause, and neither is the self-length.** Both were suspected and both are
-dead. `verify_bind_layer.py` reads the shipped layer back and finds every invariant holding, and
-the layer *underneath* it - the five-part split the user confirmed working - already carries three
-of our own 5,586,944 B, 22-block plain entries from the `_26` texture sweep. A 21-block entry
-loads; the game has read one back byte-exact.
+**Nothing here has ever loaded, and four suspects are dead.** Every layer that touches a material
+stalls a job fiber in `character:signin` - the Warlock wears this armour, the other two characters
+build fine in the same launch. Ruled out one launch per variable:
 
-What has never loaded is the **material surgery**, and it is the only thing both hung layers share.
-`--bind-only` was meant to isolate it but changed two things at once - four materials grow by 32 B
-and a fifth is repointed in place - so it cannot say which half is at fault.
+- **the self-declared length** at `+0x00` - a real bug, fixed, verified in the shipped bytes,
+  and the stall stayed;
+- **resize** - `--repoint-only` changes three bytes with no resize and stalls;
+- **entry size** - a 22-block target and a 1-block target stall identically;
+- **package locality** - the binding that *works* is cross-package, and a target in the
+  material's own package stalls;
+- **what the tag points at** - a resident dye tile of the same size, layout and kind as the
+  working binding stalls too.
 
-**`--repoint-only` is the bisect that can.** `0x80EFA1DC` is the one carrier material that already
-owns a pixel-texture array, so binding it needs **four bytes and no resize**: slot 3 moves from the
-suit dye tile to `0x80EF89F1`, the gas mask's own header, which was never touched and still
-describes its original shape. Its body is already flat **red** from the `_26` sweep, so the test
-reports itself:
+`--repoint-only [--target=]` is that bisect, kept because each target ruled something out. It
+reports what it aims at - size, block count, and the decoded colour when our own sweep painted it -
+so any outcome is readable off the screen.
 
-- the gas mask turns red  -> binding works, and the fault is in the append/resize path;
-- it loads unchanged      -> that pixel shader reads a slot other than 3; no hang cause here;
-- it hangs                -> repointing alone hangs the loader and the append is innocent.
+**`--null-control` is what is left.** It writes the material back byte-identical, which has never
+been tried: every material layer so far also changed something. Loads -> the write is sound and a
+changed tag value is specifically fatal. Stalls -> a material entry cannot be rewritten at all, and
+this goes back to `patch.py` rather than to the material format.
 
 Usage:
     python bind_material_textures.py --dry-run
-    python bind_material_textures.py --repoint-only [--dry-run]
+    python bind_material_textures.py --null-control [--dry-run]
+    python bind_material_textures.py --repoint-only [--target=0xTAG] [--dry-run]
     python bind_material_textures.py --bind-only [--dry-run]
     python bind_material_textures.py            # Destiny closed
 """
@@ -76,6 +79,7 @@ SELF_LENGTH = 0x00        # a structured record's own byte length; the loader tr
 ARRAY_HEADER = 0x14
 ELEMENT_BYTES = 8
 ALBEDO_SLOT = 3
+ORIGINAL_BINDING = 0x80C1D3CD   # what slot 3 of 0x80EFA1DC names in shipped Scatterhorn
 
 # A dumped, verified 40-byte header for a 2048x2048 BC7_UNORM texture with five mips and no split
 # buffer. Every body below is the same shape, so the same forty bytes describe all of them.
@@ -249,6 +253,57 @@ def flat_colour(block: bytes) -> tuple[int, int, int, int]:
     return image.convert("RGBA").getpixel((0, 0))
 
 
+def null_control() -> None:
+    """Write the material back byte-identical. The last untested variable.
+
+    Three repoints have stalled the game - a 22-block target, a 1-block target in the material's own
+    package, and a resident dye tile of the same size, layout and kind as the binding that works. So
+    it is not what the tag points at. The question left is whether it is the tag at all, or whether
+    **rewriting this material entry stalls whatever it says**, which has never been tested because
+    every material layer so far also changed something.
+
+    This changes nothing. Same bytes, same length, same entry, through the same writer.
+
+    - loads  -> the write is sound, and a changed tag value is specifically fatal;
+    - stalls -> the material entry cannot be rewritten at all, which is a container-level fact and
+                sends this back to `patch.py` rather than to the material format.
+    """
+    group = next(g for g in GROUPS if g.source == "GLSLShader66")
+    material = dumped(group.material)
+    if material is None:
+        raise SystemExit(f"0x{group.material:08X}: material not dumped")
+
+    found = texture_array(material)
+    if found is None:
+        raise SystemExit(f"0x{group.material:08X}: dumped copy has no texture array, so it is not "
+                         "the pristine original this control needs")
+    marker, count = found
+    slots = dict(struct.unpack_from("<2I", material, marker + ARRAY_HEADER + i * ELEMENT_BYTES)
+                 for i in range(count))
+    if slots.get(ALBEDO_SLOT) != ORIGINAL_BINDING:
+        raise SystemExit(f"0x{group.material:08X}: slot {ALBEDO_SLOT} reads "
+                         f"0x{slots.get(ALBEDO_SLOT, 0):08X}, not the original "
+                         f"0x{ORIGINAL_BINDING:08X}. The dump is not pristine and this control "
+                         "would prove nothing.")
+    (declared,) = struct.unpack_from("<I", material, SELF_LENGTH)
+    if declared != len(material):
+        raise SystemExit(f"dumped material declares {declared:,} B but is {len(material):,} B")
+
+    print(f"null control: 0x{group.material:08X} ({group.what}) written back UNCHANGED")
+    print(f"  {len(material):,} B, 1 entry, 0 bytes changed, slot {ALBEDO_SLOT} still "
+          f"-> 0x{ORIGINAL_BINDING:08X}")
+    print("  the only difference from a working launch is that our writer emitted this entry")
+
+    by_package: dict[Path, dict[int, bytes]] = {}
+    put(by_package, group.material, material)
+    if "--dry-run" in sys.argv:
+        print("dry run; nothing written")
+        return
+    write_all(by_package, "")
+    print("\nLoads  -> the write is sound; a changed tag value is specifically fatal.\n"
+          "Stalls -> a material entry cannot be rewritten at all. Container problem, not format.")
+
+
 def repoint_only() -> None:
     """Repoint one already-bound slot and change nothing else. See `--repoint-only` above."""
     group = next(g for g in GROUPS if g.source == "GLSLShader66")
@@ -324,6 +379,9 @@ def bind_only() -> None:
 
 
 def main() -> None:
+    if "--null-control" in sys.argv:
+        null_control()
+        return
     if "--repoint-only" in sys.argv:
         repoint_only()
         return

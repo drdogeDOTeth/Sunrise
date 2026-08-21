@@ -1,6 +1,6 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-21. **Status: the corrected atlas bind (`037c_29` + `037d_26` + `0698_25` + `0699_9`) still hangs at character select. The self-length fix is real and is correctly present in the shipped bytes — `verify_bind_layer.py` reads all seventeen entries back and every invariant holds — so it was a real bug but not the only one. Entry size is NOT disproven — that was an over-claim; a 22-block entry can be present and readable without ever being bound and streamed. The one thing that has never loaded is the material surgery. Three bytes are enough and the append is innocent; size and package locality are ruled out too. Live layer is the residency test. See "The hang, round two".**
+**Updated:** 2026-08-21. **Status: the corrected atlas bind (`037c_29` + `037d_26` + `0698_25` + `0699_9`) still hangs at character select. The self-length fix is real and is correctly present in the shipped bytes — `verify_bind_layer.py` reads all seventeen entries back and every invariant holds — so it was a real bug but not the only one. Entry size is NOT disproven — that was an over-claim; a 22-block entry can be present and readable without ever being bound and streamed. The one thing that has never loaded is the material surgery. Three bytes are enough, and size, package locality and residency are all ruled out. Live layer is the byte-identical null control. See "The hang, round two".**
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything." — on `_20`
@@ -44,8 +44,8 @@ Newest files win:
 | `w64_sandbox_020e` | **`_7`** | — | dye paint suit t5 remaining mips |
 
 **The `_29` / `_26` / `_25` / `_9` atlas-bind row is reverted** to `_reverted_atlas2`. Live is
-`037c_28` / **`037d_28`** / `0698_24` / `0699_8`: the working five-part split, plus one material
-entry repointed. `037d_26`, `_27` and `_28` each change that one entry and nothing else.
+`037c_28` / **`037d_29`** / `0698_24` / `0699_8`: the working five-part split, plus one material
+entry rewritten. `037d_26` through `_29` each touch that one entry and nothing else.
 
 **Package indices are per-package, not a version number** — the injector writes each package its
 own next index. "The `_22` inject" is `037c_22` + `037d_22` + `0698_21`; the texture probe on top
@@ -329,7 +329,45 @@ sync. The other three arrays in the material are samplers (`0x808073F3`, six ele
   what has never landed anywhere: **changing a texture *tag*.** The dye work only ever changed slot
   *numbers*, never which texture a slot points at.
 
-### The residency test (live, awaiting launch)
+### Residency is dead too. The null control is all that is left.
+
+The resident-dye repoint **stalled**. That target was the same *kind* of object as the binding that
+works — a dye tile this Warlock loads to render the robe, same 21,872 B in one block, same split
+layout, same package family — differing only in identity. So it is not residency, and it is not
+anything about what the tag points at. **Three targets, three stalls, nothing in common but the
+act of changing the word.**
+
+Which leaves the one thing never tried: **does rewriting this material stall regardless of what it
+says?** Every material layer so far also changed something, so "the write itself" has never been
+isolated.
+
+**The dumped material is pristine**, which this control depends on: `tag_80EFA1DC.bin` was written
+2026-08-20 14:08, and the first patch that ever touched a material entry was written at 22:39 that
+evening. At 14:08 the live layers were the `_22` geometry inject, which touches buffers and models
+and no materials. `--null-control` re-checks it anyway — it refuses unless slot 3 still reads the
+shipped `0x80C1D3CD` and the self-length agrees.
+
+**Also decoded and set aside:** the 208-byte tail after `037c`'s block table is
+`[0x80809FBD][22][0][0x80809A13][0]` followed by 22 pairs mapping **type-16** entries in `037c` to
+type-8 records in `w64_manifest_068f`. Our material is type 8 in `037d`, and `037d`'s tail is
+**empty**. Not the mechanism. `patch.py` already carries the tail through unchanged.
+
+### The null control (live, awaiting launch)
+
+`037d_29` writes `0x80EFA1DC` back **byte-identical** — verified equal to the pristine dump, same
+1,408 B, slot 3 still `0x80C1D3CD`, zero complaints. The only difference from a launch that works
+is that our writer emitted this entry.
+
+Live: `037c_28` / **`037d_29`** / `0698_24` / `0699_8`.
+
+| outcome | conclusion |
+|---|---|
+| **loads** | the write is sound. A *changed tag value* is specifically fatal — the tag is validated somewhere outside the material, and finding that validator is the whole problem |
+| **stalls** | **a material entry cannot be rewritten at all.** Container-level, and it goes back to `patch.py`, not the material format — the chest model at entry 458 rewrites fine in this same package, so compare those two writes byte for byte |
+
+Nothing visual to look for this time — it either reaches the character screen or it does not.
+
+### The superseded residency test
 
 Same three bytes, same slot, same material. Slot 3 now points at **`0x80C184F9`** — the cloth `t7`
 dye texture. It is the tightest possible control: the *same kind of object* as the binding that
@@ -337,11 +375,11 @@ works (a dye texture this Warlock loads to render the Scatterhorn Robe), the sam
 block, the same split layout — differing only in **identity**. And our own dye probe already painted
 it flat **blue `(0, 0, 254)`**, so it reports itself.
 
-Live: `037c_28` / **`037d_28`** / `0698_24` / `0699_8`.
+Shipped as `037d_28`. **Stalled.** Kept because it is what ruled residency out.
 
 | outcome | conclusion |
 |---|---|
-| **gas mask turns blue** | **(B) dead, (A) confirmed.** Rewriting materials is fine; the target must be resident. Route: get our atlas into a texture the character already loads |
+| ~~gas mask turns blue~~ | **(B) dead, (A) confirmed.** Rewriting materials is fine; the target must be resident. Route: get our atlas into a texture the character already loads |
 | loads, gas mask unchanged | **(B) dead** — slot 3 is not what that shader samples. Sweep slots for this group |
 | **stalls again** | **(A) dead.** Rewriting a material stalls whatever it says. Next is the null control: write the material back byte-identical |
 
@@ -372,7 +410,7 @@ is `w64_sandbox_037d_26.pkg` — the same name as the atlas layer now sitting in
 `-Restore` refuses on that collision rather than overwriting the newer layer; move the live file
 aside first if you really mean to put the atlas back. Guard negative-tested.
 
-**Live now:** `037c_28` / **`037d_28` (residency test)** / `0698_24` / `0699_8`.
+**Live now:** `037c_28` / **`037d_29` (null control)** / `0698_24` / `0699_8`.
 The other four materials read back encrypted and original at their pre-append sizes — unpatched,
 as intended. `0x80EF89F3` is still one flat red block, 5,586,944 B.
 
@@ -1096,7 +1134,8 @@ file" and copies from inline DyeData instead):
 | atlas bind, self-length fixed | `037c_29` / `037d_26` / `0698_25` / `0699_9` | **hang** | fix verified present in the shipped bytes; surgery is what is left |
 | repoint only, 3 B, 22-block target | `037d_26` | **Hunter loaded; clicking Warlock stalled** | three bytes are enough; the append is innocent; it is our content, not the container |
 | same repoint, 1-block target | `037d_27` | **Titan + Hunter loaded; Warlock stalled** | size and package locality both ruled out |
-| **same repoint, resident dye target** | **`037d_28` (current)** | — | blue = residency is the rule |
+| same repoint, resident dye target | `037d_28` | **Warlock stalled** | residency ruled out; nothing about the target explains it |
+| **null control, material written back byte-identical** | **`037d_29` (current)** | — | loads = the tag value is validated elsewhere; stalls = materials cannot be rewritten |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
@@ -1179,8 +1218,9 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch is the residency test in `037d_28`** — click the **Warlock**, look at the gas mask for
-flat blue. Outcome table is in "The residency test". Everything else below still stands.
+**Next launch is the null control in `037d_29`** — click the **Warlock**. Nothing visual to look for;
+it either reaches the character screen or it does not. Outcome table is in "The null control".
+Everything else below still stands.
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
 dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is
