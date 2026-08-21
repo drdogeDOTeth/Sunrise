@@ -30,6 +30,13 @@ LOG = Path(r"C:\Sunrise\bin\x64\Sunrise\logs\sunrise.log")
 TRACED = Path(__file__).with_name("traced_textures.json")
 LOOKUP_RE = re.compile(r"ev=model_class_trace stage=lookup seq=(?P<seq>\d+) "
                        r"class=0x(?P<klass>[0-9A-Fa-f]+).*?r9tags=(?P<tags>[0-9A-Fa-fx,]+)")
+# The trace logs two stages and three tag fields, and matching only one shape reads a third of it.
+# `stage=lookup` carries `r9tags`; `stage=resource` carries a `tag=` naming the resource being
+# loaded plus a `paytags=` list of its payload. Scanning every hex tag on every line of the event
+# cannot miss a field the way a single anchored pattern did.
+TRACE_LINE = "ev=model_class_trace"
+TAG_LISTS_RE = re.compile(r"(?:r9tags|paytags)=([0-9A-Fa-fx,]+)")
+SINGLE_TAG_RE = re.compile(r"\btag=0x([0-9A-Fa-f]+)")
 
 # The chest models our mesh is injected into, and the materials its two carrier parts draw with.
 OURS = {
@@ -88,15 +95,22 @@ def main() -> None:
         raise SystemExit(f"no log at {log}")
 
     lookups = []
-    for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
-        match = LOOKUP_RE.search(line)
-        if match is None:
+    for number, line in enumerate(log.read_text(encoding="utf-8", errors="replace").splitlines()):
+        if TRACE_LINE not in line:
             continue
-        tags = [int(value, 16) for value in match["tags"].split(",") if value.strip()]
-        lookups.append((int(match["seq"]), int(match["klass"], 16), tags))
+        tags = []
+        for group in TAG_LISTS_RE.findall(line):
+            tags += [int(value, 16) for value in group.split(",") if value.strip()]
+        tags += [int(value, 16) for value in SINGLE_TAG_RE.findall(line)]
+        if not tags:
+            continue
+        anchored = LOOKUP_RE.search(line)
+        klass = int(anchored["klass"], 16) if anchored else 0
+        lookups.append((number, klass, tags))
     if not lookups:
-        raise SystemExit(f"no model_class_trace lookups in {log.name}")
-    print(f"{len(lookups):,} model lookups in {log.name}\n")
+        raise SystemExit(f"no model_class_trace events in {log.name}")
+    print(f"{len(lookups):,} model_class_trace events with tags in {log.name}, "
+          f"{sum(len(tags) for _n, _k, tags in lookups):,} tag references\n")
 
     wanted = lookups if "--all" in sys.argv else [
         row for row in lookups if any(tag in OURS for tag in row[2])]

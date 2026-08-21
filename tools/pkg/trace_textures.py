@@ -30,6 +30,7 @@ Usage:
 from __future__ import annotations
 
 import collections
+import json
 import re
 import shutil
 import sys
@@ -42,6 +43,7 @@ from tigerpkg import BLOCK_SIZE, Package, PackageError, TAG_BASE, TAG_ENTRY_BITS
 
 LOG = Path(r"C:\Sunrise\bin\x64\Sunrise\logs\sunrise.log")
 ARCHIVE = Path(__file__).with_name("trace_archive")
+TRACED = Path(__file__).with_name("traced_textures.json")
 PACKAGES = Path(r"C:\Sunrise\packages")
 
 TRACE_RE = re.compile(
@@ -141,7 +143,8 @@ def main() -> None:
     families: collections.Counter[str] = collections.Counter()
     unmapped = 0
     for name, offset, size in reads:
-        match = PATCH_RE.match(name)
+        # The hook logs whatever path the game passed, which may be absolute. Match on the leaf.
+        match = PATCH_RE.match(Path(name.replace("\\", "/")).name)
         if match is None:
             unmapped += 1
             continue
@@ -187,17 +190,26 @@ def main() -> None:
         textures.append((count, tag, body.size, path.stem, painted))
 
     textures.sort(reverse=True)
-    print(f"\n{len(textures)} TEXTURES READ while the Guardians were drawn:")
+    total = sum(size for _c, _t, size, _s, _p in textures)
+    print(f"\n{len(textures)} TEXTURES READ while the Guardians were drawn, "
+          f"{total / 1e6:,.0f} MB in total")
     print(f"    {'reads':>6}  {'tag':<12} {'bytes':>12}  painted  package")
-    for count, tag, size, stem, painted in textures:
+    for count, tag, size, stem, painted in textures[:25]:
         print(f"    {count:>6}  0x{tag:08X}  {size:>12,}  "
               f"{'yes' if painted else '** NO **'}  {stem}")
+    if len(textures) > 25:
+        print(f"    ... {len(textures) - 25} more")
 
-    fresh = [row for row in textures if not row[4]]
-    print(f"\n{len(fresh)} of them have never been painted.")
-    if fresh:
-        print("Those are the candidates four sweeps were looking for. Paint exactly these:")
-        print("    " + " ".join(f"0x{tag:08X}" for _c, tag, _s, _p, _painted in fresh[:24]))
+    # A read covers a whole block and every entry sharing that block is credited, so the read count
+    # is a ranking, not a proof. Writing the whole measured set out lets the painter take a --top
+    # slice of it: the body is a large surface whose maps are read repeatedly, so it ranks high.
+    limit = int(sys.argv[sys.argv.index("--top") + 1]) if "--top" in sys.argv else len(textures)
+    keep = textures[:limit]
+    TRACED.write_text(json.dumps(
+        [{"tag": f"0x{tag:08X}", "size": size, "package": stem, "reads": count}
+         for count, tag, size, stem, _painted in keep], indent=2), encoding="utf-8")
+    print(f"\nwrote {len(keep)} textures ({sum(r[2] for r in keep) / 1e6:,.0f} MB) to {TRACED}")
+    print("Paint them:  python paint_textures.py --traced")
 
 
 if __name__ == "__main__":

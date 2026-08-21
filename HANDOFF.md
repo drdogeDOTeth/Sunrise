@@ -747,7 +747,8 @@ file" and copies from inline DyeData instead):
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
 | all three dye channels' albedo tile rebound to t0, both mip halves painted | `037c_27` + six dye packages | **nothing** | t0 is not the albedo slot for any of the three channels. The dye tiles are inert, so any colour seen from here is not them |
 | 384× every texture in the "hot" packages, 12 buckets | **reverted, never launched** | — | a guess about *where* to look, replaced by the measurement below before it cost a launch |
-| **36× exactly the textures the game was recorded loading**, one colour per package | **`fx_019d_6`, `globals_0211_6`, `sandbox_01e4_6` / `01ef_6` / `0207_7` / `020c_8` / `0378_6` / `037b_6` / `0692_6` / `0695_7` (current)** | **awaiting launch** | the colour names the package the body's albedo comes from |
+| 36× the textures named in model lookups, one colour per package | `fx_019d_6`, `globals_0211_6`, `sandbox_01e4_6` / `01ef_6` / `0207_7` / `020c_8` / `0378_6` / `037b_6` / `0692_6` / `0695_7` | **nothing** | the tag graph never names the body's texture — see below |
+| **top 150 of the 1,237 textures the F8 capture recorded being READ**, 12 buckets | **`sandbox_01b5_8` / `01bb_8` / `01bc_7` / `01bd_7` / `01be_6` / `01c0_6` / `01d5_7` / `01d6_4` / `01d7_5` / `01d8_6` / `01d9_7` / `01db_8` / `01dc_6` / `01dd_6`, `ui_01a3_7` (current)** | **awaiting launch** | 73.4 MB. A colour names ~12 tags, then `--only` bisects |
 | remaining-mips **incl. normals** t4/t6/t8 | deleted | **clay-white + black splotches** | dye remaining-mips **are** sampled; do not flatten normals |
 | sRGB **top mips** t3/t5/t7 | deleted | grayscale zebra weave | character select is not sampling mip 0+1 |
 | sRGB **remaining-mips only** t3 red / t5 green / t7 blue | `01db_6` / `020c_6` / `020e_7` | **no colour** | those sRGB tiles are not visible albedo |
@@ -866,15 +867,40 @@ considered.
 8 and at 16 bytes — so `bc1_flat()` handles the 8-byte families (BC1, BC4) that a 16-byte-only
 painter silently skipped.
 
-1. Current: **`paint_textures.py --traced`**. **One** character-screen look, then quit. The colour
-   on the body names the package; `texture_legend.json` lists its tags, usually one to fourteen.
-2. If nothing shows, the capture was too narrow rather than the idea being wrong — take an **F8
-   capture** with `trace_textures.py` (launch, F8 at SELECT CHARACTER, click through all three
-   characters, F8 again, quit), which maps file reads to entries and catches textures no model
-   lookup named.
-3. `_27` rebound all three dye channels to **t0** and showed nothing, so t0 is not the albedo slot.
-   `--slot 1` / `--slot 2` are still untried and cheap, but only worth it once the trace has been
-   exhausted.
+### The tag graph never names the body's texture. The read trace does.
+
+Parsing **every** tag field settled it — `stage=lookup` carries `r9tags`, `stage=resource` carries
+`tag=` and `paytags=`, and matching only the first shape read a third of the events. With all
+three, exactly one event names a carrier material, and this is its whole dependency set:
+
+| tag | type | what |
+|---|---:|---|
+| `0x81532694`, `0x80EFAD59`, `0x815B9224` | 33 | three shader headers (the last in `globals_06dc`) |
+| `0x80C6B566` | 34 | sampler |
+| `0x80EF8C3C` | 8 | the material itself |
+
+**No texture, of any type.** More entry types, for the record: material **8**, shader header
+**33**, sampler **34**, texture body **40**, texture header **32**, geometry buffer **41**.
+
+So no tag-graph search can ever find it, which is why four sweeps and the model trace all came
+back empty. The **F8 package-read capture** can, because it records what the game *reads* rather
+than what it *names*: 1,323 reads mapping to **1,237 texture entries**.
+
+A read covers a whole block and every entry sharing that block is credited, so the read count is a
+ranking rather than a proof — hence `--top`. The body is a large surface whose maps are read
+repeatedly, so it should rank high; the top 150 come to 73.4 MB against ~1 GB for all 1,237.
+
+1. Current: **the top 150 by read count**. **One** character-screen look, then quit.
+   - **a bucket colour on the body** — `python paint_textures.py --traced --only=0xAAAA..0xBBBB`
+     bisects those ~12 tags to one or two.
+   - **nothing** — re-run `trace_textures.py <archived log> --top 400` and paint the next slice;
+     the capture is already on disk in `tools/pkg/trace_archive/`, so this costs no launch to
+     prepare. The full set is ~1 GB and writable if it comes to that.
+2. `_27` rebound all three dye channels to **t0** and showed nothing, so t0 is not the albedo slot.
+   `--slot 1` / `--slot 2` stay untried, and are only worth it once the read trace is exhausted.
+
+Revert for this layer:
+`.\revert_layer.ps1 -Confirm -Stems w64_sandbox_01b5,w64_sandbox_01bb,w64_sandbox_01bc,w64_sandbox_01bd,w64_sandbox_01be,w64_sandbox_01c0,w64_sandbox_01d5,w64_sandbox_01d6,w64_sandbox_01d7,w64_sandbox_01d8,w64_sandbox_01d9,w64_sandbox_01db,w64_sandbox_01dc,w64_sandbox_01dd,w64_ui_01a3`
    - **nothing** — the albedo is genuinely not in these four packages, and the next move is the
      package trace, not another paint. `live_models.py` with **no `--match`** gives a package
      histogram from a capture that needs no dumps; `globals_0238` led it at 1,702 live handles

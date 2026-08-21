@@ -336,12 +336,19 @@ def main() -> None:
 
     by_package: dict[Path, dict[int, bytes]] = {}
     legend = []
-    # In traced mode the colour names the package, since there are few enough packages to read off
-    # a screenshot directly and that is more useful than a position in a tag range.
+    # In traced mode the colour names the **package** when they fit in the palette, which reads off
+    # a screenshot far more directly than a position in a tag range. Past twelve packages the
+    # modulo would alias two of them to one colour and quietly make the answer wrong, so fall back
+    # to the contiguous tag buckets, which stay unambiguous at any count.
     if "--traced" in sys.argv:
         order = sorted({stem for _tag, _size, stem in found})
-        colours = [(order.index(stem), BUCKET_COLOURS[order.index(stem) % len(BUCKET_COLOURS)])
-                   for _tag, _size, stem in found]
+        if len(order) <= len(BUCKET_COLOURS):
+            colours = [(order.index(stem), BUCKET_COLOURS[order.index(stem)])
+                       for _tag, _size, stem in found]
+            print(f"colour names the package ({len(order)} of them)")
+        else:
+            print(f"{len(order)} packages is more than {len(BUCKET_COLOURS)} colours; "
+                  "colouring by contiguous tag range instead")
 
     for (tag, size, stem), (bucket, (red, green, blue)) in zip(found, colours):
         body = flat_body(size, (red, green, blue))
