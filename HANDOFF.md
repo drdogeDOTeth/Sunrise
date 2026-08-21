@@ -423,7 +423,36 @@ the resourcerer has no I/O outstanding — it is blocked on something else.
 This also means the raised capture limit was not needed: 203 reads never approached even the old
 8,192. The raise is harmless and stays, because a capture that *does* run long should not truncate.
 
-### The control never run: take a different character to orbit
+### ANSWERED: the orbit deadlock is NOT ours
+
+**A character with none of our armour work stalls identically** — same two tasks (35 and 53), same
+`0x0020000800000000` mask, same 48-of-50 completions, same `cleanup`. User-confirmed 2026-08-21.
+
+So **none of the cosmetics work is implicated in it**: not the geometry, not the five-part split, not
+the material rewrites, not any texture sweep. Combined with "no package I/O during the stall", the
+orbit bug is mod-wide and independent of everything in this file. It does not block the cosmetics
+thread conceptually — but it does mean **the character cannot be taken into the world right now**,
+so cosmetic results have to be judged at character select until it is fixed.
+
+**Where the cosmetics work actually stands, unaffected:** materials are writable (the null control
+rendered the Warlock), and a *changed texture tag value* is what kills the character-select preview.
+Size, package locality, residency, resize, self-length and the writer are all ruled out. That is
+still the open question.
+
+### The orbit bug: ask the component that is silent
+
+`core/logging/levels` had `server` and `middleware` at **`warn`**, so the in-process server has been
+mute this whole time. A deadlock with **zero I/O** in a mod whose server runs in-process is exactly
+what those channels exist to explain. Raised to `debug` (and `core` to `info`) in
+`C:\Sunriseind\Sunrise\settings.json`; original saved as `settings.json.bak-preserverlog`.
+No rebuild needed — settings are read at startup.
+
+**Write that file without a BOM.** `Set-Content -Encoding UTF8` adds one and the loader then rejects
+the file with an error that blames the JSON rather than the encoding.
+
+This is the same move that F8 was: the instrument was already there and switched off.
+
+### Superseded: the control never run
 
 Every orbit attempt in this file has used the **Warlock**. The Hunter and Titan reach character
 select fine but have never been taken further. That splits the whole question in one launch:
@@ -1265,7 +1294,8 @@ file" and copies from inline DyeData instead):
 | null control, material byte-identical | `037d_29` | **Warlock rendered; reached `cleanup`; ground there** | **materials ARE writable**; a changed tag value is what kills the preview |
 | baseline: no material patch at all | `037d_25` | **same `cleanup` grind** | `cleanup` is **baseline**, not ours; the null control passed end to end |
 | same baseline, allowed to run + F8 | `037d_25` | **genuine deadlock: tasks 35 and 53 never complete, zero package I/O for 90 s** | not streaming, not our patches being read |
-| **Hunter to orbit (control never run)** | **`037d_25` (current)** | — | Warlock-specific, or the mod itself? |
+| Hunter/Titan to orbit | `037d_25` | **stalled identically** | the orbit deadlock is **not ours** — mod-wide, unrelated to any cosmetics work |
+| **orbit with server+middleware logging at debug** | **`037d_25` (current)** | — | what is the in-process server doing while tasks 35 and 53 hang? |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
@@ -1348,8 +1378,9 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch: pick the HUNTER, not the Warlock, and go to orbit.** Nothing to write — live is
-already the clean split. This is the control that has never been run; see "The control never run".
+**Next launch: go to orbit with server logging on.** Any character. Live is still the clean split;
+`settings.json` now logs `server` and `middleware` at debug. See "The orbit bug: ask the component
+that is silent".
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
 dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is
