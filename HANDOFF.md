@@ -1,6 +1,6 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-20 (five-part split). **Status: the body now draws as FIVE parts with five different Destiny materials, one per source atlas — `037c_28` + `037d_25` + `0698_24`. Before this, all 46,068 triangles went through a single part, so the whole body could only ever wear one texture set, which is why five encoded atlases had nowhere to go. Geometry is unchanged; only the part table moved. NEXT LAUNCH: the body should show five distinct materials rather than one flat surface — say what changes, per group.**
+**Updated:** 2026-08-20 (atlases bound). **Status: the five-part split is CONFIRMED IN GAME — the body draws as five distinct materials, the necklace is visible, the arms are separate from the tank. On top of it, all five of the model's own atlases are now BOUND into those five materials at sampler slot 3 — `037c_29` + `037d_26` + `0698_25` + `0699_9`. The albedo was never findable because four of the five materials name no texture at all; it had to be *bound*, and the material's pixel-texture array is now written. NEXT LAUNCH: any group showing its real artwork is done; any group still Scatterhorn-coloured reads a slot other than 3, and only that group needs a slot sweep.**
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything." — on `_20`
@@ -34,10 +34,10 @@ Newest files win:
 
 | package | live | geometry | note |
 |---|---|---|---|
-| `w64_sandbox_037c` | **`_28`** | **`_28`** | `_28` = **five-part split**; `_27` = dye rebind; `_26` = full texture sweep |
-| `w64_sandbox_037d` | **`_25`** | **`_25`** | `_25` = **five-part split**; `_24` = full texture sweep |
-| `w64_sandbox_0698` | **`_24`** | **`_24`** | `_24` = **five-part split**; `_23` = full texture sweep |
-| `w64_sandbox_0699` | **`_8`** | — | `_8` = full texture sweep; `_7` = the 55-swatch probe |
+| `w64_sandbox_037c` | **`_29`** | `_28` | `_29` = **atlas bind**; `_28` = five-part split; `_27` = dye rebind |
+| `w64_sandbox_037d` | **`_26`** | `_25` | `_26` = **atlas bind**; `_25` = five-part split; `_24` = texture sweep |
+| `w64_sandbox_0698` | **`_25`** | `_24` | `_25` = **atlas bind**; `_24` = five-part split; `_23` = texture sweep |
+| `w64_sandbox_0699` | **`_9`** | — | `_9` = **atlas bind**; `_8` = full texture sweep; `_7` = the 55-swatch probe |
 | `w64_sandbox_01e2` | `_6` | — | inert; legs are blanked |
 | `w64_sandbox_01db` | **`_6`** | — | dye paint plate t3 remaining mips |
 | `w64_sandbox_020c` | **`_6`** | — | dye paint cloth t7 remaining mips |
@@ -118,10 +118,60 @@ Three things make it verifiable rather than hopeful:
   the plan. Written against the parser, not the plan, so agreement is evidence. Negative-tested:
   feed it a mangled plan and it raises.
 
-**What this does not do yet:** each part now *has* its own material, but those five materials are
-still Scatterhorn's, holding Scatterhorn's textures. The next step is writing the encoded atlases
-into the textures these five materials sample — `encode_texture.py` already produces them, and
-`trace_model_tags.py` names what the game resolves per model.
+**Confirmed in game, first launch after the split.** The body stopped reading as one uniform white
+surface: black arms and hands separate from a white-and-grey tank, a grey hood with the gas mask
+reading clearly, and the **necklace chain visible at the collar** — the 1,190-triangle group
+drawing on its own material. Nothing on the body came up in probe colours, only the weapon, so
+none of the five materials sample anything the sweeps painted.
+
+---
+
+## The albedo is bound, not found
+
+**Four of the five carrier materials name no texture at all**, and the fifth names one 21,872-byte
+texture. That is not a search failure — it is what the material says. Of all fourteen materials on
+the two chest models, exactly **one** (`0x80EFA1DC`, our GasMask carrier) has a pixel-texture
+array. So the albedo was never going to be discoverable; it has to be **written**.
+
+`bind_material_textures.py` writes it. What had to be decoded, all offline from dumped materials:
+
+- A material field is `{int64 count, int64 offset}`, and the array's **count word** sits at
+  `field + 8 + offset` — the marker is four bytes before it. This convention resolves **every**
+  array in **every** one of the five materials, which is why it is trusted rather than assumed.
+- An inline array is `[0x80809FBD][count][0][element class][0]` — twenty bytes — then elements.
+- The pixel-texture element class is `0x80807211`, eight bytes: `{u32 sampler slot, u32 texture
+  header tag}`. `0x80EFA1DC` has exactly one, at **slot 3**.
+- The field slots are at fixed offsets: `+0x048` vertex shader, `+0x050` its textures (null in all
+  five), `+0x2C8` pixel shader, **`+0x2D0` its textures**, `+0x2E8` bytecode, `+0x308` samplers,
+  `+0x2F8` / `+0x318` float4 constants.
+
+Because `+0x2D0` is a **relative** offset, the new array is appended past every byte the game
+already knows about and the field aimed at it. **No existing byte moves** — verified: exactly three
+bytes change inside the original span, all of them in the `{count, offset}` field itself. That is
+what makes this safe to do to a structure whose other fields are not fully decoded.
+
+| group | material | action | texture written |
+|---|---|---|---|
+| BlackTankTop | `0x80EF98DB` | appended array | `0x80EF880E` body / `0x80EF8811` header |
+| SkinTats | `0x80EFA1F7` | appended array | `0x80EF881F` / `0x80EF881D` |
+| GasMask | `0x80EFA1DC` | **repointed** slot 3 from `0x80C1D3CD` | `0x80EF89F3` / `0x80EF89F1` |
+| Twirl | `0x81532AE0` | appended array | `0x80EFAD63` / `0x80EFAD60` |
+| Silver_Necklace | `0x81531EF0` | appended array | `0x80EFB7B9` / `0x80EFB76B` |
+
+**Slot 3 for all five, on two independent grounds:** the one material that already binds a texture
+binds it at slot 3, and the dye system's plate channel carries its albedo at slot 3. The five pixel
+shaders are *not* all the same (`0x81532B03`, `0x81531EE3`, `0x81531EE6`, `0x81532DAA` ×2), so a
+group that stays Scatterhorn-coloured is reading a different slot — and only that group needs a
+sweep, not the body.
+
+**The atlases go in over existing textures, not into new entries.** All five targets are exactly
+**5,586,944 B**, which is the full five-level BC7 chain for 2048×2048 — so an atlas lands at native
+size with no resampling and no entry resize. Headers are rewritten from `0x80EFAD60`, a dumped and
+verified header for exactly that shape. Twirl ships at 512² and is upscaled to 2048² so every group
+shares one target size.
+
+**If it crashes or renders wrong:** `.\revert_layer.ps1 -Confirm` on the four packages drops back to
+the split. Never `--undo`.
 
 ---
 
