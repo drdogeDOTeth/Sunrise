@@ -1,6 +1,6 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-21. **Status: the corrected atlas bind (`037c_29` + `037d_26` + `0698_25` + `0699_9`) still hangs at character select. The self-length fix is real and is correctly present in the shipped bytes — `verify_bind_layer.py` reads all seventeen entries back and every invariant holds — so it was a real bug but not the only one. Entry size is now DISPROVEN as a cause, offline: the working layer underneath already carries three of our own 22-block, 5,586,944 B entries. The one thing that has never loaded is the material surgery. Next layer is `--repoint-only`: four bytes, one material, no resize. See "The hang, round two".**
+**Updated:** 2026-08-21. **Status: the corrected atlas bind (`037c_29` + `037d_26` + `0698_25` + `0699_9`) still hangs at character select. The self-length fix is real and is correctly present in the shipped bytes — `verify_bind_layer.py` reads all seventeen entries back and every invariant holds — so it was a real bug but not the only one. Entry size is NOT disproven — that was an over-claim; a 22-block entry can be present and readable without ever being bound and streamed. The one thing that has never loaded is the material surgery. The repoint bisect then showed the Hunter loads and the Warlock stalls, so three bytes are enough and the append is innocent. Live layer is the size control. See "The hang, round two".**
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything." — on `_20`
@@ -43,10 +43,9 @@ Newest files win:
 | `w64_sandbox_020c` | **`_6`** | — | dye paint cloth t7 remaining mips |
 | `w64_sandbox_020e` | **`_7`** | — | dye paint suit t5 remaining mips |
 
-**The `_29` / `_26` / `_25` / `_9` atlas-bind row hangs and is on its way out.** Revert it to
-`_28` / `_25` / `_24` / `_8` — the working five-part split — before writing the next layer, or the
-atlases stay live underneath and defeat the bisect:
-`.\revert_layer.ps1 -Attic _reverted_atlas2 -Confirm`.
+**The `_29` / `_26` / `_25` / `_9` atlas-bind row is reverted** to `_reverted_atlas2`. Live is
+`037c_28` / **`037d_27`** / `0698_24` / `0699_8`: the working five-part split, plus one material
+entry repointed. `037d_26` and `_27` each change that one entry and nothing else.
 
 **Package indices are per-package, not a version number** — the injector writes each package its
 own next index. "The `_22` inject" is `037c_22` + `037d_22` + `0698_21`; the texture probe on top
@@ -225,14 +224,17 @@ complaints. `diff_entry_rows.py` adds the half `verify_bind_layer.py` structural
 entry-table **rows** — and every one preserves its original `reference` (the class id the loader
 dispatches on) and `type_info`. Only placement and, for the four appended materials, size moved.
 
-**Entry size is disproven, not merely unproven.** This was the leading suspect and the plan of
-record was to drop to 1024² atlases. It is wrong, and the proof needs no launch: the layer
-*underneath* the atlas bind — the five-part split the user confirmed working, necklace and all —
-already contains `0x80EF880E`, `0x80EF881F` and `0x80EF89F3` at **5,586,944 B across 22 blocks**,
-plain, in patch files **we wrote** (`037c_26`, `037d_24`, the 228-texture sweep). Row 3 of the probe
-log is that same layer rendering with the weapon magenta. A 21-block entry loads, and the game has
-already read one of ours back byte-exact (`0x80EFAD63`, recorded under `_23` above). **Do not spend
-a launch on 1024² atlases.**
+**Entry size: what is actually proven, and what was over-claimed.** This file briefly said size was
+"disproven". It is not. What the evidence supports is narrower:
+
+- A 22-block, 5,586,944 B plain entry of ours can sit in a layer that **loads**. The five-part split
+  the user confirmed working already contains three (`0x80EF880E`, `0x80EF881F`, `0x80EF89F3` in
+  `037c_26` / `037d_24`, the 228-texture sweep).
+- The game's **reader** returns one byte-exact — `0x80EFAD63` was dumped at full size under `_23`.
+
+Neither of those is a 22-block entry being **bound to a drawing material and streamed as a
+texture**, which is a different code path, and it is the path the repoint test exercised. Present
+and readable is not the same as sampled. Size is a live suspect again; see "Warlock only".
 
 **Retracted: "none of our seventeen tags appear at all".** They do not appear in a **healthy**
 launch either — checked against `trace_archive/sunrise-20260820-205929.log`, zero hits for all
@@ -272,6 +274,49 @@ three bytes actually different, and the test reports itself on screen:
 Guards, both negative-tested: the edit is refused if it resizes the blob, or if any byte outside the
 slot-3 tag word moves.
 
+## Warlock only — the hang is the bind, and it is per character
+
+**Result of the repoint launch: the Hunter loaded and rendered. Clicking the Warlock stalled.**
+Same assert, same fiber `0x00834002`, 5,120 repeats. That is the single most useful fact this
+problem has produced:
+
+- **Three bytes are enough.** One repointed texture tag, no resize, no new bytes, stalls the game.
+  The append/resize half of the surgery is not needed to explain anything.
+- **It is our content, not the container.** A character without our patched material builds fine in
+  the same launch. Every "the game never reaches our stuff" reading of the earlier logs is dead.
+- **It is a demand-load stall**, not a bad dereference — a fiber waiting on something that never
+  arrives, while the rest of the process keeps logging.
+
+The last model build before the stall (seq 2075, t=71,281) resolves `0x80EFA1CC`–`0x80EFA1D3`, the
+chest model's own buffers at entries 460–467, immediately around the model at 458. Then nothing.
+
+**Package locality is not the discriminator** — the binding that *works* (`0x80C1D3CD`) is in
+`sandbox_020e`, a different package from the material, exactly like the one that stalls. Both are
+type 32/sub 1, 40 bytes. The difference between them is what they point at:
+
+| | body | size | blocks |
+|---|---|---:|---:|
+| worked | `0x80C1D3CC` dye tile, split | ~350 KB total | 1 |
+| stalled | `0x80EF89F3` | **5,586,944 B** | **22** |
+
+### The size control (live, awaiting launch)
+
+Same three bytes, same slot, same material — **only the size of the target changes**. Slot 3 now
+points at `0x80EFB535`, whose body `0x80EFB534` is **174,592 B in one block**, in the same package
+as the material, painted flat **yellow-green `(128, 254, 0)`** by our own sweep. 32× smaller, one
+block instead of twenty-two.
+
+Live: `037c_28` / **`037d_27`** / `0698_24` / `0699_8`.
+
+| outcome | conclusion |
+|---|---|
+| **gas mask turns yellow-green** | binding works; **size is the constraint** — re-encode the atlases small and the whole route opens |
+| loads, gas mask unchanged | slot 3 is not what that shader reads; sweep slots for this group |
+| **stalls again** | size is not it either; the stall is in binding *any* replacement texture |
+
+Click the **Warlock** — the Hunter is the control and will load either way. If it stalls, let it sit
+past t≈95 s so the assert lands.
+
 ```powershell
 .\revert_layer.ps1 -Attic _reverted_atlas2 -Confirm   # back to the working split
 python bind_material_textures.py --repoint-only --dry-run
@@ -281,12 +326,12 @@ python bind_material_textures.py --repoint-only
 `revert_layer.ps1` now takes `-Attic`. Each reverted set needs its own, because `-Restore` moves
 back everything it finds and a shared attic restores a layer that never existed.
 
-**Reverting frees an index, and the next layer written takes the same filename.** The repoint layer
+**Reverting frees an index, and the next layer written takes the same filename.** The first repoint layer
 is `w64_sandbox_037d_26.pkg` — the same name as the atlas layer now sitting in `_reverted_atlas2`.
 `-Restore` refuses on that collision rather than overwriting the newer layer; move the live file
 aside first if you really mean to put the atlas back. Guard negative-tested.
 
-**Live after the revert + repoint:** `037c_28` / **`037d_26` (repoint)** / `0698_24` / `0699_8`.
+**Live now:** `037c_28` / **`037d_27` (size control)** / `0698_24` / `0699_8`.
 The other four materials read back encrypted and original at their pre-append sizes — unpatched,
 as intended. `0x80EF89F3` is still one flat red block, 5,586,944 B.
 
@@ -327,8 +372,9 @@ log rotates **one deep on launch**, so two launches destroy a capture; archive i
 **Entry size was the leading suspect and was wrong.** Each atlas is 5,586,944 B ≈ 21 blocks, against
 a previous verified maximum of 798 KB across four, and `docs/PACKAGES.md` records oversized Mercury
 buffers hanging the loader. It fit the evidence and it was not the cause — `--bind-only` wrote
-7,696 bytes and hung identically. **Now fully disproven offline**: the working split layer already
-carries three of our own 22-block entries of exactly that size. See "The hang, round two".
+7,696 bytes and hung identically. **Live again** after the repoint result: the working split layer
+carries three of our own 22-block entries, but none of them was ever *bound and sampled*. See
+"Warlock only".
 
 ---
 
@@ -1007,7 +1053,8 @@ file" and copies from inline DyeData instead):
 | atlas bind, self-length stale | `_reverted_atlas` | **hang at character select** | the `+0x00` bug; real, fixed |
 | bind-only, self-length stale | `_reverted_bindonly` | **hang** | cleared the atlases, not the surgery |
 | atlas bind, self-length fixed | `037c_29` / `037d_26` / `0698_25` / `0699_9` | **hang** | fix verified present in the shipped bytes; entry size disproven offline; surgery is what is left |
-| **repoint only, 4 B, one material** | **awaiting launch** | — | gas mask red = binding works |
+| repoint only, 3 B, 22-block target | `037d_26` | **Hunter loaded; clicking Warlock stalled** | three bytes are enough; the append is innocent; it is our content, not the container |
+| **same repoint, 1-block target** | **`037d_27` (current)** | — | yellow-green = size is the constraint |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
@@ -1090,13 +1137,12 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch is the `--repoint-only` bisect** — revert to the split, write four bytes, look at the
-gas mask. Commands and the outcome table are in "The hang, round two". Everything else below still
-stands.
+**Next launch is the size control in `037d_27`** — click the **Warlock**, look at the gas mask for
+flat yellow-green. Outcome table is in "Warlock only". Everything else below still stands.
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
-dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Do not drop the atlases to 1024² —
-entry size is disproven.
+dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is
+exactly what `037d_27` is testing — do not pre-empt it either way.
 
 `_25` came back **no colour** — so neither the t0 remap nor the DyeInfo sidecars are the albedo
 path. Its dump did land: `0x80EF9663` (432 B suit sidecar) and the three 16-byte DyeInfo headers

@@ -205,9 +205,57 @@ def atlas(group: Group) -> bytes:
     return data
 
 
+def describe_target(header_tag: int) -> str:
+    """@return What binding `header_tag` actually asks the streamer for, read from the packages."""
+    # Local import: only this path needs the whole package index built.
+    from verify_bind_layer import (
+        BLOCK_SIZE,
+        TAG_BASE,
+        TAG_ENTRY_BITS,
+        TAG_ENTRY_MASK,
+        newest_of_each,
+    )
+
+    opened = newest_of_each()
+    package = opened.get((header_tag - TAG_BASE) >> TAG_ENTRY_BITS)
+    if package is None:
+        return "target package is not installed"
+    header = package.entries[(header_tag - TAG_BASE) & TAG_ENTRY_MASK]
+    body_index = (header.reference - TAG_BASE) & TAG_ENTRY_MASK
+    body = package.entries[body_index]
+    blocks = max(1, -(-(body.start_offset + body.size) // BLOCK_SIZE))
+    plain = package.blocks[body.start_block].flags == 0
+    what = (f"body 0x{header.reference:08X}: {body.size:,} B, {blocks} block(s), "
+            f"{'painted by us' if plain else 'original/encrypted'}")
+    if not plain:
+        return what
+    data = package.read_entry(body_index)
+    unique = {data[i:i + 16] for i in range(0, min(4096, len(data)), 16)}
+    return what + (f", flat {flat_colour(next(iter(unique)))}" if len(unique) == 1 else "")
+
+
+def flat_colour(block: bytes) -> tuple[int, int, int, int]:
+    """@return The RGBA a single BC7 block decodes to, so a probe can be read off the screen."""
+    import io
+    from PIL import Image
+
+    head = b"DDS " + struct.pack("<I", 124) + struct.pack("<I", 0x1 | 0x2 | 0x4 | 0x1000 | 0x80000)
+    head += struct.pack("<II", 4, 4) + struct.pack("<I", 16) + struct.pack("<I", 0)
+    head += struct.pack("<I", 1) + b"\x00" * 44 + struct.pack("<I", 32) + struct.pack("<I", 0x4)
+    head += b"DX10" + b"\x00" * 20 + struct.pack("<I", 0x1000) + b"\x00" * 16
+    head += struct.pack("<IIIII", 98, 3, 0, 1, 0)  # DXGI_FORMAT_BC7_UNORM, 2D
+    image = Image.open(io.BytesIO(head + block))
+    image.load()
+    return image.convert("RGBA").getpixel((0, 0))
+
+
 def repoint_only() -> None:
     """Repoint one already-bound slot and change nothing else. See `--repoint-only` above."""
     group = next(g for g in GROUPS if g.source == "GLSLShader66")
+    target = group.header
+    for argument in sys.argv:
+        if argument.startswith("--target="):
+            target = int(argument.split("=", 1)[1], 0)
     material = dumped(group.material)
     if material is None:
         raise SystemExit(f"0x{group.material:08X}: material not dumped")
@@ -217,7 +265,7 @@ def repoint_only() -> None:
                          "to repoint. This bisect only works on the one material that does.")
     marker, count = found
 
-    patched, how = bind(material, group.header)
+    patched, how = bind(material, target)
     if len(patched) != len(material):
         raise SystemExit(f"repoint resized the blob {len(material):,} -> {len(patched):,} B; "
                          "that is an append, which is the other half of the bisect")
@@ -233,11 +281,10 @@ def repoint_only() -> None:
         raise SystemExit(f"bytes changed outside the slot-{ALBEDO_SLOT} tag word at "
                          f"+0x{slot_at + 4:03X}: {[hex(i) for i in stray[:8]]}")
     changed = sum(a != b for a, b in zip(material, patched))
-    check(patched, group.header, group.material)
+    check(patched, target, group.material)
 
     print(f"repoint-only: 0x{group.material:08X} ({group.what}) {how}")
-    print(f"  -> 0x{group.header:08X}, whose body 0x{group.body:08X} is flat red from the "
-          "_26 sweep")
+    print(f"  -> 0x{target:08X}, {describe_target(target)}")
     print(f"  {len(patched):,} B, 1 entry, {changed} bytes changed at +0x{slot_at + 4:03X}, "
           "no resize, no texture data written")
 
@@ -247,9 +294,9 @@ def repoint_only() -> None:
         print("dry run; nothing written")
         return
     write_all(by_package, "")
-    print("\nGas mask red -> binding works, the append/resize is what hangs it.\n"
+    print("\nGas mask takes the target's colour -> binding works at this size.\n"
           "Loads unchanged -> that pixel shader does not read slot 3.\n"
-          "Hangs           -> repointing alone hangs the loader; the append is innocent.")
+          "Hangs           -> the stall does not depend on the size of what is bound.")
 
 
 def bind_only() -> None:
