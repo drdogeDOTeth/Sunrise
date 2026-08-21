@@ -452,7 +452,37 @@ outstanding. Combined with zero package I/O, the client is blocked on something 
 `ev=queuez stage=notification result=skipped reason=null_payload`, fires at t=31,281 — during
 bootflow, eleven seconds *before* `cleanup` — so it is not the stall, though it is unexplained.
 
-### The vanilla control (live, awaiting launch)
+## ANSWERED: our layers cause the orbit deadlock
+
+**Vanilla reaches orbit.** With all 99 layers moved aside, the state machine goes
+`cleanup -> setup:orbit` and **50 tasks complete** — the two that hang everywhere else, 35 and 53,
+finish here. So the deadlock is caused by something we wrote, and the earlier
+"a different character stalls too, so it is not ours" reading was exactly backwards.
+
+### Bisecting it
+
+The layers are additive in time, so restoring every layer written before a cutoff reproduces a
+coherent historical state. `vanilla_mode.ps1 -Groups` lists the cutoffs; `-Restore -UpTo <time>`
+reproduces one. The interval is bounded at both ends:
+
+- **known good to orbit:** `2026-08-20 13:25` — the `_22` inject reached the Tower, Mercury, the EDZ
+- **known bad:** everything
+
+That leaves **nine groups** to search: 14:39, 16:17, 16:27, 16:37, 17:37, 18:05, 19:09, 21:03,
+22:04. Binary search isolates it in about three launches.
+
+**Step 1 is live:** restored through **17:37** (64 layers), holding back the last four groups
+(35 layers). Live Scatterhorn layers are `037c_26` / `037d_24` / `0698_23` / `0699_8`.
+
+| outcome | next |
+|---|---|
+| **reaches orbit** | culprit is in {18:05, 19:09, 21:03, 22:04} — restore through 19:09 next |
+| **deadlocks** | culprit is in {14:39, 16:17, 16:27, 16:37, 17:37} — restore through 16:17 next |
+
+Priors worth holding lightly: **21:03 is the only group never launched at all** (15 packages
+including `ui_01a3`), and 17:37 is the 228-texture sweep that put 186 MB into `0699_8`.
+
+### Superseded: the vanilla control
 
 **All 99 layers moved to `packages\_vanilla_test`.** The install is now exactly as shipped —
 verified, nothing newer than the install date remains, and the Scatterhorn packages are back on
@@ -1344,7 +1374,8 @@ file" and copies from inline DyeData instead):
 | same baseline, allowed to run + F8 | `037d_25` | **genuine deadlock: tasks 35 and 53 never complete, zero package I/O for 90 s** | not streaming, not our patches being read |
 | Hunter/Titan to orbit | `037d_25` | **stalled identically** | not *Warlock-specific* — but our content is resident anyway, so this exonerates nothing |
 | orbit with server logging at debug | `037d_25` | **server healthy and idle; client stops asking** | not a server problem; client blocked internally |
-| **vanilla: all 99 layers removed** | **shipped packages (current)** | — | do our layers cause the deadlock at all? |
+| vanilla: all 99 layers removed | shipped packages | **REACHED ORBIT, 50 tasks completed** | our layers cause the deadlock |
+| **bisect step 1: restored through 17:37** | **64 of 99 layers (current)** | — | narrows nine groups to four or five |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
@@ -1427,9 +1458,8 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch: the VANILLA control.** All our layers are moved aside; the custom character is gone
-for this test. Any character, go to orbit, ~2 minutes. Restore with `.anilla_mode.ps1 -Restore`.
-See "The vanilla control".
+**Next launch: bisect step 1.** 64 layers restored, through the 17:37 group. Any character, go to
+orbit, ~2 minutes. See "Bisecting it".
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
 dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is
