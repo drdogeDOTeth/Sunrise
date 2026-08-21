@@ -423,7 +423,55 @@ the resourcerer has no I/O outstanding — it is blocked on something else.
 This also means the raised capture limit was not needed: 203 reads never approached even the old
 8,192. The raise is harmless and stays, because a capture that *does* run long should not truncate.
 
-### ANSWERED: the orbit deadlock is NOT ours
+### RETRACTED: "a different character" is not a control
+
+A non-Warlock character stalls identically — same tasks 35 and 53, same mask, same 48-of-50. That
+was briefly written up here as proof the orbit deadlock is not ours. **It is not proof, and the
+claim is withdrawn.**
+
+**Character select previews every character, so our patched content is resident whichever one is
+picked.** Measured on the non-Warlock run itself: `0x80EFA1CC`–`0x80EFA1D3`, the Scatterhorn chest
+buffers, are resolved *during `cleanup`*, and `sandbox_037c` / `037d` are among the packages the
+cleanup phase touches. The test proves the stall is not **specific to selecting the Warlock**. It
+says nothing about whether our layers cause it.
+
+The real control is removing the layers, and `revert_layer.ps1` cannot do it — our work is 99 layers
+across 32 packages, stacked up to 22 deep. `vanilla_mode.ps1` moves all of them aside at once and
+`-Restore` puts them back; nothing is deleted and the layers underneath are untouched shipped files.
+
+### The server side, which cleared itself
+
+With `server` and `middleware` at debug, the in-process server is demonstrably **healthy and idle**:
+a burst of real BAP traffic ends at t=42,500 (`svc=23 rsp=24`, `queuez stage=translate
+result=paired`, all `result=ok`), and after that the only traffic for the next 130 seconds is a
+28-byte heartbeat `svc=250 rsp=251` every five seconds, answered every time.
+
+**The client stops asking.** It is not waiting on the server, and the server has nothing
+outstanding. Combined with zero package I/O, the client is blocked on something internal while
+`resourcerer process events` never finishes. The one warning in the whole launch,
+`ev=queuez stage=notification result=skipped reason=null_payload`, fires at t=31,281 — during
+bootflow, eleven seconds *before* `cleanup` — so it is not the stall, though it is unexplained.
+
+### The vanilla control (live, awaiting launch)
+
+**All 99 layers moved to `packages\_vanilla_test`.** The install is now exactly as shipped —
+verified, nothing newer than the install date remains, and the Scatterhorn packages are back on
+`037c_6` / `037d_5` / `0698_5` / `0699_5`. **The custom character is gone for this test.**
+
+| outcome | conclusion |
+|---|---|
+| **vanilla reaches orbit** | our layers cause the deadlock. Restore and bisect by group — the 08-20 21:03 sweep (15 packages, never once launched) is the first suspect |
+| **vanilla still deadlocks** | genuinely nothing to do with the package work — it is the mod or the install, and *that* is the thing to fix |
+
+Put everything back with:
+
+```powershell
+.anilla_mode.ps1 -Restore
+```
+
+Expect the first vanilla launch to be slower: the content manifest cache will rebuild.
+
+### Superseded: the control never run
 
 **A character with none of our armour work stalls identically** — same two tasks (35 and 53), same
 `0x0020000800000000` mask, same 48-of-50 completions, same `cleanup`. User-confirmed 2026-08-21.
@@ -1294,8 +1342,9 @@ file" and copies from inline DyeData instead):
 | null control, material byte-identical | `037d_29` | **Warlock rendered; reached `cleanup`; ground there** | **materials ARE writable**; a changed tag value is what kills the preview |
 | baseline: no material patch at all | `037d_25` | **same `cleanup` grind** | `cleanup` is **baseline**, not ours; the null control passed end to end |
 | same baseline, allowed to run + F8 | `037d_25` | **genuine deadlock: tasks 35 and 53 never complete, zero package I/O for 90 s** | not streaming, not our patches being read |
-| Hunter/Titan to orbit | `037d_25` | **stalled identically** | the orbit deadlock is **not ours** — mod-wide, unrelated to any cosmetics work |
-| **orbit with server+middleware logging at debug** | **`037d_25` (current)** | — | what is the in-process server doing while tasks 35 and 53 hang? |
+| Hunter/Titan to orbit | `037d_25` | **stalled identically** | not *Warlock-specific* — but our content is resident anyway, so this exonerates nothing |
+| orbit with server logging at debug | `037d_25` | **server healthy and idle; client stops asking** | not a server problem; client blocked internally |
+| **vanilla: all 99 layers removed** | **shipped packages (current)** | — | do our layers cause the deadlock at all? |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
@@ -1378,9 +1427,9 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch: go to orbit with server logging on.** Any character. Live is still the clean split;
-`settings.json` now logs `server` and `middleware` at debug. See "The orbit bug: ask the component
-that is silent".
+**Next launch: the VANILLA control.** All our layers are moved aside; the custom character is gone
+for this test. Any character, go to orbit, ~2 minutes. Restore with `.anilla_mode.ps1 -Restore`.
+See "The vanilla control".
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
 dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is
