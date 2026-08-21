@@ -27,8 +27,18 @@ enum class HookSlot : std::size_t {
 };
 
 inline constexpr std::size_t kHookCount = static_cast<std::size_t>(HookSlot::count);
-/** A short capture is enough to enter inspect and is bounded against a forgotten toggle. */
-constexpr std::uint32_t kCaptureLimit = 8192;
+/**
+ * Bounded against a forgotten toggle, but large enough to span a world transition.
+ *
+ * 8,192 was sized for entering inspect from a static screen. A character-select-to-orbit load
+ * outruns that long before the interesting part: `resourcerer process events` stalls roughly
+ * twenty seconds into `cleanup`, and a capture that stops early records only the healthy prologue.
+ * The hotkey is polled from the DXGI Present hook, so it cannot be pressed once the mainloop
+ * blocks - the capture has to be armed beforehand and still be running when the stall arrives.
+ *
+ * The log rotates once per launch rather than by size, so a long capture costs disk, not history.
+ */
+constexpr std::uint32_t kCaptureLimit = 200000;
 /** Enough frames to pass through KernelBase/Detours and retain several game callers. */
 constexpr ULONG kStackFrameLimit = 16;
 /** Only game-image frames are serialized; four are enough to identify the loader chain. */
@@ -216,9 +226,17 @@ void trace_read(std::string_view api,
     const std::uint32_t sequence = g_eventCount.fetch_add(1, std::memory_order_relaxed);
     if (sequence >= kCaptureLimit) {
         if (!g_limitReported.exchange(true, std::memory_order_relaxed)) {
-            core::log::write(core::log::Channel::client,
-                             core::log::Level::warn,
-                             "ev=package_trace stage=read result=limit events=8192");
+            std::array<char, 96> reached{};
+            const int length = std::snprintf(reached.data(),
+                                             reached.size(),
+                                             "ev=package_trace stage=read result=limit events=%u",
+                                             kCaptureLimit);
+            if (length > 0) {
+                core::log::write(core::log::Channel::client,
+                                 core::log::Level::warn,
+                                 std::string_view(reached.data(),
+                                                  static_cast<std::size_t>(length)));
+            }
         }
         return;
     }
@@ -329,9 +347,16 @@ bool install() noexcept {
     }
 
     g_installed.store(true, std::memory_order_release);
-    core::log::write(core::log::Channel::client,
-                     core::log::Level::info,
-                     "ev=package_trace stage=install result=ok toggle=F8 limit=8192");
+    std::array<char, 96> ready{};
+    const int length = std::snprintf(ready.data(),
+                                     ready.size(),
+                                     "ev=package_trace stage=install result=ok toggle=F8 limit=%u",
+                                     kCaptureLimit);
+    if (length > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         std::string_view(ready.data(), static_cast<std::size_t>(length)));
+    }
     return true;
 }
 
