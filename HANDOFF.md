@@ -389,7 +389,36 @@ grinding, not deadlock. It may simply need minutes.
 without a material patch on it.* The `_22` inject reached the Tower and Mercury, but that predates
 the 228-texture sweep — `0699_8` alone is 186 MB. So `cleanup` being slow may be the baseline.
 
-### The baseline (live, awaiting launch)
+## The orbit "hang" was closed too early, twice
+
+The baseline — **no material patch at all** — stalled in `cleanup` identically: same job
+(`resourcerer process events`), same ~25 s `ENUM(55)`. So the `cleanup` behaviour is **baseline**,
+nothing to do with materials, and **the null control was a clean pass end to end.**
+
+Then the timings, which settle what "hang" meant:
+
+| run | `ENUM(55)` completed | game closed | gap |
+|---|---:|---:|---:|
+| null control `037d_29` | t=141,360 | t=141,360 | **0 s** |
+| baseline `037d_25` | t=115,890 | t=123,390 | **7.5 s** |
+
+Both were closed within seconds of the long task **finishing**, with `pending: 0x0000000000000000`
+and two tasks still active. Nothing was deadlocked. Going to orbit blocks the mainloop for tens of
+seconds at a stretch, so Windows greys the window and it reads as a hang — and orbit demonstrably
+works on this install: the `_22` inject reached the Tower, Mercury and the EDZ.
+
+**Judge a load by the log, not by the window.** `watch_load.ps1` follows it in a second terminal and
+prints state changes, task completions and hitches as they happen. It waits for the log to rotate
+first, so it follows the launch you are about to start rather than the last one.
+
+```powershell
+.\watch_load.ps1
+```
+
+**Give orbit five minutes** before calling it. Every "hang" recorded in this file was called after
+45-125 seconds.
+
+### The baseline (superseded — it answered)
 
 All four material layers moved to `_reverted_material`. Live is the **clean five-part split** with
 **no material patch at all**: `037c_28` / **`037d_25`** / `0698_24` / `0699_8`. Verified — entry 476
@@ -1187,7 +1216,8 @@ file" and copies from inline DyeData instead):
 | same repoint, 1-block target | `037d_27` | **Titan + Hunter loaded; Warlock stalled** | size and package locality both ruled out |
 | same repoint, resident dye target | `037d_28` | **Warlock stalled** | residency ruled out; nothing about the target explains it |
 | null control, material byte-identical | `037d_29` | **Warlock rendered; reached `cleanup`; ground there** | **materials ARE writable**; a changed tag value is what kills the preview |
-| **baseline: no material patch at all** | **`037d_25` (current)** | — | does the clean split reach orbit, and how slowly? |
+| baseline: no material patch at all | `037d_25` | **same `cleanup` grind** | `cleanup` is **baseline**, not ours; the null control passed end to end |
+| **same baseline, allowed to run** | **`037d_25` (current)** | — | does orbit arrive if given five minutes? |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
@@ -1270,9 +1300,9 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch is the baseline** — no material patch at all. Click the **Warlock**, go to orbit, and
-**wait several minutes** before judging. Outcome table is in "The baseline". Everything else below
-still stands.
+**Next launch: relaunch as-is and wait.** Nothing to write — live is already the clean split. Run
+`.\watch_load.ps1` in a second terminal, click the **Warlock**, and give orbit five minutes. See
+"The orbit hang was closed too early".
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
 dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is
