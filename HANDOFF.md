@@ -1,6 +1,6 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-20 (atlas bind HANGS; bisecting). **Status: the five-part split is CONFIRMED IN GAME and is the good state to stand on. The atlas bind on top of it HANGS the game at character select — reproduced three times — and has been moved to `packages\_reverted_atlas`. Live now is a `--bind-only` bisect layer: the same five material patches, 7,696 B, pointing at a texture that already exists, writing no texture data. If it loads, the material surgery is sound and the 27.9 MB texture write is the cause. If it hangs, the surgery is. See "The atlas bind hangs".**
+**Updated:** 2026-08-20 (hang found and fixed). **Status: the hang is SOLVED — a structured record carries its own byte length at `+0x00`, and the loader believes that over the entry size. Appending an array without updating it put the array outside the region the loader had, and character select hung. 2,715 of 2,718 dumped type-8 records declare their length there. Fixed, guarded against recurrence, and the corrected full atlas bind is live: `037c_29` + `037d_26` + `0698_25` + `0699_9`. See "The hang: a record declares its own length".**
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything." — on `_20`
@@ -175,7 +175,37 @@ the split. Never `--undo`.
 
 ---
 
-## The atlas bind hangs — what is ruled out
+## The hang: a record declares its own length
+
+**A structured record carries its own byte length at `+0x00`, and the loader believes it over the
+entry size.** `bind_material_textures.py` appended a 48-byte array and left `+0x00` at the old
+value, so on the tank-top material the loader read `0x650` while the new array sat at `0x65C` —
+**outside the region it had**. The texture-array field then pointed at bytes the loader never
+loaded, and character select hung.
+
+Measured, not assumed: across every dumped blob, **2,715 of 2,718 type-8 records** have `+0x00`
+equal to their own byte length. Texture headers (32) and bodies (40) never do — they are raw data,
+not records — which is why nothing before this ever tripped over it.
+
+The fix is one line, plus a guard in `check()` that refuses to ship a blob whose declared length
+disagrees with its actual length. Negative-tested: stale the length and it raises.
+
+**This generalises.** Any future resize of a structured entry — material, dye body, entity record —
+must update `+0x00`. The writer will happily produce a file the registrar accepts and the loader
+hangs on, exactly as the null block SHA-1 once did.
+
+### How it was found, and the two launches it cost
+
+The first atlas layer changed three things at once: five material blobs resized, five texture
+headers rewritten, and 27.9 MB of texture bodies written. `--bind-only` split that — the same five
+material patches, **7,696 B**, pointing at a texture that already existed and writing no texture
+data. It hung too, which cleared the atlases and put the fault squarely on the material surgery.
+Then the invariant fell out of one offline scan.
+
+The lesson is the bisect, not the byte: three changes in one layer cost a launch to separate, and
+the separating layer was three orders of magnitude smaller than the one it replaced.
+
+### What was ruled out on the way
 
 The atlas layer **hangs the game at character select**, reproduced three times. It is a *hang*, not
 a crash: no error, no dialog, the window stops responding and the log simply stops. Moved aside to
@@ -199,16 +229,11 @@ size at ~750 KB**, not per launch, so both halves must be read.
 - **`blockInfo` overflow.** `encode_block_info` bounds-checks the two 14-bit fields, and size gets
   36 bits; 5,586,944 round-trips correctly, which the read-back proves.
 
-**Still open, in order of suspicion:**
-
-1. **Entry size.** Each atlas is 5,586,944 B ≈ 21 blocks. The largest write this pipeline had ever
-   verified was **798 KB across four blocks** — 7× smaller per entry. `docs/PACKAGES.md` already
-   records five oversized Mercury buffers hanging the loader with mainloop hitches while 183
-   single-block buffers loaded fine. Same signature, same suspicion.
-2. **The material resize.** Four blobs grew by 48 bytes. If the loader sizes its allocation from the
-   class rather than the entry, the appended array is past the end of what it read.
-
-`--bind-only` separates these two and costs one launch.
+**Entry size was the leading suspect and was wrong.** Each atlas is 5,586,944 B ≈ 21 blocks, against
+a previous verified maximum of 798 KB across four, and `docs/PACKAGES.md` records oversized Mercury
+buffers hanging the loader. It fit the evidence and it was not the cause — `--bind-only` wrote
+7,696 bytes and hung identically. Whether 21-block entries load is **still unproven**; the corrected
+layer is the first real test of it.
 
 ---
 

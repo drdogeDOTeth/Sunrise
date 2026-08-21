@@ -64,6 +64,7 @@ from inject_scatterhorn import entry_index_of, package_of, put, write_all
 ARRAY_CLASS = 0x80809FBD
 TEXTURE_BINDING = 0x80807211
 TEXTURE_ARRAY_FIELD = 0x2D0
+SELF_LENGTH = 0x00        # a structured record's own byte length; the loader trusts it over the entry
 ARRAY_HEADER = 0x14
 ELEMENT_BYTES = 8
 ALBEDO_SLOT = 3
@@ -144,11 +145,22 @@ def bind(data: bytes, header_tag: int) -> tuple[bytes, str]:
     while len(out) % 16:
         out.append(0)
     struct.pack_into("<qq", out, TEXTURE_ARRAY_FIELD, 1, marker + 4 - TEXTURE_ARRAY_FIELD - 8)
+    # A structured record carries its own byte length at +0x00, and the loader believes that over
+    # the entry size. Leaving it at the old value is what hung the game at character select: the
+    # appended array sat past the end the blob declared, so the field pointed outside the region
+    # the loader had. 2,715 of 2,718 dumped type-8 records declare their length here.
+    struct.pack_into("<I", out, SELF_LENGTH, len(out))
     return bytes(out), f"appended array at +0x{marker:03X}, {len(data):,} -> {len(out):,} B"
 
 
 def check(data: bytes, header_tag: int, material: int) -> None:
     """Read the binding back out of the bytes about to ship, by the same rules the game uses."""
+    (declared,) = struct.unpack_from("<I", data, SELF_LENGTH)
+    if declared != len(data):
+        raise SystemExit(f"0x{material:08X}: blob declares {declared:,} B at +0x00 but is "
+                         f"{len(data):,} B. This is the bug that hung character select - the "
+                         "loader believes the declared length, so anything past it is outside "
+                         "the region it has.")
     found = texture_array(data)
     if found is None:
         raise SystemExit(f"0x{material:08X}: texture array reads back as null")
