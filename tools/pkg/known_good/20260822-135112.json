@@ -1,0 +1,512 @@
+{
+  "saved": "2026-08-22T13:51:12",
+  "note": "101 layers: first five-atlas pack. 037d_26 mask-on-all-parts + 019b_9 packed 512 + 0698_25 UV tiles. Tiles work. Destiny dye PS crushed GLB green. Restore point before look-alike probe.",
+  "count": 101,
+  "live": [
+    {
+      "name": "w64_fx_019d_6.pkg",
+      "size": 200704,
+      "mtime": "2026-08-20T19:09:00"
+    },
+    {
+      "name": "w64_globals_0211_6.pkg",
+      "size": 229424,
+      "mtime": "2026-08-20T19:09:00"
+    },
+    {
+      "name": "w64_sandbox_019b_7.pkg",
+      "size": 555008,
+      "mtime": "2026-08-20T18:05:12"
+    },
+    {
+      "name": "w64_sandbox_019b_8.pkg",
+      "size": 555008,
+      "mtime": "2026-08-22T09:58:39"
+    },
+    {
+      "name": "w64_sandbox_019b_9.pkg",
+      "size": 555008,
+      "mtime": "2026-08-22T13:34:22"
+    },
+    {
+      "name": "w64_sandbox_01b5_7.pkg",
+      "size": 346112,
+      "mtime": "2026-08-20T18:05:12"
+    },
+    {
+      "name": "w64_sandbox_01b5_8.pkg",
+      "size": 8641200,
+      "mtime": "2026-08-20T21:03:33"
+    },
+    {
+      "name": "w64_sandbox_01bb_7.pkg",
+      "size": 641024,
+      "mtime": "2026-08-20T18:05:12"
+    },
+    {
+      "name": "w64_sandbox_01bb_8.pkg",
+      "size": 5311040,
+      "mtime": "2026-08-20T21:03:33"
+    },
+    {
+      "name": "w64_sandbox_01bc_7.pkg",
+      "size": 9292544,
+      "mtime": "2026-08-20T21:03:33"
+    },
+    {
+      "name": "w64_sandbox_01bd_7.pkg",
+      "size": 8392304,
+      "mtime": "2026-08-20T21:03:34"
+    },
+    {
+      "name": "w64_sandbox_01be_6.pkg",
+      "size": 1305600,
+      "mtime": "2026-08-20T21:03:34"
+    },
+    {
+      "name": "w64_sandbox_01c0_6.pkg",
+      "size": 8207520,
+      "mtime": "2026-08-20T21:03:34"
+    },
+    {
+      "name": "w64_sandbox_01d5_7.pkg",
+      "size": 5948736,
+      "mtime": "2026-08-20T21:03:34"
+    },
+    {
+      "name": "w64_sandbox_01d6_4.pkg",
+      "size": 8041792,
+      "mtime": "2026-08-20T21:03:35"
+    },
+    {
+      "name": "w64_sandbox_01d7_5.pkg",
+      "size": 689152,
+      "mtime": "2026-08-20T21:03:35"
+    },
+    {
+      "name": "w64_sandbox_01d8_6.pkg",
+      "size": 2433024,
+      "mtime": "2026-08-20T21:03:35"
+    },
+    {
+      "name": "w64_sandbox_01d9_7.pkg",
+      "size": 1518464,
+      "mtime": "2026-08-20T21:03:35"
+    },
+    {
+      "name": "w64_sandbox_01db_6.pkg",
+      "size": 345456,
+      "mtime": "2026-08-20T16:17:09"
+    },
+    {
+      "name": "w64_sandbox_01db_7.pkg",
+      "size": 345456,
+      "mtime": "2026-08-20T18:05:12"
+    },
+    {
+      "name": "w64_sandbox_01db_8.pkg",
+      "size": 5315840,
+      "mtime": "2026-08-20T21:03:35"
+    },
+    {
+      "name": "w64_sandbox_01dc_6.pkg",
+      "size": 1686240,
+      "mtime": "2026-08-20T21:03:35"
+    },
+    {
+      "name": "w64_sandbox_01dd_6.pkg",
+      "size": 8899072,
+      "mtime": "2026-08-20T21:03:35"
+    },
+    {
+      "name": "w64_sandbox_01e2_6.pkg",
+      "size": 698400,
+      "mtime": "2026-08-20T10:12:24"
+    },
+    {
+      "name": "w64_sandbox_01e4_6.pkg",
+      "size": 272464,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_01ef_6.pkg",
+      "size": 168648,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_0207_7.pkg",
+      "size": 223232,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_020c_6.pkg",
+      "size": 189808,
+      "mtime": "2026-08-20T16:17:09"
+    },
+    {
+      "name": "w64_sandbox_020c_7.pkg",
+      "size": 189808,
+      "mtime": "2026-08-20T18:05:12"
+    },
+    {
+      "name": "w64_sandbox_020c_8.pkg",
+      "size": 170840,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_020e_7.pkg",
+      "size": 193904,
+      "mtime": "2026-08-20T16:17:09"
+    },
+    {
+      "name": "w64_sandbox_020e_8.pkg",
+      "size": 193904,
+      "mtime": "2026-08-20T18:05:12"
+    },
+    {
+      "name": "w64_sandbox_020e_9.pkg",
+      "size": 193904,
+      "mtime": "2026-08-22T09:58:39"
+    },
+    {
+      "name": "w64_sandbox_0378_6.pkg",
+      "size": 289584,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_037b_6.pkg",
+      "size": 245760,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_037c_10.pkg",
+      "size": 167776,
+      "mtime": "2026-08-19T22:19:12"
+    },
+    {
+      "name": "w64_sandbox_037c_11.pkg",
+      "size": 167776,
+      "mtime": "2026-08-19T22:33:48"
+    },
+    {
+      "name": "w64_sandbox_037c_12.pkg",
+      "size": 167776,
+      "mtime": "2026-08-19T22:34:33"
+    },
+    {
+      "name": "w64_sandbox_037c_13.pkg",
+      "size": 250768,
+      "mtime": "2026-08-19T23:06:14"
+    },
+    {
+      "name": "w64_sandbox_037c_14.pkg",
+      "size": 167776,
+      "mtime": "2026-08-19T23:16:54"
+    },
+    {
+      "name": "w64_sandbox_037c_15.pkg",
+      "size": 227872,
+      "mtime": "2026-08-19T23:23:42"
+    },
+    {
+      "name": "w64_sandbox_037c_16.pkg",
+      "size": 167776,
+      "mtime": "2026-08-20T09:09:11"
+    },
+    {
+      "name": "w64_sandbox_037c_17.pkg",
+      "size": 167776,
+      "mtime": "2026-08-20T09:35:56"
+    },
+    {
+      "name": "w64_sandbox_037c_18.pkg",
+      "size": 233440,
+      "mtime": "2026-08-20T10:12:24"
+    },
+    {
+      "name": "w64_sandbox_037c_19.pkg",
+      "size": 167776,
+      "mtime": "2026-08-20T11:08:15"
+    },
+    {
+      "name": "w64_sandbox_037c_20.pkg",
+      "size": 167776,
+      "mtime": "2026-08-20T12:23:45"
+    },
+    {
+      "name": "w64_sandbox_037c_21.pkg",
+      "size": 167776,
+      "mtime": "2026-08-20T13:05:51"
+    },
+    {
+      "name": "w64_sandbox_037c_22.pkg",
+      "size": 169824,
+      "mtime": "2026-08-20T13:25:38"
+    },
+    {
+      "name": "w64_sandbox_037c_23.pkg",
+      "size": 39278592,
+      "mtime": "2026-08-20T14:39:18"
+    },
+    {
+      "name": "w64_sandbox_037c_24.pkg",
+      "size": 174539,
+      "mtime": "2026-08-20T16:27:11"
+    },
+    {
+      "name": "w64_sandbox_037c_25.pkg",
+      "size": 175408,
+      "mtime": "2026-08-20T16:37:35"
+    },
+    {
+      "name": "w64_sandbox_037c_26.pkg",
+      "size": 46368928,
+      "mtime": "2026-08-20T17:37:38"
+    },
+    {
+      "name": "w64_sandbox_037c_27.pkg",
+      "size": 182731,
+      "mtime": "2026-08-20T18:05:12"
+    },
+    {
+      "name": "w64_sandbox_037c_28.pkg",
+      "size": 184160,
+      "mtime": "2026-08-20T22:04:10"
+    },
+    {
+      "name": "w64_sandbox_037c_7.pkg",
+      "size": 167776,
+      "mtime": "2026-08-19T21:24:45"
+    },
+    {
+      "name": "w64_sandbox_037c_8.pkg",
+      "size": 167776,
+      "mtime": "2026-08-19T21:57:59"
+    },
+    {
+      "name": "w64_sandbox_037c_9.pkg",
+      "size": 167776,
+      "mtime": "2026-08-19T22:09:29"
+    },
+    {
+      "name": "w64_sandbox_037d_10.pkg",
+      "size": 945920,
+      "mtime": "2026-08-19T22:19:12"
+    },
+    {
+      "name": "w64_sandbox_037d_11.pkg",
+      "size": 945920,
+      "mtime": "2026-08-19T22:33:48"
+    },
+    {
+      "name": "w64_sandbox_037d_12.pkg",
+      "size": 945920,
+      "mtime": "2026-08-19T22:34:33"
+    },
+    {
+      "name": "w64_sandbox_037d_13.pkg",
+      "size": 865712,
+      "mtime": "2026-08-19T23:06:14"
+    },
+    {
+      "name": "w64_sandbox_037d_14.pkg",
+      "size": 945920,
+      "mtime": "2026-08-19T23:16:54"
+    },
+    {
+      "name": "w64_sandbox_037d_15.pkg",
+      "size": 887616,
+      "mtime": "2026-08-19T23:23:42"
+    },
+    {
+      "name": "w64_sandbox_037d_16.pkg",
+      "size": 945920,
+      "mtime": "2026-08-20T09:09:11"
+    },
+    {
+      "name": "w64_sandbox_037d_17.pkg",
+      "size": 945920,
+      "mtime": "2026-08-20T09:35:56"
+    },
+    {
+      "name": "w64_sandbox_037d_18.pkg",
+      "size": 530304,
+      "mtime": "2026-08-20T10:12:24"
+    },
+    {
+      "name": "w64_sandbox_037d_19.pkg",
+      "size": 945920,
+      "mtime": "2026-08-20T11:08:15"
+    },
+    {
+      "name": "w64_sandbox_037d_20.pkg",
+      "size": 945920,
+      "mtime": "2026-08-20T12:23:45"
+    },
+    {
+      "name": "w64_sandbox_037d_21.pkg",
+      "size": 947968,
+      "mtime": "2026-08-20T13:05:51"
+    },
+    {
+      "name": "w64_sandbox_037d_22.pkg",
+      "size": 947968,
+      "mtime": "2026-08-20T13:25:38"
+    },
+    {
+      "name": "w64_sandbox_037d_23.pkg",
+      "size": 44871680,
+      "mtime": "2026-08-20T14:39:19"
+    },
+    {
+      "name": "w64_sandbox_037d_24.pkg",
+      "size": 85124912,
+      "mtime": "2026-08-20T17:37:38"
+    },
+    {
+      "name": "w64_sandbox_037d_25.pkg",
+      "size": 970496,
+      "mtime": "2026-08-20T22:04:10"
+    },
+    {
+      "name": "w64_sandbox_037d_26.pkg",
+      "size": 201952,
+      "mtime": "2026-08-22T13:15:54"
+    },
+    {
+      "name": "w64_sandbox_037d_6.pkg",
+      "size": 939264,
+      "mtime": "2026-08-19T21:24:46"
+    },
+    {
+      "name": "w64_sandbox_037d_7.pkg",
+      "size": 167744,
+      "mtime": "2026-08-19T21:36:24"
+    },
+    {
+      "name": "w64_sandbox_037d_8.pkg",
+      "size": 941120,
+      "mtime": "2026-08-19T21:57:59"
+    },
+    {
+      "name": "w64_sandbox_037d_9.pkg",
+      "size": 945920,
+      "mtime": "2026-08-19T22:09:29"
+    },
+    {
+      "name": "w64_sandbox_0692_6.pkg",
+      "size": 684536,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_0695_7.pkg",
+      "size": 195256,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_0698_10.pkg",
+      "size": 1843324,
+      "mtime": "2026-08-19T22:33:48"
+    },
+    {
+      "name": "w64_sandbox_0698_11.pkg",
+      "size": 1843324,
+      "mtime": "2026-08-19T22:34:33"
+    },
+    {
+      "name": "w64_sandbox_0698_12.pkg",
+      "size": 1847644,
+      "mtime": "2026-08-19T23:06:14"
+    },
+    {
+      "name": "w64_sandbox_0698_13.pkg",
+      "size": 1843324,
+      "mtime": "2026-08-19T23:16:54"
+    },
+    {
+      "name": "w64_sandbox_0698_14.pkg",
+      "size": 1846140,
+      "mtime": "2026-08-19T23:23:42"
+    },
+    {
+      "name": "w64_sandbox_0698_15.pkg",
+      "size": 1845372,
+      "mtime": "2026-08-20T09:09:11"
+    },
+    {
+      "name": "w64_sandbox_0698_16.pkg",
+      "size": 1845372,
+      "mtime": "2026-08-20T09:35:57"
+    },
+    {
+      "name": "w64_sandbox_0698_17.pkg",
+      "size": 1063292,
+      "mtime": "2026-08-20T10:12:24"
+    },
+    {
+      "name": "w64_sandbox_0698_18.pkg",
+      "size": 1845372,
+      "mtime": "2026-08-20T11:08:15"
+    },
+    {
+      "name": "w64_sandbox_0698_19.pkg",
+      "size": 1845372,
+      "mtime": "2026-08-20T12:23:45"
+    },
+    {
+      "name": "w64_sandbox_0698_20.pkg",
+      "size": 1845372,
+      "mtime": "2026-08-20T13:05:51"
+    },
+    {
+      "name": "w64_sandbox_0698_21.pkg",
+      "size": 1845372,
+      "mtime": "2026-08-20T13:25:38"
+    },
+    {
+      "name": "w64_sandbox_0698_22.pkg",
+      "size": 14135296,
+      "mtime": "2026-08-20T14:39:19"
+    },
+    {
+      "name": "w64_sandbox_0698_23.pkg",
+      "size": 14137344,
+      "mtime": "2026-08-20T17:37:42"
+    },
+    {
+      "name": "w64_sandbox_0698_24.pkg",
+      "size": 1851516,
+      "mtime": "2026-08-20T22:04:10"
+    },
+    {
+      "name": "w64_sandbox_0698_25.pkg",
+      "size": 1298560,
+      "mtime": "2026-08-22T13:34:22"
+    },
+    {
+      "name": "w64_sandbox_0698_6.pkg",
+      "size": 1841276,
+      "mtime": "2026-08-19T21:24:46"
+    },
+    {
+      "name": "w64_sandbox_0698_7.pkg",
+      "size": 1841276,
+      "mtime": "2026-08-19T21:57:59"
+    },
+    {
+      "name": "w64_sandbox_0698_8.pkg",
+      "size": 1841276,
+      "mtime": "2026-08-19T22:09:30"
+    },
+    {
+      "name": "w64_sandbox_0698_9.pkg",
+      "size": 1843324,
+      "mtime": "2026-08-19T22:19:13"
+    },
+    {
+      "name": "w64_sandbox_0699_6.pkg",
+      "size": 810428,
+      "mtime": "2026-08-20T10:12:25"
+    }
+  ]
+}

@@ -47,6 +47,7 @@ from inject_mesh import (
     PART_INDEX_COUNT,
     PART_INDEX_OFFSET,
     PART_LOD,
+    PART_MATERIAL,
     PART_PRIMITIVE,
     PART_STRIDE,
     TRIANGLES,
@@ -639,13 +640,18 @@ def carrier_slots(mesh) -> list[int]:
 # happen to lay their pass-one slots out identically, but `slot_for_material()` checks that rather
 # than assuming it. Original index counts do not constrain the choice - offset and count are both
 # rewritten - so the five largest pass-one materials are used, largest group onto largest material.
-GROUP_MATERIALS = {
+# SLOT_MATERIALS finds the five-part-split slot. GROUP_MATERIALS is what that slot draws with.
+# They must match. 2026-08-22 pointed GROUP at sandbox_0691 slot-3 binders (world VS
+# 0x80FEBAC3). Character select loaded, mask stayed, tank/skin/twirl/necklace vanished.
+# Armor parts only draw with the chest vertex shader (0x81532C62 / 0x81532C5B).
+SLOT_MATERIALS = {
     "GLSLShader85": 0x80EF98DB,   # BlackTankTop, 24,786 tris
     "GLSLShader13": 0x80EFA1F7,   # SkinTats: body and arms
     "GLSLShader66": 0x80EFA1DC,   # GasMask
     "GLSLShader22": 0x81532AE0,   # Twirl
     "GLSLShader60": 0x81531EF0,   # Silver_Necklace
 }
+GROUP_MATERIALS = dict(SLOT_MATERIALS)
 
 
 def load_groups(mesh_path: Path) -> tuple[list[str], np.ndarray] | None:
@@ -658,11 +664,11 @@ def load_groups(mesh_path: Path) -> tuple[list[str], np.ndarray] | None:
 
 
 def order_by_group(faces: np.ndarray, names: list[str],
-                   face_group: np.ndarray) -> tuple[np.ndarray, list[tuple[str, int, int, int]]]:
+                   face_group: np.ndarray) -> tuple[np.ndarray, list[tuple[str, int, int, int, int]]]:
     """
     Sorts triangles so each source material is one contiguous run of indices.
 
-    @return The reordered faces, and `(name, material, index offset, index count)` per group.
+    @return The reordered faces, and `(name, draw material, slot-finder material, offset, count)`.
 
     A Destiny part is a range of the index buffer, so a material can only get its own part if its
     triangles are contiguous. Sorting is all that takes, and it permutes triangles only - the vertex
@@ -672,7 +678,7 @@ def order_by_group(faces: np.ndarray, names: list[str],
         raise SystemExit(f"groups file has {len(face_group):,} triangles, mesh has {len(faces):,}; "
                          "rebuild both with retarget_mesh.py")
     order = np.argsort(face_group, kind="stable")
-    groups: list[tuple[str, int, int, int]] = []
+    groups: list[tuple[str, int, int, int, int]] = []
     at = 0
     for group, name in enumerate(names):
         count = int((face_group == group).sum())
@@ -683,7 +689,8 @@ def order_by_group(faces: np.ndarray, names: list[str],
         if material is None:
             raise SystemExit(f"no carrier material mapped for source material {name}; "
                              f"add it to GROUP_MATERIALS")
-        groups.append((name, material, at * 3, count * 3))
+        finder = SLOT_MATERIALS.get(name, material)
+        groups.append((name, material, finder, at * 3, count * 3))
         at += count
     return faces[order], groups
 
@@ -699,7 +706,7 @@ def slot_for_material(mesh, material: int) -> int:
 
 def rewrite_chest(model: Model, index_count: int, scale: float,
                   translation: np.ndarray, own_texcoords: bool = False,
-                  groups: list[tuple[str, int, int, int]] | None = None
+                  groups: list[tuple[str, int, int, int, int]] | None = None
                   ) -> tuple[bytes, list[tuple[str, int, int, int, int]]]:
     """@return The rewritten model, and `(name, slot, material, offset, count)` per drawn part."""
     out = bytearray(model.data)
@@ -713,18 +720,18 @@ def rewrite_chest(model: Model, index_count: int, scale: float,
     chosen: list[tuple[str, int, int, int, int]] = []
     for number, mesh in enumerate(model.meshes):
         if number != 0:
-            plan: dict[int, tuple[int, int]] = {}
+            plan: dict[int, tuple[int, int, int]] = {}
         elif groups:
             plan = {}
-            for name, material, offset, count in groups:
-                slot = slot_for_material(mesh, material)
+            for name, material, finder, offset, count in groups:
+                slot = slot_for_material(mesh, finder)
                 if slot in plan:
                     raise SystemExit(f"{name} resolved to slot {slot}, already taken; two groups "
                                      "cannot share one material")
-                plan[slot] = (offset, count)
+                plan[slot] = (offset, count, material)
                 chosen.append((name, slot, material, offset, count))
         else:
-            plan = {slot: (0, index_count) for slot in carrier_slots(mesh)}
+            plan = {slot: (0, index_count, mesh.parts[slot][0]) for slot in carrier_slots(mesh)}
             chosen = [(f"all {index_count // 3:,} tris", slot, mesh.parts[slot][0], 0, index_count)
                       for slot in sorted(plan)]
         for slot in range(mesh.part_count):
@@ -732,7 +739,8 @@ def rewrite_chest(model: Model, index_count: int, scale: float,
             if at + PART_STRIDE > len(out):
                 break
             if slot in plan:
-                offset, count = plan[slot]
+                offset, count, material = plan[slot]
+                struct.pack_into("<I", out, at + PART_MATERIAL, material)
                 struct.pack_into("<h", out, at + PART_PRIMITIVE, TRIANGLES)
                 struct.pack_into("<I", out, at + PART_INDEX_OFFSET, offset)
                 struct.pack_into("<I", out, at + PART_INDEX_COUNT, count)
@@ -824,7 +832,7 @@ def inject_mesh0(by_package: dict[Path, dict[int, bytes]], tag: int,
                  scale: float, translation: np.ndarray,
                  uv_header_fb: bytes, uv_body_fb: bytes,
                  frame: np.ndarray | None = None,
-                 groups: list[tuple[str, int, int, int]] | None = None) -> None:
+                 groups: list[tuple[str, int, int, int, int]] | None = None) -> None:
     model = load_model(tag)
     mesh = model.meshes[0]
     stride = vertex_stride(mesh.positions)
@@ -909,7 +917,7 @@ def inject_slot(by_package: dict[Path, dict[int, bytes]], tag: int, kind: str,
                 uv_header_fb: bytes, uv_body_fb: bytes, rigid: bool,
                 authored: list[bytes] | None = None,
                 frame: np.ndarray | None = None,
-                groups: list[tuple[str, int, int, int]] | None = None) -> None:
+                groups: list[tuple[str, int, int, int, int]] | None = None) -> None:
     model = load_model(tag)
     mesh = model.meshes[0]
     stride = vertex_stride(mesh.positions)

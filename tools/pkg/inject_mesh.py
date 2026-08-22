@@ -85,6 +85,7 @@ DEFAULT_GLB = Path(r"C:\Chiliz\Destiny2SunriseCharacters\void_4003GasMask.glb")
 INHERITED_W = 18
 PART_STRIDE = 0x20
 # Offsets inside one part record.
+PART_MATERIAL = 0x00
 PART_PRIMITIVE = 0x06
 PART_INDEX_OFFSET = 0x08
 PART_INDEX_COUNT = 0x0C

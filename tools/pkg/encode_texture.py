@@ -130,6 +130,41 @@ def encode(path: Path, target: int) -> bytes:
     return bytes(out)
 
 
+def mip01_size(width: int, height: int) -> int:
+    """@return Byte count of BC7 mip 0 + mip 1 for `width` x `height`."""
+    def level(w: int, h: int) -> int:
+        return (max(w, 4) // 4) * (max(h, 4) // 4) * BC7_BLOCK_BYTES
+    return level(width, height) + level(max(width // 2, 1), max(height // 2, 1))
+
+
+def dims_for_mip01(target: int) -> tuple[int, int]:
+    """@return `(width, height)` whose mip-0+1 BC7 chain is exactly `target` bytes."""
+    found: list[tuple[int, int]] = []
+    for width in range(4, 4097, 4):
+        for height in (width, width // 2, width * 2):
+            if height >= 4 and height % 4 == 0 and mip01_size(width, height) == target:
+                found.append((width, height))
+    if not found:
+        raise SystemExit(f"no mip-0+1 BC7 chain comes to {target:,} bytes")
+    # Landscape first — the GLB atlases are square and squash less across the wider side.
+    found.sort(key=lambda size: (size[0] < size[1], -size[0] * size[1]))
+    return found[0]
+
+
+def encode_mip01(path: Path, width: int, height: int, target: int) -> bytes:
+    """@return `target` bytes of BC7: the image at `width` x `height` plus one mip."""
+    image = Image.open(path).convert("RGBA")
+    image = image.resize((max(width, 4), max(height, 4)), Image.LANCZOS)
+    out = bytearray(encode_blocks(np.asarray(image, dtype=np.uint8)))
+    image = image.resize((max(width // 2, 4), max(height // 2, 4)), Image.LANCZOS)
+    out += encode_blocks(np.asarray(image, dtype=np.uint8))
+    if len(out) != target:
+        raise SystemExit(
+            f"{path.name}: encoded mip0+1 as {len(out):,} B for {width}x{height}, "
+            f"entry is {target:,} B")
+    return bytes(out)
+
+
 def decode_blocks(data: bytes, width: int, height: int) -> np.ndarray:
     """
     @return `data` decoded back to an RGBA image, by the mode-6 rules alone.

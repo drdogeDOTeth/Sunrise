@@ -1,10 +1,65 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-22. **Status: SOLVED AND CONFIRMED IN GAME. The Tower failure was ONE FILE — `w64_sandbox_0699_7.pkg`. Not the mesh work, and NOT the painted texture content (my theory, disproven twice over).**
+**Updated:** 2026-08-22 (`1CBE` failed; packages restored; merging upstream Sunrise). **Mesh: SOLVED.** Package unique-RGB on this bind is closed for the two same-family pixel shaders.
 
-**THE GOOD CONFIGURATION — 96 layers. Keep it.** Everything except `0699_7`, `0699_8` and `ui_01a3_7`, all three expendable paint sweeps. Verified 2026-08-22: orbit clean, Tower clean — state 36 in 5,042 ms, state 37 in 6,295 ms, `ENUM(3)` complete in 3,335 ms, **0 maydays, 0 hitch asserts**, through to `activity:in_world`. Five-part split live at `037c_28` / `037d_25` / `0698_24`; `0699` truncated to `_6`. Zero dangling refs across 31 packages.
+**Live / restore:** `20260822-144409.json` (same 101 layers as `20260822-135112.json`). `037d_27` is in the attic — do **not** `--save` it. `--restore` without a snapshot now returns 144409.
 
-**The material/bind question is still open; FIVE theories died getting here — read the retractions before forming a sixth.**
+**`1CBE` result:** character select loaded, body did not vanish. Custom mesh is flat **white slabs** (chest, belly, fronts of legs), a **yellow waist band**, gold/tan mask, leftover purple gauntlets. **No green.** `0x81531CBE` is a cloth/metal palette shader (same dye tile as `0x81531EE6`), not an albedo sample. Do not retry `1CBE`. Do not pack another 512. Do not steal.
+
+Dumps did not fire at character select (`dump_if_requested` runs on investment refresh). Request tags are still in `dump/request.txt` for a later 135112 launch.
+
+**Look-alike probe (`019b_10` / `0698_26`) user-confirmed fail.** Saturation boost + 384 skin tile. Screenshot: black mask, charcoal vest, black arms, **white pants**. Luma gate, not albedo. Green never appeared. Restored. Do not boost again. Do not steal. Do not pack another 512.
+
+---
+
+## 0691 VANISH (2026-08-22, user-confirmed) — world VS on a skinned chest
+
+`assign_split_materials.py` pointed tank/skin/twirl/necklace at `sandbox_0691` materials that already bind a unique slot-3 texture (same *layout* as the working mask: ~1408 B, one PS bind at slot 3). Character select **loaded**. The gas mask stayed. The rest of the custom body **vanished** (floating mask + leftover stock glove + weapon).
+
+Cause, from the dumped materials, not a guess:
+
+| | chest / mask | 0691 steal |
+|---|---|---|
+| vertex shader | **`0x81532C62`** (armor) | **`0x80FEBAC3`** (world; 136 of 1038 dumps) |
+| pixel shader | `0x81531EE6` | four different 0691 PS tags |
+| package | `037c` / `037d` / `0698` / `0699` | `sandbox_0691_6` |
+
+Layout matching the mask is not enough. **Armor VS is not enough either.** `assign_armor_vs.py` pointed tank/skin/twirl/necklace at C62/C5B slot-3 binders (037c/0698/01fd) and painted those BC7 buffers. Character select loaded; mask stayed; the other four vanished — same screenshot as 0691. Restored `100421` (`moved 4 out`). The shared fact: those materials were **not on the chest model**. The five-part split only ever reused materials already on the chest, and that drew.
+
+`assign_armor_vs.py` now exits on purpose. `assign_chest_mask.py` is the control: every split part names `0x80EFA1DC` (chest-native, already painted). Expect the mask atlas on the whole body (wrong UVs). Unique atlases stay blocked until a chest-native material binds a second unique buffer — do not steal off-chest tags.
+
+Among 3,081 dumped materials, **492** use the armor VS. **113** of those have a texture array (the previous "7" was a split-size sampling hole: 1664–1728 B in 01fd/037c/0698 are full of slot-3 binders).
+
+**The five slot-5/6 headers we dumped are not unique GLB atlases:**
+
+| header | size | format | buffer | package |
+|---|---|---|---|---|
+| `0x80C70DCD` | 512² | BC1_SRGB | `0x80B34068` 163,840 B | `globals_019a` (dye-like) |
+| `0x80C70F3F` | 512² | BC1_SRGB | `0x80B34021` 163,840 B | `globals_019a` |
+| `0x80C1D9EB` | 512² | BC7 | `0x80B36018` 327,680 B | `sandbox_019b_8` (same family as the mask) |
+| `0x80C0EDD2` | 256² | BC7_SRGB | `0x80B361B3` 81,920 B | `019b_8` |
+| `0x80BC8F21` | 512² | BC1_SRGB | `0x80B6A115` 163,840 B | `01b5_8` |
+
+Do not steal those onto the chest for unique art. `0x80C1D3CA` (slot 4 next to the mask) is already `suit_t5` in the dye legend.
+
+**Gold is closed for off-chest steals.** Those four unique BC7 buffers exist, but pointing chest parts at their materials vanished the body. Do not re-run `assign_armor_vs.py`. Control is `assign_chest_mask.py` (live).
+
+- `assign_split_materials.py` / any steal of `0x80FEBAC3` (or other non-armor VS) onto chest parts.
+- `assign_armor_vs.py` / any steal of a material **not already on the chest model**, even C62/C5B.
+- `bind_material_textures.py` — changing a texture *tag* or appending a PSTextures array hangs `character:signin`.
+- Dye tiles t3/t5/t7. Dyes cannot carry the GLB's unique atlases.
+- Overwriting `019b_8` / `0x80B3611D` with a flat colour.
+- Hunting more 1408 B twins in 037c/037d/0698/0699/01fd — that set is empty.
+- Stealing the slot-5/6 BC1 globals tiles (`0x80C70DCD` / `0x80C70F3F` / `0x80BC8F21`) as unique atlases.
+- Stealing 256² / BC1 slot-3 (`0x80C1D358`, `0x80C6AA3E`, most of the 16) as unique atlases.
+
+Next: finish the upstream Sunrise merge, build/install, then the draw hook. Do not swap another same-family PS. Do not pack another 512. `0x80EF35E5` is the only remaining 1-bind unique-1024 PS — hang risk, not next by default.
+
+The earlier "3,965 records, one texture array" count was **models**. After the bindable-material launch: **5,001 dumps, 1,038 materials, 846 with a texture array.** Chest materials that bind: only `0x80EFA1DC` and sibling `0x80EFA1E2`, both naming `0x80C1D3CD`. The 0691 "gold family" is a layout match with the **wrong vertex shader** — retired, see above.
+
+`0x80C1D3CD` is 512². Do not reopen geometry.
+
+---
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything." — on `_20`
@@ -21,8 +76,9 @@ bone palettes, arm angles or the tangent frame.
 
 Three things remain, none of them geometry:
 
-1. **Albedo is still Scatterhorn's, and it does not come from the 55 sandbox textures we
-   painted.** Those patches loaded; the Guardian never samples them. See "Then: textures".
+1. **Four of five split materials bind no texture, and off-chest steals vanish.**
+   Control confirmed. Unique colour is live as a 512 pack + UV tiles (`pack_chest_atlas.py`).
+   Soft. Necklace UVs are collapsed (`v` constant). Do not `--save` until the user likes it.
 2. ~~**The custom mesh has five texture atlases and we draw through two parts.**~~ **Done** —
    see "The five-part split" below. Five parts, five materials, one per atlas.
 3. **Gloves still draw over the custom hands**, and the bald race head still draws above the gas
@@ -60,16 +116,11 @@ belongs to a *different* texture (suit_t5), and corrupted it. `paint_albedo.py` 
 buffer and requires an explicit `--small=` for anything else. Leaving the small mips alone is
 visually free: the buffer holds mip 0 and 1, which is what renders at any normal distance.
 
-### What is actually blocking the other four parts
+### What blocked the other four parts (still blocked; 0691 steal vanished them)
 
-**Four of the five split materials bind no textures at all.** `0x80EF98DB` (tank top),
-`0x80EFA1F7` (skin/arms), `0x81532AE0` (twirl) and `0x81531EF0` (necklace) all have a **NULL**
-texture-array field. Only `0x80EFA1DC` has one, and it has exactly one binding. Scanning **all
-3,965 dumped records** turned up exactly **one** with a populated pixel-texture array — that same
-material. So there is no ready-made material to repoint a part at, among what has been dumped.
-
-That is the real meaning of "the albedo slot is empty", and it is why those parts render as flat
-white / grey / black.
+Those four materials still have a **NULL** texture-array field. Giving them an array hangs.
+Pointing them at `sandbox_0691` slot-3 binders loaded, then hid the body: world VS `0x80FEBAC3`
+on a skinned chest. Steal only armor VS `0x81532C62` / `0x81532C5B`. See "0691 VANISH" at the top.
 
 ### Dyes are RULED OUT as the body's visible colour (one launch, user-confirmed)
 
@@ -79,14 +130,9 @@ The dye textures named in `dye_texture_legend.json` do not drive what you see. D
 
 ### Where to go next, in order of cost
 
-1. **Dump more materials.** Only one dumped record has a texture array, and that is a sampling
-   artefact of what was requested, not a fact about the game. Dump the materials the other four
-   parts use and look for any with a populated array — one launch via `make_request.py`.
-2. **If some material has an albedo, repoint the parts at it** by rewriting the type-8 model
-   records at the same size. That operation is proven — it is exactly what the five-part split
-   already does.
-3. **Only if neither works**, revisit adding a texture array to a NULL material, which needs the
-   record resize plus a tag write.
+1. Unique RGB on `0x80EFA1DC` is **closed**. The look-alike probe went white/black. Restored `135112`.
+2. Do not boost, steal, append a texture array, or paint `0x80B3611D` flat.
+3. Next path has to be a different *kind* of binder already on this chest, or accept 135112 / 100421. There is no third 512 pack that turns this PS into Blender.
 
 ## GET BACK TO A WORKING GAME — read this before touching packages
 
@@ -1771,12 +1817,20 @@ non-mesh-0 parts. Do not un-zero original extras.
 | `trace_textures.py` | The F8 package-read capture, mapped through the block table to entries and filtered to textures. Archives the log first, because it rotates one deep. Use when a model lookup names no texture. |
 | `paint_dye_slots.py` | Dye rebind step. Rebinds all three dye channels' albedo tile to one t-slot (`--slot`, default 0) and paints each channel's texture a distinct colour in **both** mip halves, so the channel reports itself and the mip level cannot confound it. |
 | `revert_layer.ps1` | **Recovery.** Moves each package's newest layer aside, reverting to the one beneath. `-Confirm` to act, `-Restore` to put it back, `-Attic` to give a set its own directory. Refuses while destiny2 is running. |
-| `bind_material_textures.py` | Binds an atlas to a carrier material's slot 3. `--repoint-only` is the **current bisect**: one material, four bytes, no resize, self-reporting in red. `--bind-only` does the append and the repoint together, so it cannot separate them. |
+| `paint_albedo.py` | Paint an image into the buffer a material *already* samples. No tag change. Under the pack, `019b_9` holds the 512 atlas on `0x80B3611D`. |
+| `pack_chest_atlas.py` | **Current texture write.** Packs five GLB albedos into `0x80B3611D` and scales each part's UVs into a tile. Texcoord U/V only. |
+| `request_bindable_materials.py` | Fills `dump/request.txt` with **armour-family** materials (037c/037d/0698/0699/01fd). Not 0691. |
+| `scan_material_textures.py` | After a material dump: binds + VS/PS. Keep only armor VS `0x81532C62` / `0x81532C5B`. |
+| `assign_split_materials.py` | **Do not run.** 0691 world VS vanished four parts. Restored 100421. |
+| `assign_armor_vs.py` | **Do not run.** Off-chest C62/C5B vanished four parts. Same as 0691. |
+| `assign_chest_mask.py` | All five split parts name `0x80EFA1DC`. Live as `037d_26`. |
+| `known_good.py` | Snapshot / restore the live layer set. `--check` before every launch. |
+| `bind_material_textures.py` | **Do not run.** Tag rewrite and array append hang `character:signin`. |
 | `verify_bind_layer.py` | Reads the shipped layer back out of the installed packages as the game would — entry sizes, `entry_type`, self-length, texture-array resolution, per-block SHA-1 and alignment. Offline; run it before every launch. |
 | `diff_entry_rows.py` | Diffs an entry's **table row** (`reference`, `type_info`, placement) against the layer beneath. The half `verify_bind_layer.py` cannot see, because it reads bodies *through* those rows. |
 | `paint_dye_textures.py` | sRGB remaining-mips t3/t5/t7. **Done.** On disk, no visible colour. Leave installed for `_25`. |
 | `paint_dye_tints.py` | Inline DyeData tints. **`037c_24`. Failed visually. Do not rerun.** |
-| `paint_dye_bind.py` | **Current texture step.** `037c_25`: restore dye bodies, suit slot 5→0, plate/cloth DyeInfo sidecars. |
+| `paint_dye_bind.py` | Dye t0 remap + DyeInfo sidecars. **Failed visually. Do not rerun.** |
 | `dye_probe.py` | Dye index → entity-parent → `0x808071CD` stub (`+0x0C`) → `0x808071F3` body. Hop closed. |
 | `decode_texcoords.py` | Decodes and re-verifies the stride-24 second vertex buffer against the geometry. |
 | `prepare_mesh.py` | Superseded. Joins every object including the unrigged icosphere, and throws the armature away. |
@@ -1814,29 +1868,13 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch: try the Tower on the current good set.** Expected to fail — both earlier Tower
-failures happened with `ui_01a3_7` absent, so it is independent — but it is one free data point. If
-it fails, bisect `{14:39, 16:17, 16:27, 16:37, 17:37}` with `vanilla_mode.ps1 -Restore -UpTo`,
-starting at `16:17`. Give it two minutes and judge by `orbit_status.ps1`.
+**Look-alike probe failed. Restored `135112`.** Unique RGB on the bound dye tile is closed. Do not re-boost.
 
-**The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
-dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is
-already answered: size is not the constraint. `037d_28` tests residency.
+Do not run `assign_split_materials.py` or `assign_armor_vs.py`. Do not steal off-chest materials. Do not run `bind_material_textures.py`. Do not paint `0x80B3611D` with a flat colour.
 
-`_25` came back **no colour** — so neither the t0 remap nor the DyeInfo sidecars are the albedo
-path. Its dump did land: `0x80EF9663` (432 B suit sidecar) and the three 16-byte DyeInfo headers
-are on disk and still undecoded.
+**The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`.
 
-**The body is white because nothing is bound to its albedo slot — not because the right texture
-has not been found.** That is now the reading the evidence supports, and it retires the whole
-"find and repaint" line of attack that `_23`, `_24` and `_26` all belonged to:
-
-- The part-10 pixel shader declares `t0, t1, t2, t5, t6`. DyeTextures only name `t3`–`t8`.
-- Painting the dye **normals** (t4/t6/t8) visibly changed the body — dye textures do reach it.
-- Painting the dye **sRGB albedo** tiles (t3/t5/t7) did not — the shader is not reading them.
-- `_26` painted all 228 textures in the four packages: **the weapon changed, the body did not.**
-
-So the visible albedo is `t0`/`t1`/`t2`, which nothing supplies. **Bind, do not find.**
+The Tower is already solved (`0699_7` out). Ignore the superseded Tower-bisect paragraph that used to live here.
 
 ## Stop sweeping. The log already says which textures the game loads.
 

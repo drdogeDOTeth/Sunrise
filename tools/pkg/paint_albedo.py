@@ -17,8 +17,9 @@ every mesh layer in the working config performs.
     header 0x80C1D3CD (type 32, 40 B)   +0x00 total 349,552   +0x04 format 98 = BC7_UNORM
                                         +0x0E 512 x 512       +0x24 buffer 0x80B3611D
     0x80B3611D  pkg 019b entry  285  type 48  327,680 B   mip 0 (512) + mip 1 (256)
-    0x80C1D3CB  pkg 020e entry 5067  type 40   21,872 B   mips 2.. (128 down to 1x1)
-                                              total 349,552, exact
+    remaining mips are NOT 0x80C1D3CB — that tag is suit_t5's small half. Guessing
+    "header − 2" corrupted a different texture. Pass --small= only when arithmetic
+    on a dumped header proves the pair; otherwise leave the small mips original.
 
 Type 48 is not exotic: the `18:05` dye group wrote three of them and is live in the working config.
 
