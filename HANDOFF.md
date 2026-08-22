@@ -475,6 +475,36 @@ watcher now open the log with a `FileStream` using `ReadWrite` sharing and treat
 *unknown* rather than as no progress. **A tool saying "no progress" is not evidence until it has
 proven it can read the file.**
 
+### Orbit and the Tower are different tests — and different signatures
+
+Step 1 reached orbit, then **the Tower load was reported frozen**. Measured, it was almost certainly
+not: it had been in `activity:initial_slice_set_loading` for **8 seconds**, the last task completed
+**5 seconds** before the close, and **1,980 model lookups** landed in the preceding 3.2 s, with
+tasks finishing at 21 / 187 / 787 / 3,227 ms. The server was pushing `dest=city_tower_social_d2`
+rosters every second, all `result=ok`. Everything says mid-load.
+
+**Know the three signatures apart:**
+
+| | orbit deadlock | world load in progress |
+|---|---|---|
+| state | `cleanup`, never advances | `activity:initial_slice_set_loading` |
+| printout | identical every 15 s for 90 s+ | tasks completing, models resolving |
+| stuck tasks | 35 and 53, forever | none |
+| hitch asserts | thousands | **none** |
+| model lookups | none | ~2,000 in 3 s |
+
+A Tower load is far heavier than orbit — **allow two minutes**, not eight seconds.
+
+`orbit_status.ps1` was part of the problem and is fixed: it used to declare **DONE** the moment
+anything past `cleanup` appeared, which is true the instant `setup:orbit` arrives and therefore
+useless for a Tower test. It now judges by **progress** — how long the log has been quiet and how
+long the current state has held — reports models resolved, flags `activity:` states as heavy, and
+says **GAME NOT RUNNING** instead of STALLED when reading a finished launch's log.
+
+**Note the old Mercury signature is NOT this.** `docs/PACKAGES.md` records
+`activity:initial_slice_set_loading` followed by *nothing but networking heartbeats forever* as the
+null-block-SHA-1 hang. That one has no task completions and no model lookups. This had thousands.
+
 ### The mechanics
 
 The layers are additive in time, so restoring every layer written before a cutoff reproduces a
@@ -1390,7 +1420,7 @@ file" and copies from inline DyeData instead):
 | Hunter/Titan to orbit | `037d_25` | **stalled identically** | not *Warlock-specific* — but our content is resident anyway, so this exonerates nothing |
 | orbit with server logging at debug | `037d_25` | **server healthy and idle; client stops asking** | not a server problem; client blocked internally |
 | vanilla: all 99 layers removed | shipped packages | **REACHED ORBIT, 50 tasks completed** | our layers cause the deadlock |
-| bisect step 1: restored through 17:37 | 64 of 99 layers | **REACHED ORBIT** (cleanup 3,001 ms, not 25,000) | culprit is in {18:05, 19:09, 21:03, 22:04} |
+| bisect step 1: restored through 17:37 | 64 of 99 layers | **REACHED ORBIT** (cleanup 3,001 ms, not 25,000); Tower closed at 8 s, inconclusive | culprit is in {18:05, 19:09, 21:03, 22:04} |
 | **bisect step 2: restore through 19:09** | **staged (current)** | — | halves the four-group remainder |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
@@ -1474,8 +1504,9 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch: bisect step 2.** Restored through the 19:09 group; `21:03` and `22:04` held back.
-Any character, go to orbit. Pass -> culprit is {21:03, 22:04}; fail -> {18:05, 19:09}.
+**Next launch: bisect step 2, and test BOTH.** Restored through 19:09; `21:03` and `22:04` held
+back. Go to orbit — pass -> culprit is {21:03, 22:04}, fail -> {18:05, 19:09}. Then travel to the
+Tower and **wait two minutes**, checking `orbit_status.ps1` rather than the window.
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
 dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is

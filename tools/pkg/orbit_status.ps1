@@ -22,19 +22,33 @@ $reads = ([regex]::Matches($text, 'ev=package_trace stage=read')).Count
 $capture = if ($text -match 'stage=capture result=started') { 'ARMED' } else { 'not armed - press F8' }
 $age = [int](((Get-Date) - (Get-Item $Log).LastWriteTime).TotalSeconds)
 
-# Anything outside the boot chain means the transition completed and there is nothing left to wait for.
-$past = $states | Where-Object { $_ -notmatch '^bootflow:|^character:signin$|^cleanup$' }
+# Judge by PROGRESS, not by reaching a named state. An earlier version called "DONE" as soon as
+# anything past cleanup appeared, which made it useless for a Tower load - that happens long after
+# setup:orbit. A deadlock is distinguished by the log going quiet and the state never advancing,
+# not by which state it is in.
+$models = ([regex]::Matches($text, 'ev=model_class_trace')).Count
+$stateAge = if ($states) {
+    $at = [regex]::Matches($text, "Entering state '$([regex]::Escape($last))'") | Select-Object -Last 1
+    $tail = $text.Substring($at.Index)
+    $clock = [regex]::Matches($tail, '\bt=(\d+)\b')
+    if ($clock.Count -ge 2) { [int](([int]$clock[$clock.Count-1].Groups[1].Value - [int]$clock[0].Groups[1].Value) / 1000) } else { 0 }
+} else { 0 }
 
 Write-Host ""
-Write-Host ("  state        : {0}" -f $last)
-Write-Host ("  game clock   : {0}s   tasks completed: {1}" -f [int]([int]$t / 1000), $done)
+Write-Host ("  state        : {0}   (in it for {1}s of game time)" -f $last, $stateAge)
+Write-Host ("  game clock   : {0}s   tasks completed: {1}   models resolved: {2}" -f [int]([int]$t / 1000), $done, $models)
 Write-Host ("  F8 capture   : {0}   reads logged: {1}" -f $capture, $reads)
 Write-Host ("  log last grew: {0}s ago" -f $age)
 Write-Host ""
-if ($past) {
-    Write-Host "  DONE - reached '$($past -join ", ")'. Close it whenever." -ForegroundColor Green
-} elseif ($age -gt 45) {
-    Write-Host "  STOPPED - nothing logged for ${age}s. That is a real stall; close it." -ForegroundColor Red
+if (-not (Get-Process destiny2 -ErrorAction SilentlyContinue)) {
+    Write-Host "  GAME NOT RUNNING - this is the previous launch's log, ended in '$last'." -ForegroundColor DarkGray
+} elseif ($age -gt 60) {
+    Write-Host "  STALLED - nothing logged for ${age}s while '$last'. Real deadlock; close it." -ForegroundColor Red
+} elseif ($age -gt 20) {
+    Write-Host "  QUIET for ${age}s in '$last' - give it another minute before deciding." -ForegroundColor Yellow
 } else {
-    Write-Host "  STILL WORKING - the log grew ${age}s ago. Keep waiting." -ForegroundColor Cyan
+    Write-Host "  WORKING - log grew ${age}s ago. Keep waiting." -ForegroundColor Cyan
+}
+if ($last -match '^activity:') {
+    Write-Host "  (in a world load - these are much heavier than orbit; allow 2 minutes)" -ForegroundColor DarkGray
 }
