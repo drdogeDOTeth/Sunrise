@@ -1,6 +1,10 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-21. **Status: the corrected atlas bind (`037c_29` + `037d_26` + `0698_25` + `0699_9`) still hangs at character select. The self-length fix is real and is correctly present in the shipped bytes — `verify_bind_layer.py` reads all seventeen entries back and every invariant holds — so it was a real bug but not the only one. Entry size is NOT disproven — that was an over-claim; a 22-block entry can be present and readable without ever being bound and streamed. The one thing that has never loaded is the material surgery. Materials ARE writable - the byte-identical null control rendered the Warlock and reached `cleanup`. A changed tag value is specifically what kills the preview. Live layer is the no-material baseline. See "The hang, round two".**
+**Updated:** 2026-08-22. **Status: SOLVED AND CONFIRMED IN GAME. The Tower failure was ONE FILE — `w64_sandbox_0699_7.pkg`. Not the mesh work, and NOT the painted texture content (my theory, disproven twice over).**
+
+**THE GOOD CONFIGURATION — 96 layers. Keep it.** Everything except `0699_7`, `0699_8` and `ui_01a3_7`, all three expendable paint sweeps. Verified 2026-08-22: orbit clean, Tower clean — state 36 in 5,042 ms, state 37 in 6,295 ms, `ENUM(3)` complete in 3,335 ms, **0 maydays, 0 hitch asserts**, through to `activity:in_world`. Five-part split live at `037c_28` / `037d_25` / `0698_24`; `0699` truncated to `_6`. Zero dangling refs across 31 packages.
+
+**The material/bind question is still open; FIVE theories died getting here — read the retractions before forming a sixth.**
 
 > "HAND, LEGS, ARMS, ALL OF IT. it looks good like this in the tower, character screen, and in
 > world (i went to mercury) no stretching or anything." — on `_20`
@@ -25,6 +29,164 @@ Three things remain, none of them geometry:
    mask. Both cosmetic leftovers. See "the leftover gloves".
 
 Do **not** merge upstream Sunrise 0.3.2.
+
+---
+
+## GET BACK TO A WORKING GAME — read this before touching packages
+
+The working set is recorded as **data**, not prose. If anything is broken, or you do not know which
+layers are live:
+
+```powershell
+python Sunrise\tools\pkg\known_good.py --check      # is the live set the good one?
+python Sunrise\tools\pkg\known_good.py --restore    # make it so (moves files, never deletes)
+python Sunrise\tools\pkg\known_good.py --list       # every saved snapshot
+python Sunrise\tools\pkg\known_good.py --save "note"   # record the current set as good
+```
+
+Snapshots live in `tools/pkg/known_good/` and are committed with the repo. `20260822-092232.json`
+is the 96-layer set below: **custom mesh, five-part split, orbit clean, Tower clean.** Negative
+tested — pull a live layer and push a quarantined one back in, and `--check` names both and
+`--restore` fixes both.
+
+**Before every launch, also check for dangling references.** A layer removed from the middle of a
+stack spins the game at character select forever, with no error anywhere:
+
+```python
+miss = [q for q in {b.patch_id for b in p.blocks} if p.patch_path(q).name not in live]
+```
+
+Run it over **our** packages only - shipped `w64_video_*` use `patch_id` values that are not file
+indices and report thousands of false dangles.
+
+## SOLVED: the Tower failure is `w64_sandbox_0699_7.pkg` (2026-08-22)
+
+**One file.** With `0699` truncated to `_6`, the Tower loads in 5,055 ms with **zero** hitch asserts,
+zero maydays, `ENUM(3)` complete in 3,307 ms, through to `activity:in_world`.
+
+| config | Tower |
+|---|---|
+| vanilla | PASS 5,042 ms |
+| 51 (`13:25`) | PASS 5,042 ms |
+| 55 (`14:39`) | FAIL |
+| **54 = 55 minus `0699_7`** | **PASS 5,055 ms** |
+| 98 + all 417 rows reverted | FAIL |
+| 55 with the `14:39` rows reverted | FAIL |
+
+**It is NOT the painted content, and the section below is wrong about the mechanism.** Two
+independent results kill it:
+
+1. Reverting **all 417** painted rows across 30 packages left the Tower broken (orbit was fine).
+2. A 55-layer config whose *content is byte-identical* to the passing 51-layer config — every
+   painted row restored to its original block — **still failed**.
+
+Paint layers change **only** the 8-byte `blockInfo` of an entry row (verified across all four
+`14:39` layers: rows differing in the first 8 bytes = 0), so the revert is complete. Content is
+therefore exonerated, and what remains is structural.
+
+**And `0699_7` is not malformed.** Correct SHA-1 on every one of its 533 blocks, no nulls, all full
+`0x40000` with one partial at the end, `flags=0` — formally identical to its three siblings from the
+same write (`037c_23`, `037d_23`, `0698_22`), which stay live in the passing config and cause
+nothing. The only things that distinguish it: it is **3–10x larger** (533 blocks vs 150/171/54), and
+`0699` is the one package of ours the Tower's resource trace touches. **The mechanism is unknown.**
+Do not invent one; five theories died already.
+
+**We do not need the mechanism, because we do not need the file.** `0699_7` and `0699_8` are both
+flat-colour paint sweeps. `0699_6` (the `10:12` group) is mixed mesh work and must stay. Per-package
+truncation is legal — block tables never cross packages.
+
+**The focus confound is dead.** Two failures (`no2103`, `64layers`) happened with the window focused
+for the whole load. Backgrounding does not cause this.
+
+## Superseded: "the paint sweeps are the bug" — mechanism disproven, kept for the data
+
+**Vanilla loads the Tower in 5.0 s with zero hitch asserts.** That control had never been run, and
+it settles that the Tower failure is ours. Bisected to a clean bracket by time cutoff:
+
+| layers | cutoff | Tower |
+|---:|---|---|
+| 0 | vanilla | **PASS** — 5.0 s, `activity:in_world` |
+| 51 | `13:25` | **PASS** — 5.0 s, ENUM(3) done in 3,254 ms |
+| 55 | `14:39` | FAIL — 42.8 s |
+| 58, 64, 84, 98 | later | FAIL — 36–50 s |
+
+**The whole failure is one task, `ENUM(3)`.** It takes ~3.2 s in a passing run and never completes
+in a failing one; `ENUM(8,9,10)` are gated behind it and never start. `ENUM(7)` **never completes
+even in a passing run** — the old note that "tasks 3,7,8,9,10 are stuck" was reading normal
+behaviour as pathology. The bail is a *deadline* failure, not a deadlock: the resourcerer blocks the
+mainloop ~20 s (`hitch detected ... 'resourcerer process events'`, repeat counts to 4,608), the
+network pump starves (`40657 ms since the last network update`), and the client times out **its own
+in-process server** (`Lost connection to activity host ... > (20000 + 500) ms`) and maydays.
+
+**What the `14:39` group is: 55 painted texture bodies, no mesh at all.** Classifying every layer by
+the entry types it writes separates the two populations exactly — every group ≤ `13:25` writes mesh
+records plus paired `40`+`32`; every failing group writes `{40: N}` alone.
+
+**The mechanism is format, not pairing.** `paint_textures.py` fills an entry with one 16-byte BC7
+mode-6 block repeated, on the stated assumption that a flat colour needs no knowledge of width,
+height or mip count. That holds only if the entry really is BC7. It is not always:
+
+- `5,586,944` = BC7 2048² → 128². Fill is valid.
+- `2,793,472` = **ambiguous** — exactly BC1 2048² → 128² *and* exactly BC7 2048×1024 → 128×64.
+- `1,115,200` (the `ui_01a3_7` orbit killer) matches **no** BC7 or BC1 chain at any dimension tried.
+
+Entries whose real format is not BC7 get a byte pattern that is not a valid block stream. The
+headers are **encrypted** (`blockflags=3`), so the format cannot be decoded offline and the
+ambiguity cannot be resolved without either the in-game dump path or a launch.
+
+### Three theories that died tonight — do not revive them
+
+1. **"Cumulative volume."** Removing the 332 MB `17:37` group made the failure *worse* (58 layers:
+   50.1 s / 4,608 repeats, vs 64 layers: 36.5 s / 2,048). Byte count is not the driver.
+2. **"Paint sweeps skip the type-32 header, so the header is stale."** Refuted: painting preserves
+   entry size and type *exactly* (verified across all four `14:39` layers, 0 differences vs the
+   layer beneath), and the header is untouched by design. The `40`-without-`32` correlation was an
+   artefact of which tool wrote which group.
+3. **"The bind targets were malformed, so the tag write actually landed."** Refuted: all five bind
+   target bodies are `5,586,944` B holding a valid repeated BC7 mode-6 block (`c0 ff 1f 00 …`,
+   read directly — our blocks are `flags=0`, plain). They are well-formed. **The character-select
+   hang on a changed tag value is still unexplained.**
+
+### Layers cannot be removed from the middle — only truncated from the top
+
+Moving the paint sweeps aside and keeping the mesh work **breaks the game** (character select spins
+forever). Block tables are cumulative and later layers interleave their blocks with earlier ones:
+`037c_28` needs 150 blocks from `037c_23` and 177 from `037c_26`. Pull a middle layer and every
+layer above it dangles. `vanilla_mode.ps1 -Restore -UpTo <cutoff>` is safe because it truncates;
+`-Hold` on a middle layer is not. **Check for dangling references before every launch:**
+
+```python
+# for each package we ever patched: every block.patch_id must have its file installed
+miss = [q for q in {b.patch_id for b in p.blocks} if p.patch_path(q).name not in live]
+```
+
+(Do **not** run that check across shipped packages — `w64_video_*` use `patch_id` values that are
+not file indices at all, and it reports thousands of false dangles.)
+
+### The fix, and why it needs no keys
+
+A paint layer **appends** blocks and repoints entry rows; it never destroys the originals. In
+`037c_23` the block table grew 463 → 613 and every original block survives at an identical
+`(patch_id, offset)`. So a **new top layer** that rewrites the painted entry rows back to their
+values in the layer beneath restores Bungie's original encrypted content — no block keys, no format
+decode, nothing removed, and the five-part split kept.
+
+| entry | original row | painted row |
+|---:|---|---|
+| 2060 | `(269, 38096, 2793472)` | `(463, 0, 2793472)` |
+| 2062 | `(279, 214224, 5586944)` | `(473, 172032, 5586944)` |
+
+That writer does not exist yet. It is the next thing to build.
+
+### Tooling that lied, and is now fixed
+
+`tower_watch.ps1` produced **five** false verdicts in one evening. Root causes worth remembering:
+PowerShell ranges **reverse** when start > end (`$a[$n..($n-1)]` returns elements, not empty), and
+`Total time spent … state: [36]` is emitted on **every** exit from that state — a 5 s success prints
+it exactly as a 39 s bail does, so testing for it as a failure signature reports vanilla as broken.
+Judge by progression to `activity:physics_join` / `activity:in_world`, and **replay any verdict
+logic against a known pass and a known fail before spending a launch on it** (`-Log <file> -Live`).
+Captures are in `tools/pkg/captures/`.
 
 ---
 
