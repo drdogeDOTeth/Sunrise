@@ -87,7 +87,7 @@ The goal is importing custom 3D models — see `docs/COSMETICS.md` for the full 
 
 Established so far, by observation rather than inspection:
 
-- The fork builds and loads in the real game (0.3.0.0, Shadowkeep `86657.20.08.23`).
+- The fork builds and loads in the real game (0.3.2.0 + upstream/master, Shadowkeep `86657.20.08.23`).
 - Ornament model replacement works, so an ornament is a viable delivery path for custom art.
 - `oo2core_3_win64.dll` exports `OodleLZ_Compress`, so a repacker can compress as the game does.
 - Package integrity checking is already bypassed upstream, so a tampered package loads.

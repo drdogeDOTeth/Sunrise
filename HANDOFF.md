@@ -1,8 +1,10 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-22 (`1CBE` failed; packages restored; merging upstream Sunrise). **Mesh: SOLVED.** Package unique-RGB on this bind is closed for the two same-family pixel shaders.
+**Updated:** 2026-08-22 (upstream Sunrise **merged + installed**). **Mesh: SOLVED.** Package unique-RGB on this bind is closed for the two same-family pixel shaders.
 
 **Live / restore:** `20260822-144409.json` (same 101 layers as `20260822-135112.json`). `037d_27` is in the attic — do **not** `--save` it. `--restore` without a snapshot now returns 144409.
+
+**Sunrise DLL:** `cosmetics` = `upstream/master` (0.3.2.0 + later PRs: HUD, hunter load, inventory, physics host, cache rebuild) plus our package dump/trust, F8 traces, and cosmetics relaxations. Installed to `C:\Sunrise\bin\x64\steam_api64.dll`. First launch may rebuild `build_data` cache (upstream #77). Still Shadowkeep `86657.20.08.23` — class ids did not move.
 
 **`1CBE` result:** character select loaded, body did not vanish. Custom mesh is flat **white slabs** (chest, belly, fronts of legs), a **yellow waist band**, gold/tan mask, leftover purple gauntlets. **No green.** `0x81531CBE` is a cloth/metal palette shader (same dye tile as `0x81531EE6`), not an albedo sample. Do not retry `1CBE`. Do not pack another 512. Do not steal.
 
@@ -53,7 +55,7 @@ Do not steal those onto the chest for unique art. `0x80C1D3CA` (slot 4 next to t
 - Stealing the slot-5/6 BC1 globals tiles (`0x80C70DCD` / `0x80C70F3F` / `0x80BC8F21`) as unique atlases.
 - Stealing 256² / BC1 slot-3 (`0x80C1D358`, `0x80C6AA3E`, most of the 16) as unique atlases.
 
-Next: finish the upstream Sunrise merge, build/install, then the draw hook. Do not swap another same-family PS. Do not pack another 512. `0x80EF35E5` is the only remaining 1-bind unique-1024 PS — hang risk, not next by default.
+Next: **Sunrise draw hook** — replace dye PS `0x81531EE6` at draw time and bind the GLB albedos. Confirm character select still loads on the new DLL before writing hook code that assumes the old Present path. Do not swap another same-family PS. Do not pack another 512.
 
 The earlier "3,965 records, one texture array" count was **models**. After the bindable-material launch: **5,001 dumps, 1,038 materials, 846 with a texture array.** Chest materials that bind: only `0x80EFA1DC` and sibling `0x80EFA1E2`, both naming `0x80C1D3CD`. The 0691 "gold family" is a layout match with the **wrong vertex shader** — retired, see above.
 
@@ -84,7 +86,7 @@ Three things remain, none of them geometry:
 3. **Gloves still draw over the custom hands**, and the bald race head still draws above the gas
    mask. Both cosmetic leftovers. See "the leftover gloves".
 
-Do **not** merge upstream Sunrise 0.3.2.
+Upstream Sunrise **is merged** (`cosmetics` = `upstream/master` as of 2026-08-22). Do not merge it again until the next upstream cut. Do **not** `--undo` the mesh.
 
 ---
 
@@ -1323,7 +1325,7 @@ weights — those two flags are how to bisect if `_20` looks wrong.
 
 **Version facts**
 
-10. **Do not merge 0.3.2.** Shadowkeep: `SEntity` `0x80809C0F`, resource `0x80809C36`,
+10. **0.3.2+ is merged.** Shadowkeep classes still: `SEntity` `0x80809C0F`, resource `0x80809C36`,
     `SEntityModel` `0x808073A5`, entity-parent `0x8080744A`, material `0x808071E8`.
     Charm WQ classes are **zero**.
 11. **Assignment hop is closed.** Item → arrangement index (`build_data.bin`) → hash table
