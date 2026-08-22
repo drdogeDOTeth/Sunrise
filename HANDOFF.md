@@ -494,10 +494,9 @@ never launched, and sat under every test for the rest of the evening.
 never put it back. Nothing is lost: it was one of 150 speculative paints and the custom character
 does not depend on it. `paint_textures.py` should skip `ui_*` packages if that sweep is ever rerun.
 
-**Everything else restored — all 98 remaining layers, including the five-part split.** But note the
-scope of what has been *proven*: the passing run had **95** layers (no split, no `ui_01a3_7`), and
-step 3 only showed the split is not *necessary* for the deadlock, not that it is harmless. The
-current 98-layer set is **untested**, and confirming it is the next launch.
+**Everything else restored — all 98 remaining layers, including the five-part split — and
+confirmed.** The full set reaches orbit with 50 tasks, so the split is positively cleared rather
+than merely "not necessary for the bug". **This is the good configuration: keep it.**
 
 ### Bug #2 is still open
 
@@ -1513,7 +1512,8 @@ file" and copies from inline DyeData instead):
 | bisect step 2: through 19:09 | 81 of 99 layers | **orbit OK**; Tower failed | orbit culprit is {21:03, 22:04} |
 | bisect step 3: through 21:03 | 96 of 99 layers | **DEADLOCKED** | the split is innocent; culprit is in the **21:03 sweep** |
 | `ui_01a3_7` held back, other 14 live | 95 of 99 layers | **REACHED ORBIT** | **`ui_01a3_7` is the orbit deadlock** |
-| **all 98 layers, `ui_01a3_7` quarantined** | **current** | — | confirm the full set (incl. the split) reaches orbit |
+| all 98 layers, `ui_01a3_7` quarantined | **current** | **REACHED ORBIT, 50 tasks** | confirmed: full custom character + orbit. The split is positively cleared |
+| **Tower on the full set** | current | — | bug #2: expected to fail; culprit in `{14:39 … 17:37}` |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
@@ -1596,9 +1596,10 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch: confirmation.** All 98 layers live with `ui_01a3_7` quarantined — the custom
-character complete, including the five-part split. Go to orbit; it should arrive. Then the Tower is
-bug #2, culprit in `{14:39, 16:17, 16:27, 16:37, 17:37}`.
+**Next launch: try the Tower on the current good set.** Expected to fail — both earlier Tower
+failures happened with `ui_01a3_7` absent, so it is independent — but it is one free data point. If
+it fails, bisect `{14:39, 16:17, 16:27, 16:37, 17:37}` with `vanilla_mode.ps1 -Restore -UpTo`,
+starting at `16:17`. Give it two minutes and judge by `orbit_status.ps1`.
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
 dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is
