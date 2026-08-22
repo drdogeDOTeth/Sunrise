@@ -475,7 +475,32 @@ watcher now open the log with a `FileStream` using `ReadWrite` sharing and treat
 *unknown* rather than as no progress. **A tool saying "no progress" is not evidence until it has
 proven it can read the file.**
 
-### Orbit and the Tower are different tests — and different signatures
+### TWO bugs, not one
+
+Step 2 (through 19:09) **reached orbit** — 50 tasks — and then **failed the Tower**. Both failures
+are real and they are not the same failure.
+
+| | orbit deadlock | Tower load failure |
+|---|---|---|
+| state | `cleanup` | `activity:initial_slice_set_loading` |
+| ends? | **never** — identical printout for 90 s+ | **bails at ~35 s**, back to `cleanup` |
+| stuck tasks | 35 and 53, forever | none; it times out |
+| model lookups | none at all | ~1,980, then **stop after 3 s** |
+| hitch asserts | thousands | none |
+| tell-tale | `tasks active: 0x0020000800000000` | `Sending mayday`, `Total time spent: [34896] ms` |
+| culprit group | `21:03` or `22:04` | already present at `17:37` |
+
+**Retracted, same day:** an earlier reading here said the Tower report was a load still in progress
+closed too early. It was not. In both runs the model lookups **stop about three seconds in** and
+nothing follows for the next thirty; the game then sends a networking mayday and gives up. Eight
+seconds was indeed too early to watch it *bail*, but the load had already stalled. The user's
+"it froze" was correct in substance.
+
+The lesson that keeps recurring: **"still logging" is not "still progressing".** Check whether the
+*interesting* events are still arriving — here, model lookups — not whether the file is growing.
+Heartbeats, roster pushes and keepalives continue right through a dead load.
+
+### Orbit and the Tower: telling a live load from a dead one
 
 Step 1 reached orbit, then **the Tower load was reported frozen**. Measured, it was almost certainly
 not: it had been in `activity:initial_slice_set_loading` for **8 seconds**, the last task completed
@@ -1421,7 +1446,8 @@ file" and copies from inline DyeData instead):
 | orbit with server logging at debug | `037d_25` | **server healthy and idle; client stops asking** | not a server problem; client blocked internally |
 | vanilla: all 99 layers removed | shipped packages | **REACHED ORBIT, 50 tasks completed** | our layers cause the deadlock |
 | bisect step 1: restored through 17:37 | 64 of 99 layers | **REACHED ORBIT** (cleanup 3,001 ms, not 25,000); Tower closed at 8 s, inconclusive | culprit is in {18:05, 19:09, 21:03, 22:04} |
-| **bisect step 2: restore through 19:09** | **staged (current)** | — | halves the four-group remainder |
+| bisect step 2: through 19:09 | 81 of 99 layers | **orbit OK**; Tower failed | orbit culprit is {21:03, 22:04} |
+| **bisect step 3: through 21:03** | **96 of 99 layers (current)** | — | orbit pass -> culprit is the split (22:04); fail -> the 21:03 sweep |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
@@ -1504,9 +1530,9 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch: bisect step 2, and test BOTH.** Restored through 19:09; `21:03` and `22:04` held
-back. Go to orbit — pass -> culprit is {21:03, 22:04}, fail -> {18:05, 19:09}. Then travel to the
-Tower and **wait two minutes**, checking `orbit_status.ps1` rather than the window.
+**Next launch: bisect step 3.** Restored through 21:03; only the five-part split (`22:04`) is held
+back. Go to orbit — pass -> the **split** causes the orbit deadlock, fail -> the **21:03 sweep**
+does. The Tower will still fail either way; that is the second bug, and its culprit is earlier.
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
 dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is
