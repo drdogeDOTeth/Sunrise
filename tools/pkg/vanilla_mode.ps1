@@ -23,6 +23,9 @@ param(
     # Restore only layers written at or before this time, to reproduce an earlier state.
     [datetime]$UpTo = [datetime]::MaxValue,
     [switch]$Groups,
+    # Move named live layers into the attic, to bisect *within* a group whose members all share a
+    # write minute. Accepts bare names or wildcards: -Hold ui_01a3_7, -Hold "*01d?_*"
+    [string[]]$Hold,
     # The install finished 2026-08-16; our first written layer is 2026-08-19. Anything newer than
     # this is ours. Video and audio packages legitimately contain plain blocks, so "has plain
     # blocks" would misidentify them - the write date is the honest discriminator.
@@ -35,6 +38,20 @@ $attic = Join-Path $Packages "_vanilla_test"
 if (Get-Process destiny2 -ErrorAction SilentlyContinue) {
     Write-Error "destiny2 is running; close it before moving package files"
     exit 1
+}
+
+if ($Hold) {
+    if (-not (Test-Path $attic)) { New-Item -ItemType Directory $attic | Out-Null }
+    $moved = 0
+    foreach ($pattern in $Hold) {
+        $glob = if ($pattern -match '[*?]') { $pattern } else { "*$pattern*" }
+        $hits = @(Get-ChildItem (Join-Path $Packages "*.pkg") |
+            Where-Object { $_.Name -like $glob -and $_.LastWriteTime -gt $InstalledBefore })
+        if (-not $hits) { Write-Warning "no live layer of ours matches '$pattern'"; continue }
+        foreach ($f in $hits) { Move-Item $f.FullName $attic; "  held back $($f.Name)"; $moved++ }
+    }
+    "`n$moved layer(s) moved to the attic; everything else stays live"
+    exit 0
 }
 
 if ($Groups) {

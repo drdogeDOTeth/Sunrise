@@ -475,6 +475,40 @@ watcher now open the log with a `FileStream` using `ReadWrite` sharing and treat
 *unknown* rather than as no progress. **A tool saying "no progress" is not evidence until it has
 proven it can read the file.**
 
+## The orbit deadlock is in the 21:03 sweep
+
+**Step 3 failed** — restoring the `21:03` group brought the deadlock straight back: tasks 35 and 53
+stuck, `0x0020000800000000`, nine hitch asserts. Only the five-part split was held back, so the
+split is **innocent** and the culprit is one of the fifteen packages written at `2026-08-20 21:03`:
+the "top 150 textures the F8 capture recorded being read" sweep — **the one group that had never
+been launched even once.**
+
+Everything at or before `19:09` reaches orbit. That is 81 layers including all the geometry work,
+the five-part split's predecessors, the 228-texture sweep and every dye layer.
+
+**Nothing is wrong with them structurally.** All **150** painted entries across the fifteen packages
+are `entry_type` 40 / subtype 1 — a texture body, without exception, which is the filter
+`paint_textures.py` applies. Checked offline; there is no mistyped entry to find. Per package:
+
+| package | painted | | package | painted |
+|---|---:|---|---|---:|
+| `sandbox_01b5` | 28 | | `sandbox_01d5` | 9 |
+| `sandbox_01bb` | 13 | | `sandbox_01d6` | 13 |
+| `sandbox_01bc` | 19 | | `sandbox_01d7` | 1 |
+| `sandbox_01bd` | 12 | | `sandbox_01d8` | 2 |
+| `sandbox_01be` | 3 | | `sandbox_01d9` | 3 |
+| `sandbox_01c0` | 18 | | `sandbox_01db` | 10 |
+| `sandbox_01dc` | 2 | | `sandbox_01dd` | 15 |
+| **`ui_01a3`** | **2** | | | |
+
+`vanilla_mode.ps1 -Hold <name|wildcard>` moves named live layers into the attic, which is how to
+bisect *within* a group whose members all share a write minute.
+
+**Live test: `ui_01a3_7` held back, the other fourteen live.** A prior-driven shot rather than a
+half-split — it is the only non-sandbox package in the group and the deadlock is in the transition
+*to orbit*, which is UI-heavy. It is 2 of 150 entries, so a pass ends this immediately and a fail
+costs one launch before falling back to binary search over the remaining fourteen.
+
 ### TWO bugs, not one
 
 Step 2 (through 19:09) **reached orbit** — 50 tasks — and then **failed the Tower**. Both failures
@@ -1447,7 +1481,8 @@ file" and copies from inline DyeData instead):
 | vanilla: all 99 layers removed | shipped packages | **REACHED ORBIT, 50 tasks completed** | our layers cause the deadlock |
 | bisect step 1: restored through 17:37 | 64 of 99 layers | **REACHED ORBIT** (cleanup 3,001 ms, not 25,000); Tower closed at 8 s, inconclusive | culprit is in {18:05, 19:09, 21:03, 22:04} |
 | bisect step 2: through 19:09 | 81 of 99 layers | **orbit OK**; Tower failed | orbit culprit is {21:03, 22:04} |
-| **bisect step 3: through 21:03** | **96 of 99 layers (current)** | — | orbit pass -> culprit is the split (22:04); fail -> the 21:03 sweep |
+| bisect step 3: through 21:03 | 96 of 99 layers | **DEADLOCKED** | the split is innocent; culprit is in the **21:03 sweep** |
+| **`ui_01a3_7` held back, other 14 live** | **95 of 99 layers (current)** | — | pass -> `ui_01a3` is it; fail -> binary-search the other 14 |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
@@ -1530,9 +1565,9 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch: bisect step 3.** Restored through 21:03; only the five-part split (`22:04`) is held
-back. Go to orbit — pass -> the **split** causes the orbit deadlock, fail -> the **21:03 sweep**
-does. The Tower will still fail either way; that is the second bug, and its culprit is earlier.
+**Next launch: `ui_01a3_7` held back.** Go to orbit. Pass -> `ui_01a3` causes the orbit deadlock;
+fail -> binary-search the other fourteen with `vanilla_mode.ps1 -Hold`. The Tower fails either way
+— second bug, earlier culprit.
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
 dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is
