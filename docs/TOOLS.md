@@ -12,10 +12,10 @@ Format reference lives in [PACKAGES.md](PACKAGES.md) (the Tiger container) and
 
 ---
 
-> **Status, 2026-08-19:** write pipeline proven. Assignment hop **closed** (`0x81319329` →
-> `0x81613D23` → `0x80EC3F61` → sandbox Scatterhorn). Wrap of the equipped Scatterhorn set is
-> **installed** — see `../../HANDOFF.md`. Tower frames `0x80B9F855` / `0x80C23B5D` / `0x80FA2308`
-> are **not** the player. Do not run `wrap_player_body.py` for the playable Guardian.
+> **Status, 2026-08-22:** write pipeline proven. Custom GLB is **in** on the playable Warlock
+> (geometry + unique albedos on character select). See `../HANDOFF.md` and `CUSTOM_CHARACTER.md`.
+> Tower frames `0x80B9F855` / `0x80C23B5D` / `0x80FA2308` are **not** the player. Do not run
+> `wrap_player_body.py` for the playable Guardian. Do not `--undo`.
 
 ## Rules that have each cost a session
 
@@ -257,6 +257,27 @@ python inject_mesh.py --undo
 
 **Known follow-up:** an injected mesh inherits part 0's material, so texturing is wrong until the
 material is fixed. Expected, not a failure.
+
+---
+
+## Custom albedo (draw hook)
+
+Unique RGB cannot ride the chest dye tile. The live path is
+`src/client/hooks/custom_albedo/` — replaces the dye PS on five `(StartIndex, IndexCount)` pairs
+and binds `custom_{tank,mask,necklace,skin,twirl}.png` from the Sunrise artifact directory.
+
+| tool | what it does |
+|---|---|
+| `parse_dxbc_osgn.py` | Prints ISGN/OSGN from a DXBC blob. Default: `objs/live_chest_ps.bin` (repo copy: `known_good/live_chest_ps.bin`). |
+| `disassemble_dxbc.py` | `d3dcompiler_47` disassembly → `.asm`. |
+| `known_good.py` | Snapshot / restore the live package set. Newest = `20260822-172401`. |
+| `pack_chest_atlas.py` | **Closed.** Packed 512 + tiled UVs. Do not run. Do not pack another 512. |
+| `assign_chest_mask.py` | Control: every split part names chest-native `0x80EFA1DC`. |
+| `assign_split_materials.py` / `assign_armor_vs.py` | **Do not run.** Vanish four parts. |
+| `bind_material_textures.py` | **Do not run.** Hangs character select. |
+
+PNG sources: `tools/pkg/objs/textures/` (`10_SkinTats_BaseColor.png`, tank, mask, twirl, Plancha).
+Installed copies: `C:\Sunrise\bin\x64\Sunrise\custom_*.png`.
 
 ---
 

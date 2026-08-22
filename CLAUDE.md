@@ -1,7 +1,12 @@
 # Sunrise — fork notes
 
 Fork of [stanuwu/Sunrise](https://github.com/stanuwu/Sunrise), a Destiny 2 offline exploration mod.
-This fork adds custom-appearance work: wearing any ornament or shader on any item.
+This fork adds custom-appearance work: any ornament or shader on any item, and a custom GLB
+character on the Warlock.
+
+**Live status:** [`HANDOFF.md`](HANDOFF.md) and [`docs/CUSTOM_CHARACTER.md`](docs/CUSTOM_CHARACTER.md).
+Character select is the Blender look (hook v12, snapshot `20260822-172401`). Do not `--undo` the
+mesh. Do not restore snapshot `150046`.
 
 Upstream is on the `upstream` remote. Our work lives on the `cosmetics` branch.
 
@@ -83,28 +88,23 @@ What gates appearance is not rendering but *permission*. See `docs/COSMETICS.md`
 
 ## Where this fork is going
 
-The goal is importing custom 3D models — see `docs/COSMETICS.md` for the full assessment.
+Custom GLB on the playable Warlock. Geometry, skinning, and unique albedos are **in** on character
+select. See `docs/CUSTOM_CHARACTER.md`.
 
-Established so far, by observation rather than inspection:
+Established:
 
-- The fork builds and loads in the real game (0.3.2.0 + upstream/master, Shadowkeep `86657.20.08.23`).
-- Ornament model replacement works, so an ornament is a viable delivery path for custom art.
-- `oo2core_3_win64.dll` exports `OodleLZ_Compress`, so a repacker can compress as the game does.
-- Package integrity checking is already bypassed upstream, so a tampered package loads.
+- The fork builds and loads (0.3.2.0 + upstream/master, Shadowkeep `86657.20.08.23`).
+- Ornament model replacement works.
+- Tiger `.pkg` writer exists (`tools/pkg/`) and written layers load in game.
+- Custom mesh is injected on the Scatterhorn chest draw (`037c_28` / `037d_26` / `0698_24`).
+- Unique RGB cannot ride the dye tile. Draw hook `custom_albedo` (v12) binds the five GLB albedos.
 
-- Socket plug gates work in the live game: `ev=socket_plug stage=commit_end result=ok
-  reason=published`.
-- A Tiger `.pkg` **writer exists and round-trips offline** (`tools/pkg/`). It writes the next patch
-  file of a package, the same mechanism Bungie's own updates use.
+Remaining:
 
-Remaining, in order:
-
-1. **Get the game to load a written package.** Everything so far is proven against our own reader
-   only. This is the milestone that can still invalidate the approach.
-2. **Dump a reference entry from inside Sunrise**, which holds the block keys the packages need and
-   which this fork deliberately does not export to disk. See `docs/PACKAGES.md`.
-3. **Prove it with a texture swap** — no geometry, so a pass means the pipeline itself works.
-4. **Fit and inject a custom mesh** against the reference.
+1. **In-world lighting** — destinations render a black silhouette; sprint/jump flickers. Port the
+   dumped dye PS for `o1`/`o2`; match non-LOD0 draws.
+2. Stock gloves and the bald race head still overlay the custom mesh.
+3. Necklace UVs are collapsed on the mesh.
 
 ## Contributing back
 

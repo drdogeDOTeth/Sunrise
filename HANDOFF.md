@@ -1,14 +1,150 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-22 (upstream Sunrise **merged + installed**). **Mesh: SOLVED.** Package unique-RGB on this bind is closed for the two same-family pixel shaders.
+**Updated:** 2026-08-22 (**v12 CONFIRMED** on character select). Mesh + unique GLB albedos are in. Do not reopen geometry.
 
-**Live / restore:** `20260822-144409.json` (same 101 layers as `20260822-135112.json`). `037d_27` is in the attic — do **not** `--save` it. `--restore` without a snapshot now returns 144409.
+**Live / restore:** `20260822-172401.json` (86 layers). `0698_25` stays in `packages\_reverted_uv_tiles\`. Do **not** `--restore` `150046` (that puts tiles back). Durable status: `docs/CUSTOM_CHARACTER.md`. Destiny must be closed to write packages or overwrite the DLL.
 
-**Sunrise DLL:** `cosmetics` = `upstream/master` (0.3.2.0 + later PRs: HUD, hunter load, inventory, physics host, cache rebuild) plus our package dump/trust, F8 traces, and cosmetics relaxations. Installed to `C:\Sunrise\bin\x64\steam_api64.dll`. First launch may rebuild `build_data` cache (upstream #77). Still Shadowkeep `86657.20.08.23` — class ids did not move.
+**Target look:** the GLB in Blender. Reference: `tools/pkg/objs/textures/_glb_blender_preview.png`. Warlock only.
+
+---
+
+## NEXT AGENT — start here
+
+**Character select is the Blender character** (user 2026-08-22). Green SkinTats, charcoal tank, black mask, striped pants, sneakers. That is done. Do not colour-probe. Do not pack another 512.
+
+**In-world is not.** Destinations: near-black silhouette. Sprint/jump: body pops smeared-green (dye quilt) then black; clothes glitch in/out. Video: `C:\Users\Round\OneDrive\Pictures\VR content\DestinyTexturesTest.mp4`.
+
+Most likely: (1) world lighting is stricter about `o1`/`o2` than the select studio — port `live_chest_ps.asm` and only keep our `o0.xyz`; (2) the hook matches LOD-0 `(StartIndex, IndexCount)` only — other LODs/passes fall through to dye PS + live `019b_9` quilt. Do not guess another G-buffer.
+
+| artifact | path |
+|---|---|
+| Status | `docs/CUSTOM_CHARACTER.md` |
+| Hook | `Sunrise/src/client/hooks/custom_albedo/` (**v12**, `mode=parts`) |
+| Dye PS dump | `tools/pkg/known_good/live_chest_ps.bin` + `.asm` |
+| Per-part albedos | `C:\Sunrise\bin\x64\Sunrise\custom_{tank,mask,necklace,skin,twirl}.png` |
+| Snapshot | `tools/pkg/known_good/20260822-172401.json` |
+| Log | `C:\Sunrise\bin\x64\Sunrise\logs\sunrise.log` |
+
+### Live dye PS (`0x81531EE6`) — do not re-derive
+
+`ps_5_0`. Mesh UV is **`TEXCOORD3`**. TBN is `TEXCOORD0..2`. Flat normal = **`TEXCOORD0.xyz`** (`worldN = v0*nz + v1*nx + v2*ny`). `o1.xyz = saturate(n * ~0.375 + 0.5)`, `o1.w` is 0 or ~0.33, `o2.w = TEXCOORD0.w`, `o0.w` fallback ~0.2.
+
+### Hook versions (user-confirmed). Do not repeat a closed one.
+
+| ver | what | result |
+|---|---|---|
+| v1–v2 | sample / magenta-if-dark | Black |
+| **v3** | Bright constants on every SV_Target | **Magenta.** Only early write that showed. |
+| v4–v7 | colour on RT0, zeros/wrong extras | Black |
+| v8 | 512 B snprintf HLSL | compile fail; cowprint = hook off |
+| v9 | game PS then RT0-only | Black (other RTs zeroed) |
+| v10 | guessed `(0.5,0.5,1)` G-buffer | Black. Dump 5772 B ok. |
+| **v11** | dumped encode + 512 quilt on `TEXCOORD3` | **Right colours, smeared.** Encode solved. |
+| **v12** | five GLB albedos + `0698_25` attic’d | **Character select = Blender look.** In-world dark / flicker. |
+
+### Closed package paths
+
+Paint-what-is-already-bound works and is luma-gated. `1CBE` = white slabs, no green. Look-alike boost = white pants. Off-chest steals vanish four parts. `bind_material_textures.py` hangs select. Do not retry any of those.
+
+Leftover: stock gloves, bald race head, collapsed necklace UVs.
+
+Build: `.\build.ps1`. Install: `.\install.ps1`. Hang = revert `steam_api64.dll.original`.
+
+---
+
+## NEXT AGENT — archive (pre-v12)
+
+The block below was the v10/v11 briefing. Facts still hold. Do not treat it as the live next step.
+
+Hook v10 attached (`mode=gbuffer`), all five custom parts drew, atlas PNG loaded, and the body is **still black**. That was the last guess. The live dye PS is on disk. **Read it. Match its G-buffer. Then launch once.**
+
+| artifact | path |
+|---|---|
+| DXBC dump | `Sunrise/tools/pkg/objs/live_chest_ps.bin` (copy of `C:\Sunrise\bin\x64\Sunrise\dump\live_chest_ps.bin`, 5772 B) |
+| Disassembly | `Sunrise/tools/pkg/objs/live_chest_ps.asm` |
+| Parse signatures | `python tools/pkg/parse_dxbc_osgn.py tools/pkg/objs/live_chest_ps.bin` |
+| Disassemble again | `python tools/pkg/disassemble_dxbc.py` |
+| Hook | `Sunrise/Sunrise/src/client/hooks/custom_albedo/custom_albedo.cpp` (**v12 installed**) |
+| Per-part albedos | `C:\Sunrise\bin\x64\Sunrise\custom_{tank,mask,necklace,skin,twirl}.png` |
+| Log | `C:\Sunrise\bin\x64\Sunrise\logs\sunrise.log` (rotates one deep) |
+
+### Live dye PS (`0x81531EE6`) — facts from the dump
+
+`ps_5_0`. Three outputs. **Mesh UV is `TEXCOORD3`, not `TEXCOORD0`.** `TEXCOORD0..2` are the TBN. `TEXCOORD4`, `SV_Position`, `SV_IsFrontFace` are declared and unused.
+
+| semantic | reg | mask | used | meaning |
+|---|---|---|---|---|
+| TEXCOORD0 | v0 | xyzw | xyzw | TBN tangent; **`.w` is written to `o2.w`** |
+| TEXCOORD1 | v1 | xyzw | xyz | TBN bitangent |
+| TEXCOORD2 | v2 | xyz | xyz | TBN normal |
+| TEXCOORD3 | v3 | xyzw | xyzw | **mesh UV** `.xy` → t0/t1/t2/t3; `.zw` remapped via cb5[0]/cb5[1] → dye t7/t8 |
+| TEXCOORD4 | — | xyz | (none) | unused |
+| SV_POSITION | — | xyzw | (none) | unused |
+| SV_isFrontFace | — | x uint | (none) | unused |
+
+Resources: t0 t1 t2 t3 t7 t8; samplers s1–s6; CB0[8], CB5[25], CB6[14].
+
+**G-buffer encode (do not guess this again):**
+
+```
+o0.xyz = dyed albedo
+o0.w   = packed id; fallback path writes ~0.2
+o1.xyz = saturate(normalize(TBN * n_map) * scale + 0.5)
+         TBN multiply is worldN = v0*nz + v1*nx + v2*ny
+         flat n_map (0,0,1) → worldN = TEXCOORD0.xyz   // NOT TEXCOORD2
+         scale = something * 0.125 + 0.375  (flat → ~0.375)
+o1.w   = 0x3ea8f5c3 (~0.33) if o0.w > 0.5 else 0     // NOT 1.0
+o2.x   = roughness-ish (must stay > 0.05 or o0.w takes the 0.2 path)
+o2.y   = 0.5 * sat(t2.x)
+o2.z   = metallic-ish * dye mask
+o2.w   = v0.w                                        // NOT 1.0
+```
+
+v10 wrote `RT1=(0.5,0.5,1,1)` and `RT2=(0.5,0.5,0.5,1)` with **only `SV_Position`**. Lighting decodes `o1` as `(c-0.5)/~0.375` and uses `o2.w = TEXCOORD0.w`. That encode is why v10 is black even with non-zero fills. An earlier v11 draft that encoded `TEXCOORD2` as the normal was wrong — flat dye reconstruct uses **v0**.
+
+### Hook versions (user-confirmed). Do not repeat a closed one.
+
+| ver | what | result |
+|---|---|---|
+| v1 | Sample t3 + game s0, full interpolator struct | Black. Hook fired. |
+| v2 | Our sampler, SampleLevel t0–t6, magenta if dark | Black, not magenta. |
+| **v3** | Bright constants on **every** SV_Target, `SV_Position` only, skip depth-only | **Magenta. Only write that ever showed.** Colour is RT0. |
+| v4 | Packed 512 + TEXCOORD0, yellow if UV zero | Black. Atlas bound. Yellow never showed. |
+| v5 | PrimitiveID + ByteAddressBuffer IA copies | Black. Mesh copy **ok**: slot0 stride 16, slot1 stride 24, index R16, UV `0.946/0.376`. |
+| v6 | Screen-space atlas (`xy/512`) | Black. |
+| v7 | Per-part constants, RT2=0 | Black. |
+| v8 | Constants on 8 targets; HLSL via **512 B snprintf** | **`compile result=fail` — no hook.** Cowprint = dye PS + packed 512. |
+| v9 | Game PS then RT0-only second pass, others write-mask 0 | Black. Unwritten bound RTs come back zero. |
+| **v10** | Atlas on RT0 + guessed RT1/RT2, dump live PS | **Still black.** Dump **ok** 5772 B. |
+| **v11** | Dumped TBN encode + packed 512 on `TEXCOORD3` | **Right GLB colours, smeared/tiled.** Quilt on 0–1 UVs. Encode is solved. |
+
+v3 worked because every target was a **bright constant** (smashed G-buffer, but visible). v4–v7 wrote zeros on RT2 → lit black. v9 left RT1/RT2 undefined. v10 filled all three with the **wrong encode**.
+
+v8 cowprint (white / black / purple SMPTE on the mask) = **hook off**. Distinct from hook-black.
+
+### Hook v11 — CONFIRMED (user 2026-08-22)
+
+Right colours: green SkinTats, black tank, colour blocks from the other quilt tiles on the legs (magenta/cyan/white, red). Weapon/UI vanilla. **TEXCOORD3 is 0–1 mesh UV** even with `0698_25` live — the VS is not outputting the tiled buffer. Smear = one 512 quilt sampled with those 0–1 UVs. G-buffer encode is done. Do not reopen it.
+
+### Hook v12 (installed, not launched)
+
+Same encode. Five GLB albedos bound by `(StartIndex, IndexCount)`: tank/mask/necklace/skin 2048², twirl 512². Attach log `mode=parts`. `0698_25` attic’d to `packages\_reverted_uv_tiles\` (live UV layer = `0698_24`).
+
+Read:
+- **Blender look** = this is the character. Snapshot when they say so. Leftover stock gloves + bald race head are separate.
+- **Still smeared / quilt blocks** = TEXCOORD3 is not the 0–1 albedo UV; dump the VS or try `1-v` / `.zw`. Do not pack another 512.
+- **Necklace is a flat speck** = known collapsed UVs on that part (`u` 0.817–0.859, `v` ~0.410). Mesh UV bug, not the hook.
+- Hang = revert DLL. Put `0698_25` back with `revert_layer.ps1 -Attic _reverted_uv_tiles -Restore` only if the attic move is the hang (it should not be).
+
+Build: `Sunrise/build.ps1` (v143 fallback). Install: `Sunrise/install.ps1`. Destiny closed.
+
+---
+
+**What is actually known (packages):** paint-what-is-already-bound works. Unique RGB via another same-family package PS is closed. Packed 512 tiles remap offline (skin mean RGB ~38,99,60) and get luma-gated in-game. Do not pack another 512. Do not retry `1CBE`. Do not steal.
 
 **`1CBE` result:** character select loaded, body did not vanish. Custom mesh is flat **white slabs** (chest, belly, fronts of legs), a **yellow waist band**, gold/tan mask, leftover purple gauntlets. **No green.** `0x81531CBE` is a cloth/metal palette shader (same dye tile as `0x81531EE6`), not an albedo sample. Do not retry `1CBE`. Do not pack another 512. Do not steal.
 
-Dumps did not fire at character select (`dump_if_requested` runs on investment refresh). Request tags are still in `dump/request.txt` for a later 135112 launch.
+Offline `dump_if_requested` does **not** fire at character select (it runs on investment refresh). Request tags can stay in `dump/request.txt`. The live dye PS is already dumped by the draw hook — do not wait on another investment dump.
 
 **Look-alike probe (`019b_10` / `0698_26`) user-confirmed fail.** Saturation boost + 384 skin tile. Screenshot: black mask, charcoal vest, black arms, **white pants**. Luma gate, not albedo. Green never appeared. Restored. Do not boost again. Do not steal. Do not pack another 512.
 
@@ -55,7 +191,7 @@ Do not steal those onto the chest for unique art. `0x80C1D3CA` (slot 4 next to t
 - Stealing the slot-5/6 BC1 globals tiles (`0x80C70DCD` / `0x80C70F3F` / `0x80BC8F21`) as unique atlases.
 - Stealing 256² / BC1 slot-3 (`0x80C1D358`, `0x80C6AA3E`, most of the 16) as unique atlases.
 
-Next: **Sunrise draw hook** — replace dye PS `0x81531EE6` at draw time and bind the GLB albedos. Confirm character select still loads on the new DLL before writing hook code that assumes the old Present path. Do not swap another same-family PS. Do not pack another 512.
+Next: in-world lighting / LOD miss (see top). Character select is done. Do not pack another 512. Hang = revert DLL.
 
 The earlier "3,965 records, one texture array" count was **models**. After the bindable-material launch: **5,001 dumps, 1,038 materials, 846 with a texture array.** Chest materials that bind: only `0x80EFA1DC` and sibling `0x80EFA1E2`, both naming `0x80C1D3CD`. The 0691 "gold family" is a layout match with the **wrong vertex shader** — retired, see above.
 
@@ -132,9 +268,9 @@ The dye textures named in `dye_texture_legend.json` do not drive what you see. D
 
 ### Where to go next, in order of cost
 
-1. Unique RGB on `0x80EFA1DC` is **closed**. The look-alike probe went white/black. Restored `135112`.
-2. Do not boost, steal, append a texture array, or paint `0x80B3611D` flat.
-3. Next path has to be a different *kind* of binder already on this chest, or accept 135112 / 100421. There is no third 512 pack that turns this PS into Blender.
+1. Unique RGB on the bound dye tile is **closed**. Look-alike went white/black. Restored; live is `150046`.
+2. Do not boost, steal, append a texture array, or paint `0x80B3611D` flat. Do not pack another 512.
+3. Unique RGB is the **draw hook** matching `live_chest_ps.asm` (see top). Not another package PS.
 
 ## GET BACK TO A WORKING GAME — read this before touching packages
 
@@ -296,39 +432,29 @@ Captures are in `tools/pkg/captures/`.
 
 ## Read this first (Claude)
 
-Newest files win:
+The briefing at the **top of this file** is current. This section used to list live layers;
+those rows below are **historical** and will send you backwards. Do not treat them as live.
 
-| package | live | geometry | note |
-|---|---|---|---|
-| `w64_sandbox_037c` | **`_29`** | `_28` | `_29` = **atlas bind**; `_28` = five-part split; `_27` = dye rebind |
-| `w64_sandbox_037d` | **`_26`** | `_25` | `_26` = **atlas bind**; `_25` = five-part split; `_24` = texture sweep |
-| `w64_sandbox_0698` | **`_25`** | `_24` | `_25` = **atlas bind**; `_24` = five-part split; `_23` = texture sweep |
-| `w64_sandbox_0699` | **`_9`** | — | `_9` = **atlas bind**; `_8` = full texture sweep; `_7` = the 55-swatch probe |
-| `w64_sandbox_01e2` | `_6` | — | inert; legs are blanked |
-| `w64_sandbox_01db` | **`_6`** | — | dye paint plate t3 remaining mips |
-| `w64_sandbox_020c` | **`_6`** | — | dye paint cloth t7 remaining mips |
-| `w64_sandbox_020e` | **`_7`** | — | dye paint suit t5 remaining mips |
+**Live / restore = `20260822-172401.json`.** Newest files that matter:
 
-**The `_29` / `_26` / `_25` / `_9` atlas-bind row is reverted** to `_reverted_atlas2`. Live is
-`037c_28` / **`037d_25`** / `0698_24` / `0699_8`: the working five-part split, no material patch.
-`037d_26` through `_29` are in `_reverted_material`; each touched one material entry and nothing else.
+| package | live | note |
+|---|---|---|
+| `w64_sandbox_037c` | **`_28`** | five-part split geometry (byte-identical verts to `_22`) |
+| `w64_sandbox_037d` | **`_26`** | all five parts name chest-native `0x80EFA1DC` |
+| `w64_sandbox_019b` | **`_9`** | packed 512 on `0x80B3611D` (dye-gated; leave it) |
+| `w64_sandbox_0698` | **`_24`** | 0–1 UVs. `_25` (tiles) is in `_reverted_uv_tiles\` |
+| `w64_sandbox_0699` | **`_6`** | Tower-safe; do not bring `_7` back |
 
-**Package indices are per-package, not a version number** — the injector writes each package its
-own next index. "The `_22` inject" is `037c_22` + `037d_22` + `0698_21`; the texture probe on top
-of it is `037c_23` + `037d_23` + `0698_22` + `0699_7`. Do not read them as one number.
+`037d_27` (1CBE swap) and the 14× 21:03 F8 color-probe pkgs are in `packages\_vanilla_test\` / the attic. Do not `--save` them back. Do not `--undo` geometry.
 
-**Geometry now lives in the five-part-split layer** (`037c_28` / `037d_25` / `0698_24`), which
-supersedes `_22`. The vertex buffers in it are byte-identical to `_22`'s — only the triangle order
-and the part table changed. The texture probes rewrite texture *bodies* only, at their original
-sizes, and are untouched by it. `_21` shipped a stride bug and exploded; `_20` was the last good
-layer before that.
+**Package indices are per-package, not a version number.** Do not read `_28` / `_26` / `_25` as one number.
 
-Repo: `C:\Users\Round\OneDrive\Desktop\Destiny2ProjectSunrise\Sunrise` branch `cosmetics`.
+Repo: `C:\Users\Round\OneDrive\Desktop\Destiny2ProjectSunrise\Sunrise` branch `cosmetics`. Sunrise DLL is hook **v12** (per-part GLB albedos). Snapshot `20260822-172401`. `0698_25` attic’d.
 
 **Do not `--undo`.** `inject_mesh.py --undo` deletes *every* receipt patch and returns vanilla
-Scatterhorn. Write a **new layer** instead.
+Scatterhorn. Do not write a new mesh layer. Geometry is closed.
 
-**The recipe that produces the working body**, from `tools/pkg`, Destiny closed:
+**The recipe that produced the working body** (do not re-run unless restoring from zero), from `tools/pkg`, Destiny closed:
 
 ```
 blender --background --python retarget_mesh.py -- 23512 character_body.obj
@@ -336,9 +462,7 @@ python inject_scatterhorn.py --dry-run
 python inject_scatterhorn.py
 ```
 
-No flags. `--no-retarget` (T-pose mesh), `--no-authored` (donor weights), `--no-uvs` (resized
-Scatterhorn texcoords) and `--one-part` (the old single-carrier part table) each disable one half
-of the pipeline and exist only to bisect a regression.
+No flags. `--no-retarget` / `--no-authored` / `--no-uvs` / `--one-part` are bisect-only.
 
 ---
 
@@ -1870,13 +1994,15 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Look-alike probe failed. Restored `135112`.** Unique RGB on the bound dye tile is closed. Do not re-boost.
+**Read the top of this file and `docs/CUSTOM_CHARACTER.md`.** v12 is confirmed on character select. Snapshot `20260822-172401`. In-world lighting is next. Do not `--restore` 150046.
 
-Do not run `assign_split_materials.py` or `assign_armor_vs.py`. Do not steal off-chest materials. Do not run `bind_material_textures.py`. Do not paint `0x80B3611D` with a flat colour.
+Do not run `assign_split_materials.py` or `assign_armor_vs.py`. Do not steal off-chest materials. Do not run `bind_material_textures.py`. Do not paint `0x80B3611D` with a flat colour. Do not pack another 512. Do not retry `1CBE`. Do not saturation-boost.
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`.
 
 The Tower is already solved (`0699_7` out). Ignore the superseded Tower-bisect paragraph that used to live here.
+
+The section below ("Stop sweeping") is **historical**. Do not paint traced packages. Do not run another F8 sweep. Albedo is the bound dye tile plus a draw-time hook, not a missing type-40 tag.
 
 ## Stop sweeping. The log already says which textures the game loads.
 

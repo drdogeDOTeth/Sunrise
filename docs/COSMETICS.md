@@ -11,7 +11,7 @@ Not all of "custom cosmetics" is equally reachable.
 |---|---|---|
 | Existing ornaments and shaders, applied normally | any plug the game already ships | works upstream, no changes needed |
 | Any plug on any item, regardless of pool or ownership | cross-class ornaments, unowned shaders | **this fork**, see below |
-| Genuinely new art — custom meshes and textures | a model that is not in the game | **in progress:** Scatterhorn wrap installed 2026-08-19; full-topology swap still blocked by vertex budget. See `HANDOFF.md`. |
+| Genuinely new art — custom meshes and textures | a model that is not in the game | **in:** Warlock GLB on character select (hook v12, 2026-08-22). In-world lighting still dark. See `CUSTOM_CHARACTER.md` and `HANDOFF.md`. |
 
 ## How the game decides what you look like
 
@@ -243,8 +243,8 @@ unlikely to be shared with generic gear, and obvious in game, so success or fail
 
 ### The alternative path
 
-Intercepting draws at the D3D11 level and substituting geometry avoids packages entirely. Sunrise
-hooks only `IDXGISwapChain::Present`, `ResizeBuffers` and `SetFullscreenState` — swap-chain level,
-for the ImGui overlay. Nothing hooks the device context or any geometry submission, so this would
-be built from scratch, and matching D2's skinning and material state at draw time is likely harder
-than repacking. Worth knowing it exists; not worth starting there.
+Intercepting draws at the D3D11 level is **how unique albedo ships**. Geometry still comes from
+the package inject (skinning and the tangent frame have to match the armor VS). The dye pixel
+shader luma-gates any unique RGB in the bound 512, so `custom_albedo` replaces that PS at
+`DrawIndexed` for the five custom index ranges only. Character select is confirmed. In-world
+lighting is the leftover — see `CUSTOM_CHARACTER.md`. Do not start from swap-chain `Present`.

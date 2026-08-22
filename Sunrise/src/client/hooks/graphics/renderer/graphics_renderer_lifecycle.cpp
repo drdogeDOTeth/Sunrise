@@ -9,6 +9,7 @@
 #include "../../cursor/runtime.h"
 #include "../../inactivity/inactivity_override.h"
 #include "../../polled_input/runtime.h"
+#include "../../custom_albedo/custom_albedo.h"
 #include "../input/input.h"
 #include "graphics_renderer_report.h"
 #include "state.h"
@@ -193,6 +194,7 @@ constexpr std::array<ViewFormat, 6> kTypelessViewFormats{
     }
     staged.inputInstalled = true;
     g_resources = staged;
+    ::sunrise::client::hooks::custom_albedo::attach(g_resources.device, g_resources.context);
     report::note_active();
     return true;
 }
@@ -248,6 +250,7 @@ void release_render_target(Resources& resources) noexcept {
 
 /** @param resources SDK resources freed in an order that respects their dependencies. */
 void release_resources(Resources& resources) noexcept {
+    ::sunrise::client::hooks::custom_albedo::detach();
     release_render_target(resources);
     textures::release_logo_sheet(resources.logoSheet);
     release_com(resources.context);
