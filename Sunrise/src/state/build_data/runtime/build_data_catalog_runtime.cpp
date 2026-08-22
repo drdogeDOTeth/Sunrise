@@ -12,6 +12,7 @@
 #include "../progressions/progression_catalog.h"
 #include "../runtime.h"
 #include "../scenarios/scenario_catalog.h"
+#include "../socket_entry_buckets/socket_entry_bucket_catalog.h"
 #include "../socket_entry_lists/socket_entry_list_catalog.h"
 #include "../spawn_sets/spawn_set_catalog.h"
 #include "../vendors/vendor_catalog.h"
@@ -177,14 +178,15 @@ bool spawn_sets_ready() noexcept {
 
 /** Publishes the spawn-set catalog extracted from the installed packages, in one step. */
 bool publish_spawn_sets(std::span<const spawn_sets::Stem> stems,
-                        std::span<const spawn_sets::NameHash> nameHashes) noexcept {
+                        std::span<const spawn_sets::NameHash> nameHashes,
+                        std::span<const spawn_sets::Point> points) noexcept {
     runtime::persistence::Transaction transaction;
     if (!transaction.active()) {
         return false;
     }
     // An empty catalog is complete. It is what a build with no installed spawn set means.
-    const bool replaced =
-        stems.empty() ? nameHashes.empty() : spawn_sets::replace(stems, nameHashes);
+    const bool replaced = stems.empty() ? nameHashes.empty() && points.empty()
+                                        : spawn_sets::replace(stems, nameHashes, points);
     if (!replaced) {
         return transaction.finish(false, rollback_spawn_catalog_publication);
     }
@@ -209,6 +211,16 @@ bool find_spawn_sets(std::string_view stem,
            && spawn_sets::stem_hashes(row, output, count);
 }
 
+/** Finds the spawn point of one map-package stem nearest a world position. */
+bool find_nearest_spawn_point(std::string_view stem,
+                              const std::array<float, spawn_sets::kPositionComponents>& position,
+                              spawn_sets::Point& point,
+                              float& distance) noexcept {
+    point = {};
+    distance = 0.0F;
+    return spawn_sets_ready() && spawn_sets::nearest_point(stem, position, point, distance);
+}
+
 /** Finds one destination's bubble layout by package name. */
 bool find_scenario_layout(std::string_view name, scenarios::Definition& definition) noexcept {
     definition = {};
@@ -231,12 +243,22 @@ bool ability_buckets_ready() noexcept {
 /** Publishes the ability buckets every configured subclass and ability selection publishes. */
 bool publish_ability_buckets(std::span<const abilities::Definition> definitions) noexcept {
     runtime::persistence::Transaction transaction;
-    if (!transaction.active() || !abilities::replace(definitions)) {
+    if (transaction.active()) {
+        if (!abilities::replace(definitions)) {
+            return false;
+        }
+        // Row count does not matter here, because a loadout with no subclass is a complete one.
+        runtime::ability_buckets::publish();
+        return transaction.finish(true, rollback_ability_publication);
+    }
+    // The disk cache already froze every domain at boot, so the transaction above refuses to run.
+    // Ability buckets track the player's live subclass selection rather than installed content, so
+    // a later in-session pick still updates this one domain in memory.
+    if (!abilities::replace(definitions)) {
         return false;
     }
-    // Row count does not matter here, because a loadout with no subclass is a complete one.
     runtime::ability_buckets::publish();
-    return transaction.finish(true, rollback_ability_publication);
+    return true;
 }
 
 /** Finds the buckets one subclass publishes under one ability selection. */
@@ -245,6 +267,44 @@ bool find_ability_buckets(std::uint16_t socketEntryListIndex,
                           abilities::Definition& definition) noexcept {
     definition = {};
     return ability_buckets_ready() && abilities::find(socketEntryListIndex, selection, definition);
+}
+
+/** Drops the published ability bucket domain so the next investment refresh slice rebuilds it. */
+void invalidate_ability_buckets() noexcept {
+    runtime::ability_buckets::clear();
+    abilities::clear();
+}
+
+/** True when at least one socket-entry list's resolved bucket destinations are published. */
+bool socket_entry_buckets_ready() noexcept {
+    return runtime::socket_entry_buckets::ready();
+}
+
+/** Publishes every socket-entry list's resolved per-entry ability-bucket destinations. */
+bool publish_socket_entry_buckets(
+    std::span<const socket_entry_buckets::Definition> definitions) noexcept {
+    if (!socket_entry_buckets::replace(definitions)) {
+        return false;
+    }
+    // An empty domain counts as complete, matching the ability buckets it is resolved alongside:
+    // an account with no subclass equipped legitimately produces zero rows, and that must not
+    // make the extraction pass retry every refresh slice forever.
+    runtime::socket_entry_buckets::publish();
+    return true;
+}
+
+/** Finds which of the 12 semantic ability buckets one socket entry resolves to. */
+bool find_socket_entry_bucket(std::uint16_t socketEntryListIndex,
+                              std::uint8_t entryIndex,
+                              std::uint8_t& bucket) noexcept {
+    bucket = socket_entry_buckets::kNoDestinationBucket;
+    socket_entry_buckets::Definition row{};
+    if (!socket_entry_buckets::find(socketEntryListIndex, row)
+        || entryIndex >= row.buckets.size()) {
+        return false;
+    }
+    bucket = row.buckets[entryIndex];
+    return true;
 }
 
 /** @return True when the installed investment constants are in State. */

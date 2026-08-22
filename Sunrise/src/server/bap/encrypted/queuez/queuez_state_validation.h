@@ -29,8 +29,8 @@ namespace sunrise::server::bap::encrypted::queuez {
 
 /**
  * Decides whether one family-zero subscription publishes, and as which kind of frame.
- * Retail sets the full-snapshot flag once per family and adds one to every later push, so a
- * repeat that changes nothing is not sent at all.
+ * A repeat naming the character the pair already holds reports no publish and no version bump.
+ * Both callers send anyway, so the answer is which frame to build, not whether to answer.
  * @param before Current queuez state owned by the peer.
  * @param selectedCharacter Character the family-zero pair names now.
  * @param publish Gets whether a frame is needed.
@@ -132,6 +132,13 @@ namespace sunrise::server::bap::encrypted::queuez {
                                      bool updatesAccount,
                                      SocketPlug& socketPlug) noexcept;
 
+/** Stages one resident subclass item-instance upsert without changing the Family-4 manifest. */
+[[nodiscard]] bool stage_subclass_selection(const SessionState& before,
+                                            std::uint64_t accountSoid,
+                                            std::uint64_t characterSoid,
+                                            std::uint64_t subclassInstanceSoid,
+                                            SubclassSelection& selection) noexcept;
+
 /**
  * Stages one Family-4 increment that adds a new resident item and updates its character.
  *
@@ -153,9 +160,7 @@ namespace sunrise::server::bap::encrypted::queuez {
 /**
  * Stages one Family-4 version increment for a full resident account-object upsert.
  * A profile row with a nonzero action-source SOID must already be resident when its stack grows,
- * or is appended exactly once when Collections creates the row. Currency/material rows keep a
- * zero SOID and preserve the manifest.
- *
+ * or is appended once when Collections creates it. Currency rows keep a zero SOID.
  * @param before Current active peer state.
  * @param accountSoid Account root receiving the profile stack.
  * @param acquiredInstanceSoid Profile action-source key, or zero for a non-actionable stack.

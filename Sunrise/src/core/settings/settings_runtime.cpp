@@ -172,6 +172,20 @@ void report_upgrade(bool stored) noexcept {
     }
 }
 
+/**
+ * Drops a leading UTF-8 byte order mark.
+ * Notepad and PowerShell's `Set-Content -Encoding utf8` both write one, and the parser reads it
+ * as a stray token. That made an unparsable file, and an unparsable file kills startup before
+ * the log opens, so the failure arrives with nothing to read.
+ * @param document Whole settings text as read from disk.
+ * @return The same text with any BOM removed.
+ */
+[[nodiscard]] std::string_view without_byte_order_mark(std::string_view document) noexcept {
+    // UTF-8 byte order mark. An editor writes it and the parser must not see it.
+    constexpr std::string_view kMark = "\xEF\xBB\xBF";
+    return document.starts_with(kMark) ? document.substr(kMark.size()) : document;
+}
+
 } // namespace
 
 /** Loads the settings file from the owned folder, or creates the default one. */
@@ -232,7 +246,7 @@ bool initialize(void* module) noexcept {
     if (!readOk || !closed) {
         return fail("read");
     }
-    std::string_view document(buffer.data(), read);
+    std::string_view document = without_byte_order_mark(std::string_view(buffer.data(), read));
     static std::array<char, kConfigCapacity> upgradedBuffer{};
     const bool upgrading = upgrade::needed(document);
     if (upgrading) {

@@ -56,6 +56,12 @@ private:
      */
     [[nodiscard]] bool server_settings(server::Settings& output) noexcept;
     /**
+     * Parses the activation gate block on top of the fixed defaults.
+     * @param output Receives the block only after every key in it is valid.
+     * @return True when every supported key carries a boolean; unknown keys are skipped.
+     */
+    [[nodiscard]] bool activation_settings(server::activation::Settings& output) noexcept;
+    /**
      * Parses the gameplay endpoint block on top of the fixed defaults.
      * @param output Receives the block only after the whole object is consistent.
      * @return True when the topology, addresses, port, and slot reserve agree.
@@ -168,12 +174,6 @@ private:
      */
     [[nodiscard]] bool character(state::CharacterState& output) noexcept;
 
-    /**
-     * Reads one selectable ability's socket entry.
-     * @param output Receives the entry only when it is inside the socket-entry bound.
-     * @return True when the value parses and names a possible entry.
-     */
-    [[nodiscard]] bool ability_entry(std::uint8_t& output) noexcept;
     /**
      * Parses the optional equipment object with its fixed named slots.
      * @param output Receives present items only after the whole object is valid.
