@@ -475,7 +475,37 @@ watcher now open the log with a `FileStream` using `ReadWrite` sharing and treat
 *unknown* rather than as no progress. **A tool saying "no progress" is not evidence until it has
 proven it can read the file.**
 
-## The orbit deadlock is in the 21:03 sweep
+## SOLVED: `w64_ui_01a3_7.pkg` is the orbit deadlock
+
+**Held it back, orbit reached — 50 tasks, clean.** Two painted entries in the UI package hang tasks
+35 and 53 forever in `cleanup`:
+
+| tag | type | size | header |
+|---|---|---:|---|
+| `0x80B46182` | 40/1 | 1,115,200 | `0x80B46183` |
+| `0x80B46187` | 40/1 | 1,115,200 | `0x80B46186` |
+
+Both pass every structural check — correct `entry_type`, correct paired header, whole number of BC7
+blocks. The fault is not in the container; it is that **painting these two particular UI textures
+makes the resource system never finish a task.** They arrived in the 21:03 sweep, the group that was
+never launched, and sat under every test for the rest of the evening.
+
+**Quarantined to `packages\_bad_ui_01a3\`** — a separate attic so `vanilla_mode.ps1 -Restore` can
+never put it back. Nothing is lost: it was one of 150 speculative paints and the custom character
+does not depend on it. `paint_textures.py` should skip `ui_*` packages if that sweep is ever rerun.
+
+**Everything else restored — all 98 remaining layers, including the five-part split.** But note the
+scope of what has been *proven*: the passing run had **95** layers (no split, no `ui_01a3_7`), and
+step 3 only showed the split is not *necessary* for the deadlock, not that it is harmless. The
+current 98-layer set is **untested**, and confirming it is the next launch.
+
+### Bug #2 is still open
+
+The Tower still fails — `activity:initial_slice_set_loading`, lookups stop after ~3 s, mayday at
+~35 s. Its culprit is in `{14:39, 16:17, 16:27, 16:37, 17:37}`, since step 1 already showed it.
+Bisect that the same way once orbit is confirmed.
+
+## How the orbit deadlock was found
 
 **Step 3 failed** — restoring the `21:03` group brought the deadlock straight back: tasks 35 and 53
 stuck, `0x0020000800000000`, nine hitch asserts. Only the five-part split was held back, so the
@@ -1482,7 +1512,8 @@ file" and copies from inline DyeData instead):
 | bisect step 1: restored through 17:37 | 64 of 99 layers | **REACHED ORBIT** (cleanup 3,001 ms, not 25,000); Tower closed at 8 s, inconclusive | culprit is in {18:05, 19:09, 21:03, 22:04} |
 | bisect step 2: through 19:09 | 81 of 99 layers | **orbit OK**; Tower failed | orbit culprit is {21:03, 22:04} |
 | bisect step 3: through 21:03 | 96 of 99 layers | **DEADLOCKED** | the split is innocent; culprit is in the **21:03 sweep** |
-| **`ui_01a3_7` held back, other 14 live** | **95 of 99 layers (current)** | — | pass -> `ui_01a3` is it; fail -> binary-search the other 14 |
+| `ui_01a3_7` held back, other 14 live | 95 of 99 layers | **REACHED ORBIT** | **`ui_01a3_7` is the orbit deadlock** |
+| **all 98 layers, `ui_01a3_7` quarantined** | **current** | — | confirm the full set (incl. the split) reaches orbit |
 | 55× 2048/1024 sandbox BC7 swatches | `037c_23` / `037d_23` / `0698_22` / `0699_7` | **nothing**; dump of `0x80EFAD63` was our paint | those **55** never bind — but see the correction below; this ruled out 3.4%, not the packages |
 | 527× everything that *paired*, 12 buckets | reverted, in `packages\_reverted` | **GPU device loss** at character select, no characters drawn | 356 of them were type-41 **geometry buffers**; pairing does not identify a texture |
 | 228× every `entry_type` 40 texture, 12 buckets | `037c_26` / `037d_24` / `0698_23` / `0699_8` | **the weapon turned magenta. The body did not change at all.** | **paint reaches the GPU and shows** — first positive result. The body's albedo is not in these four packages |
@@ -1565,9 +1596,9 @@ non-mesh-0 parts. Do not un-zero original extras.
 
 ## Where to pick up
 
-**Next launch: `ui_01a3_7` held back.** Go to orbit. Pass -> `ui_01a3` causes the orbit deadlock;
-fail -> binary-search the other fourteen with `vanilla_mode.ps1 -Hold`. The Tower fails either way
-— second bug, earlier culprit.
+**Next launch: confirmation.** All 98 layers live with `ui_01a3_7` quarantined — the custom
+character complete, including the five-part split. Go to orbit; it should arrive. Then the Tower is
+bug #2, culprit in `{14:39, 16:17, 16:27, 16:37, 17:37}`.
 
 **The character works. Do not re-open geometry, skinning or the tangent frame.** Do not flatten
 dye normals. Do not rerun `paint_dye_tints.py`. Do not `--undo`. Whether the atlases must shrink is
