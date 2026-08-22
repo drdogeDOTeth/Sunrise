@@ -32,6 +32,62 @@ Do **not** merge upstream Sunrise 0.3.2.
 
 ---
 
+## TEXTURES: the paint path WORKS. The problem is that four materials bind nothing. (2026-08-22)
+
+**Breakthrough: pixels we wrote reached the Guardian, with no texture tag written anywhere.**
+Painting `0x80B3611D` — the buffer named at `+0x24` of `0x80C1D3CD`, which is the *only* texture
+`0x80EFA1DC` (the gas mask material) binds — put a clearly visible magenta patch on the mask.
+User-confirmed in the character screen. **This retires the whole "we must repoint the albedo tag"
+problem**: we do not need the write that has never landed
+([[changing-a-texture-tag-never-landed]] is now a curiosity, not a blocker).
+
+### The 40-byte texture header, decoded
+
+    +0x00  u32  total size of the whole texture, all mips
+    +0x04  u32  DXGI format enum   98 = BC7_UNORM, 99 = BC7_UNORM_SRGB
+    +0x0C  u16  0xCAFE magic
+    +0x0E  u16  width          +0x10  u16  height
+    +0x24  u32  TAG of the buffer holding the top mips (type 48)
+
+Confirmed by arithmetic: `0x80C1D3CD` says 512x512 BC7, total 349,552; its buffer is 327,680
+(mip 0 + mip 1) and the remainder is exactly 21,872. Headers are **encrypted**, so they must come
+from an in-game dump (`make_request.py`), not from disk.
+
+**The header names only ONE tag.** The entry holding the small mips is *not* named and has **no
+fixed offset** — in pkg 020e the headers cluster at 5065/5066/5069/5070 and the bodies at
+5063/5064/5067/5068/5071. Guessing "header − 2" overwrote `0x80C1D3CB`, which the dye legend shows
+belongs to a *different* texture (suit_t5), and corrupted it. `paint_albedo.py` now writes only the
+buffer and requires an explicit `--small=` for anything else. Leaving the small mips alone is
+visually free: the buffer holds mip 0 and 1, which is what renders at any normal distance.
+
+### What is actually blocking the other four parts
+
+**Four of the five split materials bind no textures at all.** `0x80EF98DB` (tank top),
+`0x80EFA1F7` (skin/arms), `0x81532AE0` (twirl) and `0x81531EF0` (necklace) all have a **NULL**
+texture-array field. Only `0x80EFA1DC` has one, and it has exactly one binding. Scanning **all
+3,965 dumped records** turned up exactly **one** with a populated pixel-texture array — that same
+material. So there is no ready-made material to repoint a part at, among what has been dumped.
+
+That is the real meaning of "the albedo slot is empty", and it is why those parts render as flat
+white / grey / black.
+
+### Dyes are RULED OUT as the body's visible colour (one launch, user-confirmed)
+
+`plate_t3` painted red, `suit_t5` green, `cloth_t7` blue — all three buffers verified in-package,
+clean launch to orbit with 0 hitches and 0 errors — **no visible change anywhere on the body.**
+The dye textures named in `dye_texture_legend.json` do not drive what you see. Do not re-probe them.
+
+### Where to go next, in order of cost
+
+1. **Dump more materials.** Only one dumped record has a texture array, and that is a sampling
+   artefact of what was requested, not a fact about the game. Dump the materials the other four
+   parts use and look for any with a populated array — one launch via `make_request.py`.
+2. **If some material has an albedo, repoint the parts at it** by rewriting the type-8 model
+   records at the same size. That operation is proven — it is exactly what the five-part split
+   already does.
+3. **Only if neither works**, revisit adding a texture array to a NULL material, which needs the
+   record resize plus a tag write.
+
 ## GET BACK TO A WORKING GAME — read this before touching packages
 
 The working set is recorded as **data**, not prose. If anything is broken, or you do not know which

@@ -46,7 +46,10 @@ from tigerpkg import TAG_BASE, TAG_ENTRY_BITS, TAG_ENTRY_MASK
 from verify_bind_layer import locate, newest_of_each
 
 DUMP = Path("C:/Sunrise/bin/x64/Sunrise/dump")
-BC7_UNORM = 98
+# 98 = BC7_UNORM, 99 = BC7_UNORM_SRGB. Both are BC7 and both encode identically here; the
+# difference is how the sampler interprets the values, not the block layout. The dye textures
+# are 99, so refusing it would rule out the whole dye channel for no reason.
+BC7_FORMATS = (98, 99)
 # Offsets inside the 40-byte texture header, decoded 2026-08-22 against 0x80C1D3CD and confirmed by
 # arithmetic: the sizes it implies match the two entries exactly, to the byte.
 OFF_TOTAL, OFF_FORMAT, OFF_WIDTH, OFF_HEIGHT, OFF_BUFFER = 0x00, 0x04, 0x0E, 0x10, 0x24
@@ -104,26 +107,39 @@ def main() -> None:
     info = read_header(header_tag)
     print(f"header 0x{header_tag:08X}: {info['width']}x{info['height']}, format {info['format']}, "
           f"total {info['total']:,} B, buffer 0x{info['buffer']:08X}")
-    if info["format"] != BC7_UNORM:
+    if info["format"] not in BC7_FORMATS:
         raise SystemExit(
-            f"format is {info['format']}, not {BC7_UNORM} (BC7_UNORM). This tool only writes BC7; "
+            f"format is {info['format']}, not one of {BC7_FORMATS} (BC7). This tool only writes BC7; "
             "filling a non-BC7 entry with BC7 blocks is exactly what broke the flat-colour sweeps.")
 
     packages = newest_of_each()
     buf_pkg, buf_entry = locate(info["buffer"], packages)
     buf_size = buf_pkg.entries[buf_entry].size
-    # The remaining mips live in the entry the header pairs with, two indices below it.
-    rest_index = ((header_tag - TAG_BASE) & TAG_ENTRY_MASK) - 2
-    rest_pkg, _ = locate(header_tag, packages)
-    rest_size = rest_pkg.entries[rest_index].size
     print(f"  mip0+1 -> 0x{info['buffer']:08X}  {buf_pkg.stem[-4:]} entry {buf_entry}  "
           f"{buf_size:,} B (type {getattr(buf_pkg.entries[buf_entry], 'entry_type', '?')})")
-    print(f"  mips2+ -> {rest_pkg.stem[-4:]} entry {rest_index}  {rest_size:,} B "
-          f"(type {getattr(rest_pkg.entries[rest_index], 'entry_type', '?')})")
-    if buf_size + rest_size != info["total"]:
-        raise SystemExit(
-            f"{buf_size:,} + {rest_size:,} = {buf_size + rest_size:,}, but the header says "
-            f"{info['total']:,}. The split is not what this tool assumes; stopping.")
+
+    # The remaining mips live in a paired body entry that the header does NOT name - +0x24 is its
+    # only tag. There is no fixed offset either: in pkg 020e the headers cluster at 5065/5066/5069/
+    # 5070 and the bodies at 5063/5064/5067/5068/5071. Guessing "header - 2" here overwrote
+    # 0x80C1D3CB, which the dye legend shows belongs to a *different* texture (suit_t5), and
+    # corrupted it. So the pairing must be given explicitly or left alone.
+    #
+    # Leaving it alone is safe and usually invisible: the buffer holds mip 0 and mip 1, which is
+    # what renders at any normal viewing distance. Only the small mips stay original.
+    rest_pkg = rest_index = rest_size = None
+    small = next((int(a.split("=", 1)[1], 0) for a in args if a.startswith("--small=")), None)
+    if small is not None:
+        rest_pkg, rest_index = locate(small, packages)
+        rest_size = rest_pkg.entries[rest_index].size
+        print(f"  mips2+ -> 0x{small:08X}  {rest_pkg.stem[-4:]} entry {rest_index}  {rest_size:,} B "
+              f"(type {getattr(rest_pkg.entries[rest_index], 'entry_type', '?')})")
+        if buf_size + rest_size != info["total"]:
+            raise SystemExit(
+                f"{buf_size:,} + {rest_size:,} = {buf_size + rest_size:,}, but the header says "
+                f"{info['total']:,}. That --small is not this texture's other half; stopping.")
+    else:
+        print(f"  mips2+ -> not written (pass --small=0x... to write them). The small mips stay "
+              f"original; mip 0 and 1 are what render at normal distance.")
 
     image = Image.open(image_path).convert("RGBA")
     print(f"  source {Path(image_path).name}: {image.size[0]}x{image.size[1]}")
@@ -133,10 +149,10 @@ def main() -> None:
     if "--write" not in args:
         print("\nNothing written. Re-run with --write.")
         return
-    write_all({
-        buf_pkg.path: {buf_entry: blob[:buf_size]},
-        rest_pkg.path: {rest_index: blob[buf_size:]},
-    }, sandbox="")
+    work: dict = {buf_pkg.path: {buf_entry: blob[:buf_size]}}
+    if rest_pkg is not None:
+        work.setdefault(rest_pkg.path, {})[rest_index] = blob[buf_size:]
+    write_all(work, sandbox="")
 
 
 if __name__ == "__main__":
