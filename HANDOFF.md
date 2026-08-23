@@ -12,7 +12,7 @@
 
 **Hands-on-gauntlets CONFIRMED in-world.** First-person still draws `(0, 7902)` — the skip that hid them is **reverted**. FP/inspect smash is unposed bones 40–71 (same class as `--fingers` on the chest). Visible spaghetti is the known leftover; empty sleeves are not acceptable. Do not `--fingers`. Do not AABB-fit. Next FP fix is a dumped viewmodel, not another skip.
 
-**Host Intake** (`bring_guardian.ps1` / `tools/pkg/bring_guardian.py`) is the path for the next custom GLB: extract → Blender retarget (`--keep-seams --fingers`) → cut hands → `custom_parts.txt` → inject `--hands-on-gauntlets`. Hook reads `C:\Sunrise\bin\x64\Sunrise\custom_parts.txt` (defaults if missing).
+**Host Intake** (`bring_guardian.ps1` / `tools/pkg/bring_guardian.py`) is how a **caller-supplied** GLB becomes the Warlock: extract → Blender retarget (`--keep-seams --fingers`) → cut hands → `custom_parts.txt` → inject `--hands-on-gauntlets`. The tool does **not** ship a character (no baked-in gas-mask path). Hook reads `C:\Sunrise\bin\x64\Sunrise\custom_parts.txt` (defaults if missing).
 
 Race-default upper-body copies blanked (not yet seen). `--fingers` stays CLOSED.
 

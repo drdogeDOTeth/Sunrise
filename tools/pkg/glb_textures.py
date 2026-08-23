@@ -14,17 +14,17 @@ count and the 40-byte header keeps its width, height and format. So each atlas h
 to whatever dimensions the slot it replaces already uses. This reports what we have to work with.
 
 Usage:
-    python glb_textures.py                       # list what is in the GLB
-    python glb_textures.py --extract             # write them to objs/textures/
+    python glb_textures.py --glb path.glb
+    python glb_textures.py --glb path.glb --extract --out folder
 """
 from __future__ import annotations
 
 import json
+import os
 import struct
 import sys
 from pathlib import Path
 
-GLB = Path(r"C:\Chiliz\Destiny2SunriseCharacters\void_4003GasMask.glb")
 OUT = Path(__file__).with_name("objs") / "textures"
 GLB_MAGIC = 0x46546C67
 CHUNK_JSON = 0x4E4F534A
@@ -73,7 +73,14 @@ def dimensions(data: bytes) -> tuple[int, int] | None:
 
 
 def main() -> None:
-    glb = Path(sys.argv[sys.argv.index("--glb") + 1]) if "--glb" in sys.argv else GLB
+    if "--glb" not in sys.argv:
+        env = os.environ.get("SUNRISE_GLB", "")
+        if not env:
+            raise SystemExit("pass --glb path.glb (or set SUNRISE_GLB). "
+                             "This script does not ship a character.")
+        glb = Path(env)
+    else:
+        glb = Path(sys.argv[sys.argv.index("--glb") + 1])
     out = Path(sys.argv[sys.argv.index("--out") + 1]) if "--out" in sys.argv else OUT
     if not glb.is_file():
         raise SystemExit(f"no GLB at {glb}")

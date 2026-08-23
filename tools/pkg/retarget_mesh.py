@@ -23,9 +23,7 @@ vertex happened to be nearest. Fingers collapse onto the wrist because the rig's
 are above the index ceiling of 28.
 
 Usage (from tools/pkg):
-    blender --background --python retarget_mesh.py -- 23512 character_body.obj
-    blender --background --python retarget_mesh.py -- 65535 character_body_v23.obj --keep-seams
-    blender --background --python retarget_mesh.py -- 65535 character_body_v23.obj --keep-seams --fingers
+    blender --background --python retarget_mesh.py -- 65535 out.obj --keep-seams --fingers --glb path.glb
 """
 import json
 import os
@@ -37,7 +35,7 @@ from mathutils import Vector
 ARGV = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
 HERE = os.path.dirname(os.path.abspath(__file__))
 RIG = os.path.join(HERE, "objs", "skeleton", "rig.json")
-DEFAULT_GLB = r"C:\Chiliz\Destiny2SunriseCharacters\void_4003GasMask.glb"
+DEFAULT_GLB = os.environ.get("SUNRISE_GLB", "")
 
 
 def _take_opt(args, name, default=None):
@@ -61,10 +59,15 @@ FINGERS = "--fingers" in _ARGS
 _POSITIONAL = [item for item in _ARGS if not item.startswith("--")]
 if len(_POSITIONAL) < 2:
     raise SystemExit("usage: blender --background --python retarget_mesh.py -- "
-                     "<target_verts> <out.obj> [--glb path] [--keep-seams] [--fingers] "
+                     "<target_verts> <out.obj> --glb path.glb [--keep-seams] [--fingers] "
                      "[--bone-map path] [--material-map path]")
 TARGET = int(_POSITIONAL[0])
 OUT = _POSITIONAL[1]
+if not GLB or not os.path.isfile(GLB):
+    raise SystemExit(
+        "pass --glb path.glb (or set SUNRISE_GLB). "
+        "retarget_mesh does not ship a character."
+    )
 
 # GLB vertex group -> rig bone index.
 #

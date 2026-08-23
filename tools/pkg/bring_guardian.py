@@ -1,10 +1,10 @@
 """Bring a custom GLB onto the playable Warlock — the confirmed Sunrise path.
 
-This is the intake tool. It runs the same pipeline that landed the gas-mask
-character: extract the GLB's own textures, pose the arms onto the recovered
-Guardian rig in Blender, keep seams, keep finger weights, cut the hands onto
-the gauntlet draw, write the hook's part table, copy atlases next to the DLL,
-and inject with --hands-on-gauntlets.
+This desk does not ship a character. You bring the .glb. The line extracts
+that model's textures, poses the arms onto the recovered Guardian rig in
+Blender, keeps seams and finger weights, cuts the hands onto the gauntlet
+draw, writes the hook's part table, copies atlases next to the DLL, and
+injects with --hands-on-gauntlets.
 
 Closed on purpose:
   --fingers on the chest, AABB-fit hands, bind_material_textures,
@@ -35,11 +35,36 @@ from glb import read_glb
 from glb_textures import chunks, dimensions
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_GLB = Path(r"C:\Chiliz\Destiny2SunriseCharacters\void_4003GasMask.glb")
-GAME = Path(r"C:\Sunrise")
+GAME = Path(os.environ.get("SUNRISE_GAME", r"C:\Sunrise"))
 ART = GAME / "bin" / "x64" / "Sunrise"
 DUMP = ART / "dump"
 WORK = HERE / "intake"
+LAST_GLB = WORK / "last_glb.txt"
+
+
+def recalled_glb() -> Path | None:
+    """Last model this machine ingested, or SUNRISE_GLB. Never a baked-in character."""
+    env = os.environ.get("SUNRISE_GLB", "").strip()
+    if env:
+        path = Path(env)
+        return path if path.is_file() else None
+    if LAST_GLB.is_file():
+        path = Path(LAST_GLB.read_text(encoding="utf-8").strip())
+        if path.is_file():
+            return path
+    return None
+
+
+def remember_glb(path: Path) -> None:
+    WORK.mkdir(parents=True, exist_ok=True)
+    LAST_GLB.write_text(str(path.resolve()), encoding="utf-8")
+
+
+def resolve_glb() -> Path | None:
+    explicit = option("--glb")
+    if explicit:
+        return Path(explicit)
+    return recalled_glb()
 
 CANON = {
     "tank": "GLSLShader85",
@@ -133,7 +158,7 @@ def preflight(*, glb: Path | None, inject: bool) -> None:
     if not GAME.is_dir():
         errors.append(f"game folder missing: {GAME}")
     if not (GAME / "destiny2.exe").is_file():
-        errors.append("destiny2.exe not under C:\\Sunrise")
+        errors.append(f"destiny2.exe not under {GAME}")
     if not (GAME / "bin" / "x64" / "steam_api64.dll").is_file():
         errors.append("hook DLL missing — run .\\build.ps1 and .\\install.ps1 once")
     try:
@@ -507,7 +532,8 @@ def run_pipeline(glb: Path, *, inject: bool, dry_run: bool,
         run_inject(chest, hands, group_map, dry_run=dry_run or not inject)
     if snapshot and inject and not dry_run:
         from known_good import save
-        save(f"intake {glb.stem}: hands-on-gauntlets", Path(r"C:/Sunrise/packages"))
+        save(f"intake {glb.stem}: hands-on-gauntlets", GAME / "packages")
+    remember_glb(glb)
     log("intake finished. Launch destiny2.exe — Warlock, Scatterhorn chest.")
     log("Look at character select, a destination, and first-person. Snapshot if it looks right.")
     return dest
@@ -518,20 +544,27 @@ def main() -> None:
         from bring_guardian_ui import main as ui_main
         ui_main()
         return
-    glb = Path(option("--glb", str(DEFAULT_GLB) if DEFAULT_GLB.is_file() else ""))
+    glb = resolve_glb()
     if flag("--inspect"):
         at = sys.argv.index("--inspect")
         if at + 1 < len(sys.argv) and not sys.argv[at + 1].startswith("--"):
             glb = Path(sys.argv[at + 1])
+        if glb is None or not glb.is_file():
+            raise SystemExit(
+                "pass --inspect path.glb  (this tool does not ship a character)"
+            )
         print_inspect(inspect_glb(glb))
         if flag("--preflight"):
-            preflight(glb=glb if glb.is_file() else None, inject=False)
+            preflight(glb=glb, inject=False)
         return
     if flag("--preflight") and not flag("--dry-run") and not flag("--inject"):
-        preflight(glb=glb if glb.is_file() else None, inject=False)
+        preflight(glb=glb if glb is not None and glb.is_file() else None, inject=False)
         return
-    if not glb.is_file():
-        raise SystemExit("pass --glb path.glb  (or --inspect / --ui)")
+    if glb is None or not glb.is_file():
+        raise SystemExit(
+            "pass --glb path.glb  (or --ui). Intake does not ship a character — "
+            "bring your own model. Optional: set SUNRISE_GLB."
+        )
     overrides_path = option("--material-map")
     overrides = json.loads(Path(overrides_path).read_text(encoding="utf-8")) if overrides_path else None
     bone = Path(option("--bone-map")) if option("--bone-map") else None

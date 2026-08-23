@@ -15,9 +15,10 @@ from tkinter import filedialog, messagebox, ttk
 from bring_guardian import (
     ART,
     CANON,
-    DEFAULT_GLB,
     find_blender,
     inspect_glb,
+    recalled_glb,
+    remember_glb,
     run_pipeline,
 )
 
@@ -42,8 +43,11 @@ class Intake(tk.Tk):
         self.configure(bg=BG)
         self.geometry("980x720")
         self.minsize(860, 640)
-        self.glb = tk.StringVar(value=str(DEFAULT_GLB) if DEFAULT_GLB.is_file() else "")
-        self.status = tk.StringVar(value="Idle. Destiny stays closed for an inject.")
+        last = recalled_glb()
+        self.glb = tk.StringVar(value=str(last) if last else "")
+        self.status = tk.StringVar(
+            value="Pick your GLB. This desk does not ship a character. Destiny stays closed for an inject."
+        )
         self.material_vars: dict[str, tk.StringVar] = {}
         self.log_queue: queue.Queue[str] = queue.Queue()
         self._build()
@@ -72,7 +76,7 @@ class Intake(tk.Tk):
         ttk.Label(self, text="PROJECT SUNRISE", style="Head.TLabel").pack(anchor="w", **pad)
         ttk.Label(
             self,
-            text="Host intake  ·  custom GLB → playable Warlock  ·  retarget / cut / inject",
+            text="Host intake  ·  your GLB → playable Warlock  ·  retarget / cut / inject",
             style="Dim.TLabel",
         ).pack(anchor="w", padx=16)
 
@@ -124,6 +128,7 @@ class Intake(tk.Tk):
         )
         if picked:
             self.glb.set(picked)
+            remember_glb(Path(picked))
             self.refresh_inspect()
 
     def refresh_inspect(self) -> None:

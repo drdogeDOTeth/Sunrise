@@ -1,8 +1,8 @@
 # Host Intake — bring a custom character onto the playable Warlock
 
-This is the front desk. One GLB in, the confirmed Sunrise path out: retarget, cut,
-textures, hook part table, inject. It will not always stay on the gas-mask host.
-That body was the first one through the line. The next one uses this tool.
+This is the front desk. **You bring the `.glb`.** The repo does not ship a character.
+Whoever forked this runs their own model through the same confirmed path: retarget,
+cut, textures, hook part table, inject.
 
 Live memory: [`HANDOFF.md`](../HANDOFF.md). Durable status: [`CUSTOM_CHARACTER.md`](CUSTOM_CHARACTER.md).
 
@@ -23,8 +23,8 @@ The tool does not fix a bad export. Check this before you hit inject.
 | ≤ 65,535 unwelded verts | 16-bit indices. `--keep-seams` will not decimate |
 | PBR base color (+ metalRough G if you have it) | v18 reads roughness G, writes metallic 0 |
 
-Unrigged props (icospheres, ground planes) are dropped. Extra materials beyond five must be
-parked on one of the five slots or they share an atlas.
+Unrigged props (ground planes, leftover sculpt cages) are dropped. Extra materials beyond
+five must be parked on one of the five slots or they share an atlas.
 
 Warlock only. The mesh lands on the **Scatterhorn chest + those gauntlets**. Wear that chest
 in-game or you are looking at some other draw.
@@ -62,7 +62,10 @@ python tools/pkg/known_good.py --restore --snapshot=20260822-235602.json
 
 ## How to run it
 
-Destiny **closed** for a real inject.
+Destiny **closed** for a real inject. Point the desk at **your** `.glb`. There is no
+default host in the tree. Optional env: `SUNRISE_GLB` (your model), `SUNRISE_GAME`
+(install root, default `C:\Sunrise`). The last path you ingested is remembered only
+on this machine (`tools/pkg/intake/last_glb.txt`, not committed).
 
 ### Desk
 

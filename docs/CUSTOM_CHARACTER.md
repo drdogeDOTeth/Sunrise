@@ -202,7 +202,7 @@ Do not add emission. Cloudstrike already proves real emissives work; the coat is
 
 ## Bring a new custom character
 
-Destiny closed to inject. Dry-run first.
+You bring the `.glb`. The repo does not ship one. Destiny closed to inject. Dry-run first.
 
 Full walkthrough: [`HOST_INTAKE.md`](HOST_INTAKE.md).
 
