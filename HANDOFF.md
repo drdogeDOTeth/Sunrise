@@ -89,49 +89,47 @@ spare chest material instead of raising when a source material is unmapped (so a
 mistake is now a warning, not a stop), and `parse_models.py` no longer raises when the dump
 directory is empty — downstream tools get an empty `models` list instead of a clear error.
 
-### Emotes: an emote is a plug, not equipment. SHIPPED, awaiting one launch. (branch `activities`)
+### Emotes: they were never broken. Only one key has anything to play. (branch `activities`)
 
-The worlds being empty and the emotes never playing are separate problems with separate causes.
-This is the emote one, and it is settled from the installed data — no launch was needed to find it.
+**Launched and user-confirmed 2026-08-23. The up arrow plays `0x7979AE7D` "Blowing a Kiss" — which
+is the emote the *equipment* slot has always held, and is not one of the four I socketed into an
+Emote Collection.** So emotes had most likely worked all along and nobody had pressed the key. The
+first version of this section claimed the equipped emote "resolves, publishes, and does nothing".
+It does the only thing that works.
 
-The authored state equipped emote `0x7979AE7D` ("Blowing a Kiss") into the emote equipment slot
-with `plugs: []`, and it has been there all along. It resolves, publishes, and does nothing,
-because **that is not how the game reaches an emote**:
+What the extracted data does say, and this part held up:
 
 | item | bucket | equipment slot | ordinary sockets |
 |---|---|---|---|
 | every one of the 307 emotes, incl. `0x7979AE7D` | 41 | 14 | **0** |
-| **Emote Collection `0xBDBB7999`** | 12 | **absent (−1)** | **4** |
+| **Emote Collection** `0xBDBB7999` and `0xEC10C60D`, both named "Emotes" | 12 | **absent (−1)** | **4** |
 
-Each of the Emote Collection's four lanes accepts **all 307 emotes** — verified against the
-extracted plug pools, not guessed:
+Each collection lane accepts all 307 emotes (`build_cache.py --plugs 0xBDBB7999`). But light.gg on
+the collection reads *"Allows for the configuration of equipped emotes from your entire emote
+collection"* — it is the **configurator**, not the source of the quick slots. Authoring one into
+inventory with four plugs changed nothing: the client ignored it, the in-game picker was empty, and
+only the equipped emote played.
 
-```powershell
-python tools\pkg\build_cache.py --plugs 0xBDBB7999   # lanes 0-3, 307 plug(s) each
-python tools\pkg\build_cache.py --slot 14            # 307 items, every one with 0 sockets
-```
+**The live theory is ownership.** The account owns no emotes. An item you hold is owned, and the
+equipped one is the only emote held — which would explain the empty picker and the three dead keys
+with one cause. `state.cosmetics.ignore_plug_ownership` is already on, but it only covers the
+socket-*insert* transaction; it does not make the client's picker show anything.
 
-Four lanes, four `emote_1..4` keys (`up` / `down` / `left` / `right` in
-`resources/default_settings.json`). The emote is the **plug**; the Collection is the item.
+**Next test, settings only, no DLL:** nine emote items are now granted into each character's
+inventory (bucket 41 has ten rows and the equipped emote takes the tenth). If the picker fills up,
+ownership-by-possession is the answer and the collection can then be socketed from the UI — the
+server will accept it, `unrestrictedPlugs` and `ignorePlugOwnership` see to that. If the picker is
+still empty, the answer is collectible unlock flags in the account bank instead.
 
-**The blocker was one line of ours.** `loadout_item_resolver.cpp` required
-`*itemDetail.equipmentSlot >= 0`, so an item with no equipment slot could never be carried at all —
-the Emote Collection was unreachable from authored state no matter how it was written. Lifted, with
-`loadout::kNoEquipmentSlot` (`0xFF`) marking a carried-only row. Nothing can now equip what has no
-slot: the equipped path hands that sentinel to `record_equipment_slot`, whose bound check rejects
-it, and `character_encoder`'s `valid()` rejects `equipped && kNoEquipmentSlot` outright.
+**Ruled out, do not re-derive:** the socket entry list is not the cap — 15,415 of 15,424 items
+report list index 0 with **zero** entries, which is simply the norm; only the 9 subclasses use a
+real list. Bucket 49, with its four slots and its own equipment slot 18, is the **Seasonal
+Artifact** (Gate Lord's Eye, Lantern of Osiris), not emote quick slots.
 
-Shipped: an Emote Collection per character in `inventory`, with Cheer / Slow Clap / Point on
-up/down/left and the character's own class Sit on right (`0x0AD5589A` Hunter, `0x78380468` Titan,
-`0x0203AD93` Warlock — class-matched deliberately, since the pools do not gate by class and a
-wrong-class emote may have no animation). Both `resources/default_settings.json` and the live
-`C:\Sunrise\bin\x64\Sunrise\settings.json` carry it; the live file needs the **new DLL**, because
-the old one rejects the row and fails the whole loadout.
-
-**What one launch decides:** press Up / Down / Left / Right in world. If the log says
-`report_failure("loadout")` the row is malformed; if the character screen is normal and the keys do
-nothing, the Collection is carried but the client reads its quick slots from somewhere else, and
-the next question is whether the game wants it in a *profile* bucket rather than a character one.
+**Still worth keeping:** `loadout_item_resolver.cpp` used to require `*itemDetail.equipmentSlot >= 0`,
+so an item with no equipment slot could not be carried at all. That is lifted, with
+`loadout::kNoEquipmentSlot` (`0xFF`) marking a carried-only row, and it is what any collection-style
+item will need whether or not this one turns out to matter.
 
 **Do not re-derive:** `lookup_item.py` is dead — it hardcoded a record layout, upstream moved the
 cache to format 44, and it then answered "not in this install" **for the weapon and helmet the

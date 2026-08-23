@@ -335,6 +335,24 @@ def main() -> None:
                   f"art {read_field(data, base, detail['gearArtIndex']):>5}")
         print(f"  {shown} item(s)")
 
+    if "--lists" in sys.argv:
+        # The instance publishes socketEntryCount from this table, not from ordinarySocketCount.
+        # An item can declare four sockets and still hand the client one usable lane.
+        wanted = sys.argv[sys.argv.index("--lists") + 1] if len(sys.argv) > \
+            sys.argv.index("--lists") + 1 else ""
+        target = int(wanted, 0) if wanted.lower().startswith("0x") else None
+        histogram: dict[int, int] = {}
+        print(f"\n{'index':>6} {'defHash':>10} {'entries':>8}  (socket entry lists)")
+        for index, (def_hash, def_index, entries, _r, ready) in enumerate(
+                rows(data, blocks, "socketEntryLists", "<IHBBQ")):
+            histogram[entries] = histogram.get(entries, 0) + 1
+            if target is not None and def_hash != target and index != 0:
+                continue
+            if target is None and index >= 8:
+                continue
+            print(f"{def_index:>6} 0x{def_hash:08X} {entries:>8}")
+        print("  entry-count histogram:", dict(sorted(histogram.items())))
+
     if "--plugs" in sys.argv:
         # Which definitions may legally sit in each of one item's socket lanes. This is what
         # separates "an item you equip" from "a plug that fills someone else's socket".
