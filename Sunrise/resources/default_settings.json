@@ -611,27 +611,6 @@
             "plugs": []
           },
           {
-            "instance_soid": "0x400000000000010B",
-            "definition_hash": "0x02E87B13",
-            "level": 0,
-            "quantity": 1,
-            "plugs": []
-          },
-          {
-            "instance_soid": "0x400000000000010C",
-            "definition_hash": "0xAE646F6D",
-            "level": 0,
-            "quantity": 1,
-            "plugs": []
-          },
-          {
-            "instance_soid": "0x400000000000010D",
-            "definition_hash": "0x5EAAD772",
-            "level": 0,
-            "quantity": 1,
-            "plugs": []
-          },
-          {
             "instance_soid": "0x400000000000010E",
             "definition_hash": "0x0AD5589A",
             "level": 0,
@@ -1205,27 +1184,6 @@
             "plugs": []
           },
           {
-            "instance_soid": "0x4000000000000114",
-            "definition_hash": "0x02E87B13",
-            "level": 0,
-            "quantity": 1,
-            "plugs": []
-          },
-          {
-            "instance_soid": "0x4000000000000115",
-            "definition_hash": "0xAE646F6D",
-            "level": 0,
-            "quantity": 1,
-            "plugs": []
-          },
-          {
-            "instance_soid": "0x4000000000000116",
-            "definition_hash": "0x5EAAD772",
-            "level": 0,
-            "quantity": 1,
-            "plugs": []
-          },
-          {
             "instance_soid": "0x4000000000000117",
             "definition_hash": "0x78380468",
             "level": 0,
@@ -1794,27 +1752,6 @@
           {
             "instance_soid": "0x400000000000011C",
             "definition_hash": "0xBDD64DCA",
-            "level": 0,
-            "quantity": 1,
-            "plugs": []
-          },
-          {
-            "instance_soid": "0x400000000000011D",
-            "definition_hash": "0x02E87B13",
-            "level": 0,
-            "quantity": 1,
-            "plugs": []
-          },
-          {
-            "instance_soid": "0x400000000000011E",
-            "definition_hash": "0xAE646F6D",
-            "level": 0,
-            "quantity": 1,
-            "plugs": []
-          },
-          {
-            "instance_soid": "0x400000000000011F",
-            "definition_hash": "0x5EAAD772",
             "level": 0,
             "quantity": 1,
             "plugs": []
