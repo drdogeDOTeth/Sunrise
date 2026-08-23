@@ -1,0 +1,43 @@
+---
+description: Live Sunrise custom-character state, albedo path, and launch discipline
+alwaysApply: true
+---
+
+# Destiny2ProjectSunrise — live memory
+
+Read `HANDOFF.md` before any package write. Root workspace `HANDOFF.md` is stale (`_18`); ignore it.
+Durable status: `docs/CUSTOM_CHARACTER.md`.
+
+## Hard stops
+
+- Upstream Sunrise **is merged** (2026-08-22). Do not `--undo`. Do not reopen geometry, skinning, or the tangent frame (`_22` works).
+- Do **not** run `bind_material_textures.py` (tag rewrite / array append hangs character select).
+- Do **not** run `assign_split_materials.py` (0691 world VS vanished four parts).
+- Do **not** run `assign_armor_vs.py` (off-chest C62/C5B vanished four parts the same way).
+- Do **not** steal a material that is not already on the chest model.
+- Do **not** paint dye tiles (t3–t8) or sandbox 2048 sweeps. Dyes cannot carry unique atlases.
+- Do **not** overwrite `0x80B3611D` with a flat colour.
+- Do **not** saturation-boost the packed atlas (look-alike probe: white pants, no green).
+- Do **not** retry PS `0x81531CBE` or pack another 512.
+- Do **not** start another magenta/green/yellow hook that guesses RT1/RT2. The live dye PS is dumped.
+- Do **not** encode `TEXCOORD2` as the world normal (v16: select dark, world a hole).
+- Do **not** sample Destiny `t2` for material (v17: Scatterhorn designs on the body).
+- Do **not** `--restore` `20260822-150046` (puts tiled UVs back).
+- One launch is scarce. Combine distinguishable tests. Fill `dump/request.txt` (cap 1024) on the same trip.
+- Destiny must be closed to write packages or overwrite the DLL.
+
+## Where we are
+
+**Character select = the Blender character** (v12, user 2026-08-22). Geometry + five-part split + unique GLB albedos.
+
+**Live / restore = `20260822-172401.json`** (86 layers). `0698_25` is in `packages\_reverted_uv_tiles\`. Do not `--restore` 150046.
+
+**Sunrise DLL is hook v18** (`mode=ours`, user-confirmed in destinations). First fully textured custom guardian that holds up in-world. v15 killed the quilt + green-world leak. Do not sample Destiny t2. Do not encode TEXCOORD2. Snapshot `20260822-172401`. Full inventory: `docs/CUSTOM_CHARACTER.md`.
+
+## Next
+
+v18 is the floor. Leftover: stock gloves, bald race head, collapsed necklace UVs. Hang = revert DLL.
+
+## Restore
+
+`python known_good.py --check` / `--restore` (newest snapshot = `20260822-172401`).

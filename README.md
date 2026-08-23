@@ -2,9 +2,10 @@
 
 Destiny 2 Offline Exploration Mod
 
-**This fork (`cosmetics`):** a custom GLB Warlock is in on character select (geometry + five-part
-albedos). Live memory: [`HANDOFF.md`](HANDOFF.md). Status: [`docs/CUSTOM_CHARACTER.md`](docs/CUSTOM_CHARACTER.md).
-Do not `--undo` the mesh. Restore packages with `python tools/pkg/known_good.py --restore`.
+**This fork (`cosmetics`):** a custom GLB Warlock is in on character select and in destinations
+(geometry, five-part albedos, GLB roughness, hook v18). Live memory: [`HANDOFF.md`](HANDOFF.md).
+Status: [`docs/CUSTOM_CHARACTER.md`](docs/CUSTOM_CHARACTER.md). Do not `--undo` the mesh. Restore
+packages with `python tools/pkg/known_good.py --restore` (newest `20260822-172401`).
 
 > This mod installs onto an old build of the game and allows you to play it offline, loading into
 > destinations and exploring them.

@@ -6,10 +6,11 @@ namespace sunrise::client::hooks::custom_albedo {
 
 /**
  * Compiles the RGB albedo pixel shader and attaches DrawIndexed hooks on this context.
- * The dye PS on the custom chest (0x81531EE6) luma-gates unique RGB. This
- * replaces that shader for the five known index ranges only. Writes the
- * dumped G-buffer encode and binds the matching GLB albedo per part
- * (TEXCOORD3, TBN on o1, TEXCOORD0.w on o2). Dumps the live game PS once.
+ * The dye PS luma-gates unique RGB. Replaces that shader on the five exact
+ * index ranges when the select G-buffer (29/24/28) is bound, then restores
+ * the previous PS including class instances. v18 uses GLB roughness on t1
+ * and open AO. Do not sample Destiny t2. v16 TEXCOORD2 is closed.
+ * Dumps the live game PS once.
  * @param device Device that owns the compiled shader.
  * @param context Immediate context whose DrawIndexed vtable is hooked.
  */

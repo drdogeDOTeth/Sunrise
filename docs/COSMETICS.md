@@ -11,7 +11,7 @@ Not all of "custom cosmetics" is equally reachable.
 |---|---|---|
 | Existing ornaments and shaders, applied normally | any plug the game already ships | works upstream, no changes needed |
 | Any plug on any item, regardless of pool or ownership | cross-class ornaments, unowned shaders | **this fork**, see below |
-| Genuinely new art — custom meshes and textures | a model that is not in the game | **in:** Warlock GLB on character select (hook v12, 2026-08-22). In-world lighting still dark. See `CUSTOM_CHARACTER.md` and `HANDOFF.md`. |
+| Genuinely new art — custom meshes and textures | a model that is not in the game | **in:** Warlock GLB on select and in destinations (hook v18, 2026-08-22). See `CUSTOM_CHARACTER.md` and `HANDOFF.md`. |
 
 ## How the game decides what you look like
 

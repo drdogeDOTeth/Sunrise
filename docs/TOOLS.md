@@ -263,8 +263,11 @@ material is fixed. Expected, not a failure.
 ## Custom albedo (draw hook)
 
 Unique RGB cannot ride the chest dye tile. The live path is
-`src/client/hooks/custom_albedo/` — replaces the dye PS on five `(StartIndex, IndexCount)` pairs
-and binds `custom_{tank,mask,necklace,skin,twirl}.png` from the Sunrise artifact directory.
+`src/client/hooks/custom_albedo/` — v18. Replaces the dye PS on five exact
+`(StartIndex, IndexCount)` pairs when the character G-buffer (`29/24/28`) is bound, binds
+`custom_{tank,mask,necklace,skin,twirl}.png` plus `custom_*_mr.png` (GLB roughness) from the
+Sunrise artifact directory, and restores the game PS (including class instances). Do not sample
+Destiny `t2`. Do not subset-match. See `CUSTOM_CHARACTER.md`.
 
 | tool | what it does |
 |---|---|
@@ -277,7 +280,8 @@ and binds `custom_{tank,mask,necklace,skin,twirl}.png` from the Sunrise artifact
 | `bind_material_textures.py` | **Do not run.** Hangs character select. |
 
 PNG sources: `tools/pkg/objs/textures/` (`10_SkinTats_BaseColor.png`, tank, mask, twirl, Plancha).
-Installed copies: `C:\Sunrise\bin\x64\Sunrise\custom_*.png`.
+Installed copies: `C:\Sunrise\bin\x64\Sunrise\custom_*.png` and `custom_*_mr.png`.
+Dye PS dump (keep): `tools/pkg/known_good/live_chest_ps.bin` + `.asm`.
 
 ---
 

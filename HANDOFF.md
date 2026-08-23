@@ -1,8 +1,8 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-22 (**v12 CONFIRMED** on character select). Mesh + unique GLB albedos are in. Do not reopen geometry.
+**Updated:** 2026-08-22 (**v18 CONFIRMED** in destinations). First fully textured custom guardian that holds up in-world. v17’s game-t2 designs are closed.
 
-**Live / restore:** `20260822-172401.json` (86 layers). `0698_25` stays in `packages\_reverted_uv_tiles\`. Do **not** `--restore` `150046` (that puts tiles back). Durable status: `docs/CUSTOM_CHARACTER.md`. Destiny must be closed to write packages or overwrite the DLL.
+**Live / restore:** `20260822-172401.json` (86 layers). `0698_25` stays in `packages\_reverted_uv_tiles\`. Do **not** `--restore` `150046` (that puts tiles back). **Durable status (full inventory):** `docs/CUSTOM_CHARACTER.md`. Destiny must be closed to write packages or overwrite the DLL.
 
 **Target look:** the GLB in Blender. Reference: `tools/pkg/objs/textures/_glb_blender_preview.png`. Warlock only.
 
@@ -12,16 +12,31 @@
 
 **Character select is the Blender character** (user 2026-08-22). Green SkinTats, charcoal tank, black mask, striped pants, sneakers. That is done. Do not colour-probe. Do not pack another 512.
 
-**In-world is not.** Destinations: near-black silhouette. Sprint/jump: body pops smeared-green (dye quilt) then black; clothes glitch in/out. Video: `C:\Users\Round\OneDrive\Pictures\VR content\DestinyTexturesTest.mp4`.
+**In-world (v12):** near-black silhouette. Sprint/jump flashes the dye quilt (that PS *lights* in destinations). Our replace was killing o1/o2.
 
-Most likely: (1) world lighting is stricter about `o1`/`o2` than the select studio — port `live_chest_ps.asm` and only keep our `o0.xyz`; (2) the hook matches LOD-0 `(StartIndex, IndexCount)` only — other LODs/passes fall through to dye PS + live `019b_9` quilt. Do not guess another G-buffer.
+**v13:** two-pass (game PS, then RT0 RGB only). **Subset match is closed** — user-confirmed: as soon as the game loaded, character select was a blown-out gray/white/black mess (3 class cards as empty rectangles). `start=0` UI quads counted as the tank; ALWAYS depth painted albedo over the menu. Do not subset-match again.
+
+**v13b:** two-pass, exact match. User: whole body is the green “SEVEN” quilt (dye PS + packed 512, 0–1 UVs). Log: attach ok, all five parts drew. Second draw did not win RT0 (depth LESS after pass 1). Two-pass is **closed**.
+
+**v14:** v12 single-pass restore. Select/menus/inspect = Blender look (user). In destinations the *whole scene* went neon green/cyan (`LTGtextureBuffersTest.mp4`). HUD stayed clean. Not “just a dark coat” — the 3-target replace leaked into world lighting (same index counts on shadow/light passes) and `PSSetShader(previous, nullptr, 0)` dropped class instances so later draws sampled our skin atlas.
+
+**v15 (user, keep):** Sprint/jump quilt **gone**. Io world was fine. Character is **not** solid black — it looks good standing in / near a light, and is just very hard to see when no lamp is on it (missing ambient / IBL, not a crushed albedo). Distance makes that worse.
+
+**v16 TEXCOORD2 is closed** (user): select went dark/flat; Tower became a solid black silhouette. Do not encode `TEXCOORD2` again. Do not add emission.
+
+**v17 (user):** more visible in the dark — AO/fill worked. **Foreign designs** on the body (hex/scale/marble) were Destiny `t2` (Scatterhorn pack) sampled with our 0–1 UVs. Not the GLB. Closed.
+
+**v18 (user, keep):** stop sampling game t2. `o2.x` = GLB metalRough.g (`custom_*_mr.png`). `o2.y` = 0.5 open AO (GLB has no occlusion map). `o2.z` = 0 (`metallicFactor` is 0). Twirl has no MR → 1×1 roughness 0.55. `mode=ours`. User 2026-08-22: looks good in game; first real fully textured custom guardian. World-hopping to confirm more destinations.
+
+Read: this is the floor. Do not sample Destiny t2 again. Do not retry TEXCOORD2 / two-pass / subset-match / emission. Hang = revert DLL. Leftover: stock gloves, bald race head, collapsed necklace UVs.
 
 | artifact | path |
 |---|---|
 | Status | `docs/CUSTOM_CHARACTER.md` |
-| Hook | `Sunrise/src/client/hooks/custom_albedo/` (**v12**, `mode=parts`) |
+| Hook | `Sunrise/src/client/hooks/custom_albedo/` (**v18**, `mode=ours`) |
 | Dye PS dump | `tools/pkg/known_good/live_chest_ps.bin` + `.asm` |
 | Per-part albedos | `C:\Sunrise\bin\x64\Sunrise\custom_{tank,mask,necklace,skin,twirl}.png` |
+| Per-part roughness | `C:\Sunrise\bin\x64\Sunrise\custom_{tank,mask,necklace,skin}_mr.png` |
 | Snapshot | `tools/pkg/known_good/20260822-172401.json` |
 | Log | `C:\Sunrise\bin\x64\Sunrise\logs\sunrise.log` |
 
@@ -41,12 +56,21 @@ Most likely: (1) world lighting is stricter about `o1`/`o2` than the select stud
 | v10 | guessed `(0.5,0.5,1)` G-buffer | Black. Dump 5772 B ok. |
 | **v11** | dumped encode + 512 quilt on `TEXCOORD3` | **Right colours, smeared.** Encode solved. |
 | **v12** | five GLB albedos + `0698_25` attic’d | **Character select = Blender look.** In-world dark / flicker. |
+| **v13** | two-pass + **subset** match | **Smashed character select** (blown-out UI). Closed. |
+| **v13b** | two-pass, exact match only | **Green quilt on select** (pass 1 only). Closed. |
+| **v14** | v12 single-pass restored | **Select good. World radioactive green.** Closed as installed. |
+| **v15** | G-buffer gate + fortress PS restore | **Keep.** Quilt gone. Hard to see off-lamp, good near lights. |
+| **v16** | `o1` = TEXCOORD2 geometric | **Closed.** Select dark, world solid black. |
+| **v17** | sample game t2 → o2 AO/roughness | **Visible, but Scatterhorn designs.** Closed. |
+| **v18** | GLB roughness on t1 + open AO | **Keep.** First in-world fully textured custom guardian. |
 
 ### Closed package paths
 
 Paint-what-is-already-bound works and is luma-gated. `1CBE` = white slabs, no green. Look-alike boost = white pants. Off-chest steals vanish four parts. `bind_material_textures.py` hangs select. Do not retry any of those.
 
-Leftover: stock gloves, bald race head, collapsed necklace UVs.
+Leftover: stock gloves, bald race head, collapsed necklace UVs. Necklace GLB metallic (B) is unused on purpose (`o2.z = 0`).
+
+**Do not lose:** dye PS `tools/pkg/known_good/live_chest_ps.bin` + `.asm`; snapshot `20260822-172401.json`; live PNGs in `C:\Sunrise\bin\x64\Sunrise\custom_*.png` and `custom_*_mr.png`; GLB at `C:\Chiliz\Destiny2SunriseCharacters\void_4003GasMask.glb`. Full table in `docs/CUSTOM_CHARACTER.md`.
 
 Build: `.\build.ps1`. Install: `.\install.ps1`. Hang = revert `steam_api64.dll.original`.
 

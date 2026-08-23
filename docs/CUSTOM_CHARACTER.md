@@ -1,61 +1,176 @@
 # Custom character — what is in, and what is next
 
-Live memory and launch discipline live in [`HANDOFF.md`](../HANDOFF.md). This file is the durable
-status so a new session does not have to reconstruct the last two weeks.
+Live memory and launch discipline: [`HANDOFF.md`](../HANDOFF.md).
+Cursor rule: `.cursor/rules/sunrise-handoff.mdc`.
+Root `HANDOFF.md` is stale (`_18`); ignore it.
 
-**Target:** `void_4003GasMask.glb` on the playable Warlock, looking like
-`tools/pkg/objs/textures/_glb_blender_preview.png` — green SkinTats graffiti, charcoal tank, black
-gas mask, twirl, teal necklace. Not a dye tint.
+**Target:** `C:\Chiliz\Destiny2SunriseCharacters\void_4003GasMask.glb` on the playable Warlock,
+looking like `tools/pkg/objs/textures/_glb_blender_preview.png` — green SkinTats graffiti, charcoal
+tank, black gas mask, twirl, teal necklace. Not a dye tint.
 
-**Proven (user-confirmed 2026-08-22):** geometry, skinning, tangent frame, five-part split, and
-**unique GLB albedos on character select** (hook v12). Snapshot `20260822-172401.json`.
+**Live / restore:** snapshot `20260822-172401.json` (86 layers). Hook **v18** (`mode=ours`).
+User 2026-08-22: looks good in destinations — first fully textured custom guardian that holds
+up in-world. Destiny must be closed to write packages or overwrite the DLL.
 
 ---
 
-## How the look actually ships
+## Proven (do not reopen)
+
+User-confirmed 2026-08-22:
+
+| what | status |
+|---|---|
+| Geometry, skinning, tangent frame (`_22`) | in. Do not `--undo`. |
+| Five-part split on the Scatterhorn chest | in (`037c_28` / `037d_26`) |
+| 0–1 UVs | in (`0698_24`). Tiled `0698_25` is attic’d. |
+| Unique GLB albedos on **character select / inspect / menus** | in (v12, still true) |
+| Sprint / jump dye-quilt flicker | **gone** (v15). Do not undo the G-buffer gate or PS restore. |
+| Whole-world neon green | **gone** (v15). That was a leak, not “Io is broken.” |
+| Off-lamp body readable (not a silhouette) | **in** (v17 fill, kept in v18) |
+| Foreign hex/scale designs on the body | those were Destiny `t2` (v17). v18 does not sample it. |
+
+v18 is the live floor (user: looks good while world-hopping). SkinTats graffiti is ours;
+hex/scale marble was Destiny `t2` and is gone.
+
+---
+
+## How the look ships
 
 Destiny will not carry five unique atlases through the chest dye material. The bound slot is one
 512 BC7 (`0x80B3611D`) and pixel shader `0x81531EE6` luma-gates whatever you put there. Painting
-that tile, swapping to `0x81531CBE`, and stealing off-chest materials are all **closed**.
+that tile, swapping to `0x81531CBE`, and stealing off-chest materials are **closed**.
 
-The working path is a **draw-time pixel-shader replace** on the five custom index ranges only:
+The working path is a **draw-time pixel-shader replace** on five exact index ranges:
 
 `Sunrise/src/client/hooks/custom_albedo/`
 
 | | |
 |---|---|
-| Identify | `DrawIndexed` / `DrawIndexedInstanced` vtable 12 / 20, exact `(StartIndex, IndexCount)` |
-| Shader | `ps_5_0`, full ISGN of the live dye PS |
-| Albedo | per-part PNG on `TEXCOORD3.xy` (tank/mask/necklace/skin 2048², twirl 512²) |
-| Normal | `o1.xyz = saturate(normalize(TEXCOORD0.xyz) * 0.375 + 0.5)`, `o1.w = 0` |
-| Material | `o2 = (0.5, 0.25, 0.0, TEXCOORD0.w)`, `o0.w = 0.2` |
-| Files | `C:\Sunrise\bin\x64\Sunrise\custom_{tank,mask,necklace,skin,twirl}.png` |
+| Identify | `DrawIndexed` / `DrawIndexedInstanced` vtable 12 / 20; **exact** `(StartIndex, IndexCount)` only |
+| Gate | only replace when RTs are `nrt>=3 f0=29 f1=24 f2=28` (character G-buffer). Skip `nrt=1 f0=26` (R11G11B10 lighting) — that skip killed the sprint quilt and the green world |
+| Restore | PS + class instances + SRV 0–15 + samplers + blend. `PSSetShader(prev, nullptr, 0)` leaked v14 |
+| `o0` | GLB albedo on `TEXCOORD3.xy`, `o0.w = 0.2` |
+| `o1` | `saturate(normalize(TEXCOORD0.xyz) * 0.375 + 0.5)`, `o1.w = 0`. **Not** `TEXCOORD2` |
+| `o2` | `x` = GLB metalRough.g, `y` = 0.5 (open AO), `z` = 0, `w` = `TEXCOORD0.w` |
 
-The live dye PS dump and disassembly are `tools/pkg/known_good/live_chest_ps.bin` / `.asm`
-(copies also under `tools/pkg/objs/`, which is gitignored).
-`TEXCOORD3` is the mesh UV. `TEXCOORD0..2` are TBN. Flat normal reconstruct is **`TEXCOORD0.xyz`**
-(`worldN = v0*nz + v1*nx + v2*ny`).
+### Exact draw match
 
-v3 magenta (bright constants on every target) was the only write that showed until that encode
-was matched. Do not guess RT1/RT2 again.
+| part | start | count | albedo | roughness |
+|---|---|---|---|---|
+| tank | 0 | 74358 | `custom_tank.png` (2048) | `custom_tank_mr.png` |
+| mask | 74358 | 11574 | `custom_mask.png` (2048) | `custom_mask_mr.png` |
+| necklace | 85932 | 3570 | `custom_necklace.png` (2048) | `custom_necklace_mr.png` |
+| skin | 89502 | 42666 | `custom_skin.png` (2048) | `custom_skin_mr.png` |
+| twirl | 132168 | 6036 | `custom_twirl.png` (512) | none — 1×1 G=0.55 |
+
+Total mesh indices: 138204. LOD1+ parts were zeroed at inject.
+
+### GLB material map (do not re-guess)
+
+Source: `void_4003GasMask.glb`. Extract: `python tools/pkg/glb_textures.py --extract`.
+
+| GLB material | part | base colour | metalRough | metallicFactor |
+|---|---|---|---|---|
+| GLSLShader85 | tank | `01_BlackTankTopshader_BaseColor.png` | `02_…_Roughness.png` | 0 |
+| GLSLShader66 | mask | `04_GasMaskshader_BaseColor.png` | `05_…_Roughness.png` | 0 |
+| GLSLShader60 | necklace | `07_Plancha_BaseColor.png` | `08_Plancha_Metallic-Plancha_Roughness.png` | default (B is metal) |
+| GLSLShader13 | skin | `10_SkinTats_BaseColor.png` | `11_SkinTats__Roughness.png` | 0 |
+| GLSLShader22 | twirl | `13_Twirlshader_BaseColor.png` | none | 0, roughness 0.55 |
+
+glTF metalRough: **G = roughness**, R unused (255), B = metallic. v18 reads **G only** and writes
+`o2.z = 0` because four parts have `metallicFactor = 0`. The GLB has **no occlusion map** — open
+AO (`o2.y = 0.5`) is correct, not a missing texture.
 
 ---
 
-## Packages
+## Packages (game reads these)
+
+`C:\Sunrise\packages\`
 
 | layer | role |
 |---|---|
-| `037c_28` | five-part split geometry (verts byte-identical to `_22`) |
-| `037d_26` | all five parts name chest-native `0x80EFA1DC` |
-| `019b_9` | packed 512 still sitting on the dye tile (unused while the hook fires) |
-| `0698_24` | 0–1 UVs. **`0698_25` (tiles) is attic’d** in `packages\_reverted_uv_tiles\` |
+| `w64_sandbox_037c_28.pkg` | five-part split geometry (verts byte-identical to `_22`) |
+| `w64_sandbox_037d_26.pkg` | all five parts name chest-native `0x80EFA1DC` |
+| `w64_sandbox_0698_24.pkg` | 0–1 UVs |
+| `w64_sandbox_019b_9.pkg` | packed 512 still on the dye tile (unused while the hook fires) |
 
-Restore: `python tools/pkg/known_good.py --restore` (newest = `20260822-172401`).
-Do **not** restore `20260822-150046` — that puts `0698_25` back.
+`0698_25` (tiles) lives in `C:\Sunrise\packages\_reverted_uv_tiles\`.
+Do **not** `--restore` `20260822-150046` — that puts tiles back.
+
+The `.glb` never goes in the game folder. Inject scripts write the `.pkg` files.
 
 ---
 
-## Closed paths (do not retry)
+## Files you must not lose
+
+Game (live):
+
+| path | what |
+|---|---|
+| `C:\Sunrise\bin\x64\steam_api64.dll` | hook v18 |
+| `C:\Sunrise\bin\x64\steam_api64.dll.original` | hang revert |
+| `C:\Sunrise\bin\x64\Sunrise\custom_{tank,mask,necklace,skin,twirl}.png` | albedos |
+| `C:\Sunrise\bin\x64\Sunrise\custom_{tank,mask,necklace,skin}_mr.png` | GLB roughness |
+| `C:\Sunrise\bin\x64\Sunrise\logs\sunrise.log` | attach `mode=ours`, skip `f0=26` |
+| `C:\Sunrise\destiny2.exe` | launch |
+
+Repo (durable):
+
+| path | what |
+|---|---|
+| `tools/pkg/known_good/20260822-172401.json` | package snapshot |
+| `tools/pkg/known_good/live_chest_ps.bin` + `.asm` | dumped dye PS `0x81531EE6` (5772 B) |
+| `tools/pkg/objs/textures/*_BaseColor.png` + `*_Roughness.png` | GLB extracts |
+| `tools/pkg/glb_textures.py` | re-extract from the GLB |
+| `Sunrise/src/client/hooks/custom_albedo/` | hook source |
+
+---
+
+## Live dye PS (`0x81531EE6`) — do not re-derive
+
+`ps_5_0`. Mesh UV is **`TEXCOORD3`**. TBN is `TEXCOORD0..2`.
+
+```
+worldN = v0*nz + v1*nx + v2*ny     // flat n_map → TEXCOORD0.xyz
+o1.xyz = saturate(worldN * ~0.375 + 0.5)
+o1.w   = ~0.33 if o0.w > 0.5 else 0
+o2.x   = roughness  (must stay > 0.05)
+o2.y   = 0.5 * sat(t2.r)           // AO. We write 0.5 (open)
+o2.z   = metallic * dye mask
+o2.w   = TEXCOORD0.w
+o0.w   = packed id; fallback ~0.2
+```
+
+Select G-buffer: `nrt=3 f0=29 f1=24 f2=28` (R8G8B8A8_UNORM_SRGB / R10G10B10A2 / R8G8B8A8_UNORM).
+World lighting pass we must **not** write: `nrt=1 f0=26`.
+
+---
+
+## Hook versions (do not repeat a closed one)
+
+| ver | what | result |
+|---|---|---|
+| v1–v2 | sample / magenta-if-dark | Black |
+| **v3** | Bright constants on every SV_Target | **Magenta.** Only early write that showed. |
+| v4–v7 | colour on RT0, zeros/wrong extras | Black |
+| v8 | 512 B snprintf HLSL | compile fail; cowprint = hook off |
+| v9 | game PS then RT0-only | Black (other RTs zeroed) |
+| v10 | guessed `(0.5,0.5,1)` G-buffer | Black. Dump 5772 B ok. |
+| **v11** | dumped encode + 512 quilt on `TEXCOORD3` | **Right colours, smeared.** |
+| **v12** | five GLB albedos + `0698_25` attic’d | **Select = Blender.** |
+| **v13** | two-pass + **subset** match | **Smashed select.** Closed. |
+| **v13b** | two-pass, exact match | **Green quilt on select.** Closed. |
+| **v14** | v12 single-pass, no restore | **World radioactive green.** Closed. |
+| **v15** | G-buffer gate + fortress restore | **Quilt gone.** Hard to see off-lamp. |
+| **v16** | `o1` = TEXCOORD2 | **Closed.** Select dark, world a hole. |
+| **v17** | sample Destiny t2 for o2 | **Visible, Scatterhorn designs.** Closed. |
+| **v18** | GLB roughness + open AO | installed |
+
+Do not add emission. Cloudstrike already proves real emissives work; the coat is charcoal.
+
+---
+
+## Closed package paths (do not retry)
 
 - `bind_material_textures.py` — hang at character select
 - `assign_split_materials.py` / `assign_armor_vs.py` — vanish four parts
@@ -63,40 +178,32 @@ Do **not** restore `20260822-150046` — that puts `0698_25` back.
 - Dye tiles t3–t8, saturation-boost, another 512 pack
 - PS `0x81531CBE`
 - `--undo` of the mesh
-- Colour-probe hooks that guess the G-buffer
+- Colour-probe hooks that guess RT1/RT2
+- Subset-match index ranges (`start=0` UI = tank)
+- Two-pass (game PS then our RT0)
+- `TEXCOORD2` as the world normal
+- Sampling Destiny `t2` for AO/roughness
 
 ---
 
 ## Still open
 
-**In-world lighting (user 2026-08-22, video `DestinyTexturesTest.mp4`).** Character select is the
-Blender look. In destinations the body is a near-black silhouette. Sprint/jump pops green (often
-the old quilt smear) then back to black; clothes appear to glitch in and out.
-
-Most likely:
-
-1. World deferred lighting is stricter about `o1`/`o2` than the select studio. Our material
-   constants are a flat-normal approximation, not a port of `live_chest_ps.asm`.
-2. The hook matches **LOD-0 counts only**. Other LODs / motion passes miss and fall through to the
-   dye PS + live `019b_9` quilt — that is the smeared-green flash.
-3. Black clothes (tank, pants) * a rejected lighting term = a silhouette, so parts look like they
-   vanish.
-
-Next: port more of the dumped dye PS for `o1`/`o2` (keep our albedo on `o0.xyz`), and match every
-LOD range that draws these parts. Do not pack another 512. Do not guess another G-buffer.
-
-**Leftover cosmetics:** stock gloves over custom hands; bald race head over the gas mask.
-Necklace UVs on the mesh are collapsed (`u` 0.817–0.859, `v` ~0.410).
+1. **Leftover cosmetics:** stock gloves over custom hands; bald race head over the gas mask.
+   Necklace UVs on the mesh are collapsed (`u` 0.817–0.859, `v` ~0.410).
+2. Necklace metallic channel exists in the GLB (`08_…` B) but v18 writes `o2.z = 0` on purpose.
+3. Lighting can still be refined without reopening closed levers. Direct lamps already work (v15).
 
 ---
 
-## Build / install
+## Build / restore
 
 Destiny closed.
 
 ```powershell
 .\build.ps1
 .\install.ps1
+python tools/pkg/known_good.py --check
+python tools/pkg/known_good.py --restore    # newest = 20260822-172401
 ```
 
-Hang: copy `C:\Sunrise\bin\x64\steam_api64.dll.original` back over `steam_api64.dll`.
+Hang: copy `C:\Sunrise\bin\x64\steam_api64.dll.original` over `steam_api64.dll`.

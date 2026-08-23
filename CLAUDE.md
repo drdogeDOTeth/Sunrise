@@ -5,8 +5,8 @@ This fork adds custom-appearance work: any ornament or shader on any item, and a
 character on the Warlock.
 
 **Live status:** [`HANDOFF.md`](HANDOFF.md) and [`docs/CUSTOM_CHARACTER.md`](docs/CUSTOM_CHARACTER.md).
-Character select is the Blender look (hook v12, snapshot `20260822-172401`). Do not `--undo` the
-mesh. Do not restore snapshot `150046`.
+Character select is the Blender look. Hook **v18** (GLB roughness + open AO). Snapshot
+`20260822-172401`. Do not `--undo` the mesh. Do not restore snapshot `150046`.
 
 Upstream is on the `upstream` remote. Our work lives on the `cosmetics` branch.
 
@@ -53,6 +53,7 @@ lives at `C:\Sunrise`.
 | `C:\Sunrise\destiny2.exe` | game entry point |
 | `C:\Sunrise\bin\x64\steam_api64.dll` | **our build goes here** |
 | `C:\Sunrise\bin\x64\Sunrise\settings.json` | live config, seeded from the bundled default on first run |
+| `C:\Sunrise\bin\x64\Sunrise\custom_*.png` | GLB albedos + `custom_*_mr.png` roughness |
 | `C:\Sunrise\packages\*.pkg` | Tiger content packages (read-only to Sunrise) |
 
 `settings.json` is read at startup and needs no rebuild to change. It is seeded from
@@ -88,8 +89,8 @@ What gates appearance is not rendering but *permission*. See `docs/COSMETICS.md`
 
 ## Where this fork is going
 
-Custom GLB on the playable Warlock. Geometry, skinning, and unique albedos are **in** on character
-select. See `docs/CUSTOM_CHARACTER.md`.
+Custom GLB on the playable Warlock. Geometry, skinning, unique albedos, and in-world lighting
+that is no longer a silhouette are **in**. See `docs/CUSTOM_CHARACTER.md` (the durable inventory).
 
 Established:
 
@@ -97,14 +98,14 @@ Established:
 - Ornament model replacement works.
 - Tiger `.pkg` writer exists (`tools/pkg/`) and written layers load in game.
 - Custom mesh is injected on the Scatterhorn chest draw (`037c_28` / `037d_26` / `0698_24`).
-- Unique RGB cannot ride the dye tile. Draw hook `custom_albedo` (v12) binds the five GLB albedos.
+- Unique RGB cannot ride the dye tile. Draw hook `custom_albedo` (**v18**) binds five GLB albedos
+  plus GLB roughness. G-buffer gate + full PS restore. Do not sample Destiny `t2`. Do not encode
+  `TEXCOORD2`.
 
 Remaining:
 
-1. **In-world lighting** — destinations render a black silhouette; sprint/jump flickers. Port the
-   dumped dye PS for `o1`/`o2`; match non-LOD0 draws.
-2. Stock gloves and the bald race head still overlay the custom mesh.
-3. Necklace UVs are collapsed on the mesh.
+1. Stock gloves and the bald race head still overlay the custom mesh.
+2. Necklace UVs are collapsed on the mesh.
 
 ## Contributing back
 

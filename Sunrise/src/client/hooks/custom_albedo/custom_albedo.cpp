@@ -6,12 +6,21 @@
  * Live dye PS (objs/live_chest_ps.asm) contract:
  * - TEXCOORD3.xy is the mesh UV. TEXCOORD0..2 are TBN.
  * - Flat n_map (0,0,1) → worldN = TEXCOORD0.xyz (v0*nz + v1*nx + v2*ny).
+ * - v16 TEXCOORD2 is closed: select went dark, world went solid black.
  * - o1.xyz = saturate(worldN * ~0.375 + 0.5). o1.w is 0 or ~0.33, never 1.
- * - o2.w = TEXCOORD0.w. o0.w fallback is ~0.2.
+ * - o2.x = GLB metalRough.g (must stay > 0.05). o2.y = 0.5 (open AO — the
+ *   GLB has no occlusion map). v17 sampled Destiny t2 and stamped Scatterhorn
+ *   designs onto the body. Do not sample game t2 again. o2.z = 0 (GLB
+ *   metallicFactor is 0 on four parts). o2.w = TEXCOORD0.w.
+ * - o0.w fallback is ~0.2.
  *
- * v11 proved the encode: GLB colours showed, smeared because one 512 quilt
- * was sampled with 0–1 UVs. v12 binds the five GLB albedos per part.
- * Only t0/s0 are replaced; game t1+ stay bound.
+ * v12/v14 is the Blender look on character select. v13 two-pass left the dye
+ * quilt on screen (second draw never won RT0). Stay single-pass.
+ *
+ * v14 also wrote this 3-target PS into destination shadow/lighting draws of
+ * the same index counts, and restored the game PS with no class instances.
+ * World went SkinTats-green. v15 only replaces the select G-buffer layout
+ * (29/24/28) and puts the previous PS / SRVs / samplers / blend back.
  */
 
 #include "custom_albedo.h"
@@ -49,15 +58,18 @@ struct Part {
     UINT count{};
     const char* name{};
     const wchar_t* file{};
+    const wchar_t* material{};
 };
 
 constexpr std::array<Part, 5> kParts{{
-    {0, 74358, "tank", L"\\custom_tank.png"},
-    {74358, 11574, "mask", L"\\custom_mask.png"},
-    {85932, 3570, "necklace", L"\\custom_necklace.png"},
-    {89502, 42666, "skin", L"\\custom_skin.png"},
-    {132168, 6036, "twirl", L"\\custom_twirl.png"},
+    {0, 74358, "tank", L"\\custom_tank.png", L"\\custom_tank_mr.png"},
+    {74358, 11574, "mask", L"\\custom_mask.png", L"\\custom_mask_mr.png"},
+    {85932, 3570, "necklace", L"\\custom_necklace.png", L"\\custom_necklace_mr.png"},
+    {89502, 42666, "skin", L"\\custom_skin.png", L"\\custom_skin_mr.png"},
+    {132168, 6036, "twirl", L"\\custom_twirl.png", nullptr},
 }};
+
+constexpr UINT kMeshIndices = 138204;
 
 struct GpuImage {
     ID3D11Texture2D* texture{};
@@ -66,6 +78,7 @@ struct GpuImage {
 
 constexpr char kShaderSource[] = R"(
 Texture2D Atlas : register(t0);
+Texture2D Material : register(t1);
 SamplerState Samp : register(s0);
 
 struct Input {
@@ -89,17 +102,47 @@ Output main(Input input)
     Output output;
     const float3 color = Atlas.SampleLevel(Samp, input.uv.xy, 0).rgb;
     output.albedo = float4(color, 0.2);
-
-    // Dye PS TBN: worldN = v0*nz + v1*nx + v2*ny. Flat map => TEXCOORD0.xyz.
     const float3 worldN = normalize(input.tangent.xyz);
     output.encodedNormal = float4(saturate(worldN * 0.375 + 0.5), 0.0);
-    output.material = float4(0.5, 0.25, 0.0, input.tangent.w);
+    const float roughness = Material.SampleLevel(Samp, input.uv.xy, 0).g;
+    output.material = float4(max(roughness, 0.051), 0.5, 0.0, input.tangent.w);
     return output;
 }
 )";
 
 constexpr UINT kSamplerSlots = 8;
+constexpr UINT kSrvSlots = 16;
+constexpr UINT kClassInstances = 256;
 constexpr UINT kRenderTargets = D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT;
+constexpr UINT kGBufferAlbedo = 29;   // R8G8B8A8_UNORM_SRGB
+constexpr UINT kGBufferNormal = 24;   // R10G10B10A2_UNORM
+constexpr UINT kGBufferMaterial = 28; // R8G8B8A8_UNORM
+constexpr UINT kMaxTargetLogs = 12;
+constexpr UINT kMaxSkipLogs = 12;
+
+struct BoundTargets {
+    UINT bound{};
+    UINT formats[3]{};
+    UINT hasDepth{};
+};
+
+struct SavedPs {
+    ID3D11PixelShader* shader{};
+    ID3D11ClassInstance* instances[kClassInstances]{};
+    UINT instanceCount{kClassInstances};
+    ID3D11SamplerState* samplers[kSamplerSlots]{};
+    ID3D11ShaderResourceView* srvs[kSrvSlots]{};
+    ID3D11BlendState* blend{};
+    FLOAT blendFactor[4]{};
+    UINT sampleMask{};
+};
+
+template <typename Interface> void release_com(Interface*& object) noexcept {
+    if (object != nullptr) {
+        object->Release();
+        object = nullptr;
+    }
+}
 
 struct PsRecord {
     ID3D11PixelShader* shader{};
@@ -113,14 +156,21 @@ ID3D11PixelShader* g_shader{};
 ID3D11SamplerState* g_sampler{};
 ID3D11BlendState* g_blend{};
 std::array<GpuImage, kParts.size()> g_images{};
+std::array<GpuImage, kParts.size()> g_materials{};
 std::uint32_t g_loggedParts{};
+std::uint32_t g_loggedMisses{};
 bool g_loggedTargets{};
 bool g_loggedDepthOnly{};
 bool g_dumpedPs{};
+std::array<UINT64, kMaxTargetLogs> g_seenTargetKeys{};
+UINT g_seenTargetCount{};
+UINT g_loggedSkips{};
 SRWLOCK g_psLock{SRWLOCK_INIT};
 std::vector<PsRecord> g_pixelShaders{};
 
 [[nodiscard]] const Part* match(UINT start, UINT count) noexcept {
+    // Exact pairs only. v13 subset-match treated start=0 UI quads as the tank
+    // and smashed character select (ALWAYS depth + RT0 RGB).
     for (const Part& part : kParts) {
         if (part.start == start && part.count == count) {
             return &part;
@@ -129,18 +179,19 @@ std::vector<PsRecord> g_pixelShaders{};
     return nullptr;
 }
 
-void note_first(const Part& part, UINT start, UINT count) noexcept {
-    const std::uint32_t bit = 1u << static_cast<std::uint32_t>(&part - kParts.data());
-    if ((g_loggedParts & bit) != 0) {
+void note_miss(UINT start, UINT count) noexcept {
+    if (g_loggedMisses >= 16 || count == 0) {
         return;
     }
-    g_loggedParts |= bit;
+    const UINT end = start + count;
+    if (start >= kMeshIndices || end <= start) {
+        return;
+    }
+    ++g_loggedMisses;
     std::array<char, 160> line{};
     const int written = std::snprintf(line.data(),
                                       line.size(),
-                                      "ev=custom_albedo stage=draw part=%s start=%u count=%u "
-                                      "result=ok",
-                                      part.name,
+                                      "ev=custom_albedo stage=miss start=%u count=%u",
                                       start,
                                       count);
     if (written > 0) {
@@ -150,31 +201,107 @@ void note_first(const Part& part, UINT start, UINT count) noexcept {
     }
 }
 
-[[nodiscard]] UINT note_targets(ID3D11DeviceContext* context) noexcept {
+void note_first(const Part& part, UINT start, UINT count, const BoundTargets& targets) noexcept {
+    const std::uint32_t bit = 1u << static_cast<std::uint32_t>(&part - kParts.data());
+    if ((g_loggedParts & bit) != 0) {
+        return;
+    }
+    g_loggedParts |= bit;
+    std::array<char, 192> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=custom_albedo stage=draw part=%s start=%u count=%u "
+                                      "nrt=%u f0=%u f1=%u f2=%u result=ok",
+                                      part.name,
+                                      start,
+                                      count,
+                                      targets.bound,
+                                      targets.formats[0],
+                                      targets.formats[1],
+                                      targets.formats[2]);
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         std::string_view(line.data(), static_cast<std::size_t>(written)));
+    }
+}
+
+void capture_ps(ID3D11DeviceContext* context, SavedPs& saved) noexcept {
+    saved.instanceCount = kClassInstances;
+    context->PSGetShader(&saved.shader, saved.instances, &saved.instanceCount);
+    context->PSGetSamplers(0, kSamplerSlots, saved.samplers);
+    context->PSGetShaderResources(0, kSrvSlots, saved.srvs);
+    context->OMGetBlendState(&saved.blend, saved.blendFactor, &saved.sampleMask);
+}
+
+void restore_ps(ID3D11DeviceContext* context, SavedPs& saved) noexcept {
+    context->PSSetShader(saved.shader, saved.instances, saved.instanceCount);
+    context->PSSetSamplers(0, kSamplerSlots, saved.samplers);
+    context->PSSetShaderResources(0, kSrvSlots, saved.srvs);
+    context->OMSetBlendState(saved.blend, saved.blendFactor, saved.sampleMask);
+}
+
+void release_saved(SavedPs& saved) noexcept {
+    release_com(saved.shader);
+    for (UINT i = 0; i < saved.instanceCount && i < kClassInstances; ++i) {
+        release_com(saved.instances[i]);
+    }
+    for (ID3D11SamplerState*& sampler : saved.samplers) {
+        release_com(sampler);
+    }
+    for (ID3D11ShaderResourceView*& srv : saved.srvs) {
+        release_com(srv);
+    }
+    release_com(saved.blend);
+}
+
+[[nodiscard]] BoundTargets inspect_targets(ID3D11DeviceContext* context) noexcept {
+    BoundTargets targets{};
     ID3D11RenderTargetView* views[kRenderTargets]{};
     ID3D11DepthStencilView* depth = nullptr;
     context->OMGetRenderTargets(kRenderTargets, views, &depth);
-    UINT formats[kRenderTargets]{};
-    UINT bound = 0;
     for (UINT slot = 0; slot < kRenderTargets; ++slot) {
         if (views[slot] == nullptr) {
             continue;
         }
         D3D11_RENDER_TARGET_VIEW_DESC description{};
         views[slot]->GetDesc(&description);
-        formats[slot] = static_cast<UINT>(description.Format);
-        ++bound;
+        if (slot < 3) {
+            targets.formats[slot] = static_cast<UINT>(description.Format);
+        }
+        ++targets.bound;
         views[slot]->Release();
     }
-    const UINT hasDepth = depth != nullptr ? 1u : 0u;
+    targets.hasDepth = depth != nullptr ? 1u : 0u;
     if (depth != nullptr) {
         depth->Release();
     }
-    const bool shouldLog = bound == 0 ? !g_loggedDepthOnly : !g_loggedTargets;
-    if (!shouldLog) {
-        return bound;
+    return targets;
+}
+
+[[nodiscard]] bool is_character_gbuffer(const BoundTargets& targets) noexcept {
+    return targets.bound >= 3 && targets.formats[0] == kGBufferAlbedo
+        && targets.formats[1] == kGBufferNormal && targets.formats[2] == kGBufferMaterial;
+}
+
+[[nodiscard]] UINT64 target_key(const BoundTargets& targets) noexcept {
+    return (static_cast<UINT64>(targets.bound) << 48) | (static_cast<UINT64>(targets.hasDepth) << 40)
+        | (static_cast<UINT64>(targets.formats[0]) << 24)
+        | (static_cast<UINT64>(targets.formats[1]) << 12) | targets.formats[2];
+}
+
+void note_targets(const BoundTargets& targets) noexcept {
+    const UINT64 key = target_key(targets);
+    for (UINT i = 0; i < g_seenTargetCount; ++i) {
+        if (g_seenTargetKeys[i] == key) {
+            return;
+        }
     }
-    if (bound == 0) {
+    if (g_seenTargetCount >= g_seenTargetKeys.size()) {
+        return;
+    }
+    g_seenTargetKeys[g_seenTargetCount++] = key;
+    if (targets.bound == 0) {
         g_loggedDepthOnly = true;
     } else {
         g_loggedTargets = true;
@@ -184,23 +311,38 @@ void note_first(const Part& part, UINT start, UINT count) noexcept {
                                       line.size(),
                                       "ev=custom_albedo stage=targets nrt=%u "
                                       "f0=%u f1=%u f2=%u depth=%u",
-                                      bound,
-                                      formats[0],
-                                      formats[1],
-                                      formats[2],
-                                      hasDepth);
+                                      targets.bound,
+                                      targets.formats[0],
+                                      targets.formats[1],
+                                      targets.formats[2],
+                                      targets.hasDepth);
     if (written > 0) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::info,
                          std::string_view(line.data(), static_cast<std::size_t>(written)));
     }
-    return bound;
 }
 
-template <typename Interface> void release_com(Interface*& object) noexcept {
-    if (object != nullptr) {
-        object->Release();
-        object = nullptr;
+void note_skip_rt(const Part& part, const BoundTargets& targets) noexcept {
+    if (g_loggedSkips >= kMaxSkipLogs) {
+        return;
+    }
+    ++g_loggedSkips;
+    std::array<char, 192> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=custom_albedo stage=skip reason=rt part=%s "
+                                      "nrt=%u f0=%u f1=%u f2=%u depth=%u",
+                                      part.name,
+                                      targets.bound,
+                                      targets.formats[0],
+                                      targets.formats[1],
+                                      targets.formats[2],
+                                      targets.hasDepth);
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         std::string_view(line.data(), static_cast<std::size_t>(written)));
     }
 }
 
@@ -320,12 +462,42 @@ void dump_game_ps(ID3D11PixelShader* shader) noexcept {
     return copied;
 }
 
+[[nodiscard]] bool upload_image(ID3D11Device* device,
+                                const std::vector<std::uint32_t>& pixels,
+                                UINT width,
+                                UINT height,
+                                DXGI_FORMAT format,
+                                GpuImage& image) noexcept {
+    D3D11_TEXTURE2D_DESC description{};
+    description.Width = width;
+    description.Height = height;
+    description.MipLevels = 1;
+    description.ArraySize = 1;
+    description.Format = format;
+    description.SampleDesc.Count = 1;
+    description.Usage = D3D11_USAGE_IMMUTABLE;
+    description.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    const D3D11_SUBRESOURCE_DATA initial{pixels.data(), width * 4, 0};
+    return SUCCEEDED(device->CreateTexture2D(&description, &initial, &image.texture))
+        && image.texture != nullptr
+        && SUCCEEDED(device->CreateShaderResourceView(image.texture, nullptr, &image.view))
+        && image.view != nullptr;
+}
+
 [[nodiscard]] bool create_images(ID3D11Device* device) noexcept {
     for (std::size_t index = 0; index < kParts.size(); ++index) {
         std::vector<std::uint32_t> pixels;
         UINT width = 0;
         UINT height = 0;
-        if (!load_png(kParts[index].file, pixels, width, height)) {
+        UINT albedoWidth = 0;
+        UINT albedoHeight = 0;
+        if (!load_png(kParts[index].file, pixels, albedoWidth, albedoHeight)
+            || !upload_image(device,
+                             pixels,
+                             albedoWidth,
+                             albedoHeight,
+                             DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+                             g_images[index])) {
             std::array<char, 128> line{};
             const int written = std::snprintf(line.data(),
                                               line.size(),
@@ -338,31 +510,33 @@ void dump_game_ps(ID3D11PixelShader* shader) noexcept {
             }
             return false;
         }
-        D3D11_TEXTURE2D_DESC description{};
-        description.Width = width;
-        description.Height = height;
-        description.MipLevels = 1;
-        description.ArraySize = 1;
-        description.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
-        description.SampleDesc.Count = 1;
-        description.Usage = D3D11_USAGE_IMMUTABLE;
-        description.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        const D3D11_SUBRESOURCE_DATA initial{pixels.data(), width * 4, 0};
-        GpuImage& image = g_images[index];
-        if (FAILED(device->CreateTexture2D(&description, &initial, &image.texture))
-            || image.texture == nullptr
-            || FAILED(device->CreateShaderResourceView(image.texture, nullptr, &image.view))
-            || image.view == nullptr) {
+        pixels.clear();
+        width = 0;
+        height = 0;
+        const wchar_t* material = kParts[index].material;
+        const bool loaded = material != nullptr && load_png(material, pixels, width, height);
+        if (!loaded) {
+            pixels.assign(1, 0xFF008DFF);
+            width = 1;
+            height = 1;
+        }
+        if (!upload_image(device,
+                          pixels,
+                          width,
+                          height,
+                          DXGI_FORMAT_R8G8B8A8_UNORM,
+                          g_materials[index])) {
             return false;
         }
-        std::array<char, 160> line{};
+        std::array<char, 192> line{};
         const int written = std::snprintf(line.data(),
                                           line.size(),
                                           "ev=custom_albedo stage=atlas result=ok part=%s "
-                                          "w=%u h=%u source=png",
+                                          "w=%u h=%u source=png material=%s",
                                           kParts[index].name,
-                                          width,
-                                          height);
+                                          albedoWidth,
+                                          albedoHeight,
+                                          loaded ? "glb" : "default");
         if (written > 0) {
             core::log::write(core::log::Channel::client,
                              core::log::Level::info,
@@ -428,51 +602,40 @@ void dump_game_ps(ID3D11PixelShader* shader) noexcept {
 }
 
 template <typename Draw>
-void draw_replaced(ID3D11DeviceContext* context, const Part& part, Draw&& draw) noexcept {
+void draw_replaced(ID3D11DeviceContext* context,
+                   const Part& part,
+                   UINT start,
+                   UINT count,
+                   Draw&& draw) noexcept {
     if (g_shader == nullptr) {
         draw();
         return;
     }
-    if (note_targets(context) == 0) {
+    const BoundTargets targets = inspect_targets(context);
+    note_targets(targets);
+    if (targets.bound == 0 || !is_character_gbuffer(targets)) {
+        note_skip_rt(part, targets);
         draw();
         return;
     }
+    note_first(part, start, count, targets);
     const std::size_t index = static_cast<std::size_t>(&part - kParts.data());
-    ID3D11ShaderResourceView* view = g_images[index].view;
-    ID3D11PixelShader* previous = nullptr;
-    UINT instances = 0;
-    context->PSGetShader(&previous, nullptr, &instances);
-    dump_game_ps(previous);
-    ID3D11SamplerState* previousSamplers[kSamplerSlots]{};
-    context->PSGetSamplers(0, kSamplerSlots, previousSamplers);
-    ID3D11ShaderResourceView* previousView = nullptr;
-    context->PSGetShaderResources(0, 1, &previousView);
-    ID3D11BlendState* previousBlend = nullptr;
-    FLOAT blendFactor[4]{};
-    UINT sampleMask = 0;
-    context->OMGetBlendState(&previousBlend, blendFactor, &sampleMask);
+    ID3D11ShaderResourceView* views[2]{g_images[index].view, g_materials[index].view};
+    SavedPs saved{};
+    capture_ps(context, saved);
+    dump_game_ps(saved.shader);
     context->PSSetShader(g_shader, nullptr, 0);
     if (g_sampler != nullptr) {
         context->PSSetSamplers(0, 1, &g_sampler);
     }
-    if (view != nullptr) {
-        context->PSSetShaderResources(0, 1, &view);
-    }
+    context->PSSetShaderResources(0, 2, views);
     if (g_blend != nullptr) {
         const FLOAT opaque[4]{1.0f, 1.0f, 1.0f, 1.0f};
         context->OMSetBlendState(g_blend, opaque, 0xFFFFFFFFu);
     }
     draw();
-    context->PSSetShader(previous, nullptr, 0);
-    context->PSSetSamplers(0, kSamplerSlots, previousSamplers);
-    context->PSSetShaderResources(0, 1, &previousView);
-    context->OMSetBlendState(previousBlend, blendFactor, sampleMask);
-    release_com(previous);
-    for (ID3D11SamplerState* sampler : previousSamplers) {
-        release_com(sampler);
-    }
-    release_com(previousView);
-    release_com(previousBlend);
+    restore_ps(context, saved);
+    release_saved(saved);
 }
 
 void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context,
@@ -485,11 +648,11 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context,
     }
     const Part* part = match(startIndex, indexCount);
     if (part == nullptr) {
+        note_miss(startIndex, indexCount);
         next(context, indexCount, startIndex, baseVertex);
         return;
     }
-    note_first(*part, startIndex, indexCount);
-    draw_replaced(context, *part, [&]() noexcept {
+    draw_replaced(context, *part, startIndex, indexCount, [&]() noexcept {
         next(context, indexCount, startIndex, baseVertex);
     });
 }
@@ -507,11 +670,11 @@ void STDMETHODCALLTYPE draw_indexed_instanced(ID3D11DeviceContext* context,
     }
     const Part* part = match(startIndex, indexCountPerInstance);
     if (part == nullptr) {
+        note_miss(startIndex, indexCountPerInstance);
         next(context, indexCountPerInstance, instanceCount, startIndex, baseVertex, startInstance);
         return;
     }
-    note_first(*part, startIndex, indexCountPerInstance);
-    draw_replaced(context, *part, [&]() noexcept {
+    draw_replaced(context, *part, startIndex, indexCountPerInstance, [&]() noexcept {
         next(context, indexCountPerInstance, instanceCount, startIndex, baseVertex, startInstance);
     });
 }
@@ -576,7 +739,7 @@ void attach(ID3D11Device* device, ID3D11DeviceContext* context) noexcept {
     }
     core::log::write(core::log::Channel::client,
                      core::log::Level::info,
-                     "ev=custom_albedo stage=attach result=ok mode=parts");
+                     "ev=custom_albedo stage=attach result=ok mode=ours");
 }
 
 void detach() noexcept {
@@ -594,13 +757,21 @@ void detach() noexcept {
         release_com(image.view);
         release_com(image.texture);
     }
+    for (GpuImage& image : g_materials) {
+        release_com(image.view);
+        release_com(image.texture);
+    }
     AcquireSRWLockExclusive(&g_psLock);
     g_pixelShaders.clear();
     ReleaseSRWLockExclusive(&g_psLock);
     g_loggedParts = 0;
+    g_loggedMisses = 0;
     g_loggedTargets = false;
     g_loggedDepthOnly = false;
     g_dumpedPs = false;
+    g_seenTargetKeys = {};
+    g_seenTargetCount = 0;
+    g_loggedSkips = 0;
 }
 
 } // namespace sunrise::client::hooks::custom_albedo
