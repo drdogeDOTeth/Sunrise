@@ -10,6 +10,61 @@
 
 ## NEXT AGENT — start here
 
+### Why the worlds are empty: five layers, and only two of them exist
+
+Read from source, not yet launched. The mission engine is not missing — it is **built, complete,
+and switched off**, and above it two layers were never written at all.
+
+| layer | state |
+|---|---|
+| physics world: 30 Hz tick, actor store, combat kernel, triggers, objectives, timers, checkpoints | **exists**, gated off by `server.activation.physics_host_session` (default `false`) |
+| activity policy: the mission logic itself | interface complete; both shipped implementations are **inert** — `DefaultActivityPolicy` declares a zero command mask and zero actors, `ScriptlessPolicy` declares no actors either |
+| scene bounds | were the **zero box**. Valid, so nothing complained, but body creation refuses anything it does not contain, so the first actor to carry a transform would have been rejected |
+| logical actor → external frame | **exists**: `build_external_plan`, the channel-2 codec, `WorldCoordinator::prepare_frame` all build a complete frame |
+| frame → packet → visible NPC | **missing**. Nothing outside `world_coordinator.cpp` calls `prepare_frame`; `gameplay_external_body` is read by nothing; `server_default_entity`'s own comment says the visible class chain and the live outcome path do not exist |
+
+`spawn_actor` has never had a caller, in either direction: no policy could reach it, and no policy
+wanted to. That is the whole reason the destinations are quiet.
+
+**A server-side actor is not a rendered enemy.** Everything below the fourth row can be made to
+work without a single pixel changing. Do not confuse "the world reports four actors" with "there
+are four enemies in the Tower" — they are four rows apart.
+
+### The proving policy: `ProvingPolicy`, off by default, one launch to measure the whole stack
+
+`src/server/gameplay/physics/host/proving_policy.{h,cpp}` is the first policy that is not inert. It
+spawns four logical actors one per tick, arms each with a combat profile, writes an objective
+counter, and logs the `CommandSubmitStatus` of every submission and the kind of every committed
+event it sees. It is an instrument, not gameplay: it answers *which layer refuses first*, in the
+log, without a debugger.
+
+Two gates, both default off, both needed:
+
+```json
+"server": { "activation": { "physics_host_session": true, "activity_proving_policy": true } }
+```
+
+What the log will say, in order:
+
+- `ev=physics stage=worker result=started` — the bridge is running
+- `ev=physics stage=world result=opened session=... region=...` — **a gameplay peer was admitted
+  and a world opened.** If this line never appears, nothing above it matters: no peer is admitted
+  in an offline session and that is the first thing to solve
+- `ev=physics stage=profile result=ok` — the combat profile registered
+- `ev=policy stage=init policy=proving ...` then four `stage=spawn`, four `stage=arm`, one
+  `stage=count`, each with `result=accepted` or the exact refusal
+- `ev=policy stage=event kind=actor_spawned ...` — **the proof.** An accepted submission only means
+  the queue took it; a committed event means the world applied it
+- `ev=physics stage=tick result=ok ... actors=4` — one line a second, carrying the actor count
+
+Also changed: the scene box is now ±16 km around the origin instead of the zero box
+(`kSceneHalfExtentMeters`). That is a precondition for any actor at all, and it is inert without a
+policy to spawn one.
+
+Read `gameplay_runtime.cpp` before assuming the physics host is dead code — it is initialized and
+serviced every gameplay slice, and the bridge runs its ticks on **its own worker thread**, not the
+render thread. The frame-stall warning in `activation/definition.h` predates that worker.
+
 ### The VRM merge is parked, not resolved (`cosmetics` @ `9b887c7`)
 
 PR #1 (Sleepy-Studio, "Add playable VRM injection workflow") merged into `origin/cosmetics` as

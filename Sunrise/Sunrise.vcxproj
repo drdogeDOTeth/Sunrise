@@ -747,6 +747,7 @@
     <ClCompile Include="src\server\gameplay\physics\host\bubble_host_triggers.cpp" />
     <ClCompile Include="src\server\gameplay\physics\host\fallback_policy.cpp" />
     <ClCompile Include="src\server\gameplay\physics\host\physics_session.cpp" />
+    <ClCompile Include="src\server\gameplay\physics\host\proving_policy.cpp" />
     <ClCompile Include="src\server\gameplay\physics\host\runtime.cpp" />
     <ClCompile Include="src\server\gameplay\physics\interest\interest_manager.cpp" />
     <ClCompile Include="src\server\gameplay\physics\interest\interest_ordering.cpp" />
@@ -1364,6 +1365,7 @@
     <ClInclude Include="src\server\gameplay\physics\host\fallback_policy.h" />
     <ClInclude Include="src\server\gameplay\physics\host\internal.h" />
     <ClInclude Include="src\server\gameplay\physics\host\physics_session.h" />
+    <ClInclude Include="src\server\gameplay\physics\host\proving_policy.h" />
     <ClInclude Include="src\server\gameplay\physics\host\runtime.h" />
     <ClInclude Include="src\server\gameplay\physics\host\tick_runtime.h" />
     <ClInclude Include="src\server\gameplay\physics\host\types.h" />

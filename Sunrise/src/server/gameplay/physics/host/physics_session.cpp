@@ -16,6 +16,7 @@
 #include "../../peer/peer_transport.h"
 #include "../replication/world_coordinator.h"
 #include "bubble_host.h"
+#include "proving_policy.h"
 #include "runtime.h"
 
 namespace sunrise::server::gameplay::physics::host::session {
@@ -41,6 +42,21 @@ constexpr float kMillimetersPerUnit = 1000.0F;
  * when a scene loads content.
  */
 constexpr std::uint64_t kSceneContentBuild = 1;
+/**
+ * Half-extent of the scene box, in metres, centred on the scene origin.
+ *
+ * The bounds used to be the zero box. That is a *valid* AABB, which is why nothing complained, but
+ * body creation refuses anything not contained by it, so the first actor to carry a transform
+ * would have been rejected and no one had ever spawned one to find out. This scene still loads no
+ * geometry, so the number only has to be large enough that an authored spawn is inside it and
+ * finite enough that the backend accepts it. Sixteen kilometres covers any Destiny destination.
+ */
+constexpr float kSceneHalfExtentMeters = 16'000.0F;
+/** Health a proving actor stands up with. Nothing shoots at it yet. */
+constexpr std::uint32_t kProvingHealth = 1'000;
+/** Faction the proving actors belong to, and the mask of factions they treat as hostile. */
+constexpr std::uint8_t kProvingFaction = 1;
+constexpr std::uint64_t kProvingHostileMask = 0;
 /**
  * Worker wake interval. `tick_bound` paces the 30 Hz step itself, so this only bounds the jitter.
  * A world tick is never due more than this long after its deadline.
@@ -90,6 +106,12 @@ struct Storage final {
     std::array<Bound, kSessionCapacity> bound{};
     std::array<Attempt, kAdmittedCapacity> attempts{};
     std::array<replication::WorldCoordinator, kSessionCapacity> coordinators{};
+    /**
+     * One policy per slot. The host stores the pointer and calls through it every tick, so a
+     * policy handed to `open_world` has to outlive the world; a local would dangle on the first
+     * tick after the open returned.
+     */
+    std::array<ProvingPolicy, kSessionCapacity> policies{};
 };
 
 std::unique_ptr<Storage> g_storage{};
@@ -288,16 +310,26 @@ void close_bound(Storage& table, std::size_t slot) noexcept {
     request.scene.stableSceneId = row.hostSessionId;
     request.scene.contentBuild = kSceneContentBuild;
     request.scene.bubble = static_cast<std::uint32_t>(row.regionIndex);
-    // The bounds stay the zero box, which the backend accepts. TODO: no body is placed yet, and
-    // the first one will be refused for falling outside it. Take the real extents from the
-    // destination's scenario layout when an actor carries a transform.
+    // A box big enough to hold an authored spawn, centred on the scene origin. TODO: take the real
+    // extents from the destination's scenario layout once a scene loads its geometry; until then
+    // this only has to stop body creation refusing every actor for falling outside a zero box.
+    request.scene.bounds.minimum = {
+        -kSceneHalfExtentMeters, -kSceneHalfExtentMeters, -kSceneHalfExtentMeters};
+    request.scene.bounds.maximum = {
+        kSceneHalfExtentMeters, kSceneHalfExtentMeters, kSceneHalfExtentMeters};
     request.logicalWorldId = row.hostSessionId;
     request.activitySessionId = row.hostSessionId;
     request.ownerEpoch = row.generation;
     request.deterministicSeed = row.hostSessionId;
     request.millimetersPerUnit = kMillimetersPerUnit;
     // A null policy selects the inert fallback, which spawns nothing and makes no mission choice.
-    const HostStatus opened = host->open_world(request, nullptr, entry.world);
+    // The proving policy is the only thing that has ever driven a command from a policy source.
+    world::IActivityPolicy* policy = nullptr;
+    if (core::settings::get().server.activation.activityProvingPolicy) {
+        table.policies[slot].configure(request.scene.contentBuild);
+        policy = &table.policies[slot];
+    }
+    const HostStatus opened = host->open_world(request, policy, entry.world);
     if (opened != HostStatus::success) {
         static_cast<void>(replica::retire_peer_replica(entry.replicaHandle));
         static_cast<void>(replica::reset_context(entry.context));
@@ -306,6 +338,24 @@ void close_bound(Storage& table, std::size_t slot) noexcept {
                static_cast<unsigned long long>(admitted.sessionId),
                static_cast<unsigned>(opened));
         return false;
+    }
+
+    if (policy != nullptr) {
+        // The policy selects a profile by blueprint; only a profile already registered under the
+        // same policy owner matches, so this has to land before the first tick arms anything.
+        CombatProfile profile{};
+        profile.profile = kProvingCombatProfile;
+        profile.policyOwnerId = kProvingPolicyOwnerId;
+        profile.hostileFactionMask = kProvingHostileMask;
+        profile.maximumHealth = kProvingHealth;
+        profile.faction = kProvingFaction;
+        profile.canReceiveDamage = true;
+        const HostStatus registered = host->register_combat_profile(entry.world, profile);
+        report(registered == HostStatus::success ? core::log::Level::info : core::log::Level::warn,
+               "ev=physics stage=profile result=%s session=0x%016llX status=%u",
+               registered == HostStatus::success ? "ok" : "fail",
+               static_cast<unsigned long long>(admitted.sessionId),
+               static_cast<unsigned>(registered));
     }
 
     PeerOpenRequest peerRequest{};

@@ -43,6 +43,11 @@ bool Parser::activation_settings(server::activation::Settings& output) noexcept 
                 return false;
             }
             candidate.physicsHostSession = value;
+        } else if (key == "activity_proving_policy") {
+            if (!boolean(value)) {
+                return false;
+            }
+            candidate.activityProvingPolicy = value;
         } else if (key == "activity_public_membership") {
             if (!boolean(value)) {
                 return false;

@@ -39,6 +39,14 @@ struct Settings {
      */
     bool physicsHostSession{false};
     /**
+     * The proving activity policy, installed on every world the bridge opens.
+     * Off by default, and it needs `physicsHostSession` on to reach anything. It spawns four
+     * logical actors, arms them, counts them, and reports what the world answered. Nothing it
+     * creates is visible: no frame is encoded for a logical actor, so this measures the mission
+     * engine rather than populating a destination.
+     */
+    bool activityProvingPolicy{false};
+    /**
      * Membership on a public-target link, so the client binds a world container to it.
      * Off by default. Sending it hands the client's player create and destroy source to that
      * link's membership block, and a body that does not carry the local player destroys it.
