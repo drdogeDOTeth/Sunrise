@@ -14,8 +14,15 @@ array bounds out of the headers that declare them.
 Usage:
     python build_cache.py                      # layout, validated, plus domain row counts
     python build_cache.py 0x7979AE7D           # what is this definition hash?
-    python build_cache.py --slot emote         # every item in one equipment slot
-    python build_cache.py --buckets            # bucket id histogram
+    python build_cache.py --bucket 41          # every item in one inventory bucket
+    python build_cache.py --slot 14            # one equipment slot, by socket count
+    python build_cache.py --slots              # bucket -> rows -> equipment slot routing
+    python build_cache.py --plugs 0xBDBB7999   # what may legally fill this item's sockets
+
+`--slot` and `--plugs` together are what separate an item you equip from a plug that fills someone
+else's socket: all 307 emotes carry zero sockets, and all four Emote Collection lanes accept all
+307 of them. Run a control before believing a negative - the equipped helmet and kinetic report 11
+and 12 sockets, which is what proves a zero is data rather than a broken reader.
 """
 from __future__ import annotations
 
@@ -327,6 +334,54 @@ def main() -> None:
                   f"socketList {read_field(data, base, detail['socketEntryListIndex']):>5}  "
                   f"art {read_field(data, base, detail['gearArtIndex']):>5}")
         print(f"  {shown} item(s)")
+
+    if "--plugs" in sys.argv:
+        # Which definitions may legally sit in each of one item's socket lanes. This is what
+        # separates "an item you equip" from "a plug that fills someone else's socket".
+        target = int(sys.argv[sys.argv.index("--plugs") + 1], 0)
+        index_of, hash_of = {}, {}
+        for row in rows(data, blocks, "items", "<IHBB"):
+            index_of[row[0]] = row[1]
+            hash_of[row[1]] = row[0]
+        if target not in index_of:
+            raise SystemExit(f"0x{target:08X} is not installed")
+        owner = index_of[target]
+        pools = list(rows(data, blocks, "socketPlugPools", "<II"))
+        members = [row[0] for row in rows(data, blocks, "socketPlugMembers", "<H")]
+        print(f"\nlegal plugs for 0x{target:08X} (definition index {owner}):")
+        for item_index, lane, _reserved, pool in rows(data, blocks, "socketPlugRules", "<HBBI"):
+            if item_index != owner:
+                continue
+            offset, count = pools[pool]
+            allowed = members[offset:offset + count]
+            names = ", ".join(f"0x{hash_of.get(m, 0):08X}" for m in allowed[:6])
+            print(f"  lane {lane}: {count} plug(s)  {names}{' ...' if count > 6 else ''}")
+
+    if "--slots" in sys.argv:
+        print(f"\n{'bucket':>6} {'array':>6} {'firstSlot':>10} {'slotCount':>10} {'equipSlot':>10}")
+        for row in rows(data, blocks, "inventoryBuckets", "<BBHHbB"):
+            print(f"{row[0]:>6} {row[1]:>6} {row[2]:>10} {row[3]:>10} {row[4]:>10}")
+
+    if "--slot" in sys.argv:
+        slot = int(sys.argv[sys.argv.index("--slot") + 1], 0)
+        # Socket counts, not names: whether any item in a slot can *hold* plugs is what decides
+        # whether the slot works by equipping one item or by filling one item's sockets.
+        histogram: dict[int, int] = {}
+        socketed = []
+        for index in range(detail_count):
+            base = detail_row(index)
+            if read_field(data, base, detail["equipmentSlot"]) != slot:
+                continue
+            count = read_field(data, base, detail["ordinarySocketCount"])
+            histogram[count] = histogram.get(count, 0) + 1
+            if count:
+                socketed.append((read_field(data, base, detail["definitionHash"]), count,
+                                 read_field(data, base, detail["bucketId"])))
+        print(f"\nequipment slot {slot}: {sum(histogram.values())} item(s)")
+        for count in sorted(histogram):
+            print(f"  {histogram[count]:>5} item(s) with {count} socket(s)")
+        for hash_value, count, bucket in socketed[:20]:
+            print(f"    0x{hash_value:08X}  {count} socket(s)  bucket {bucket}")
 
     for argument in sys.argv[1:]:
         if not argument.lower().startswith("0x"):

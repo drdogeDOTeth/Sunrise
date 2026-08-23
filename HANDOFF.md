@@ -1,6 +1,6 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-23 (**left-hand roll −25° shipped, not yet seen** — `037c_34` / `037d_32` / `0698_30`). The v24 hand refit under it is **user-confirmed better** in game. FP arms on gauntlets `(0, 16326)` confirmed in-world. Host Intake tool is live. Race-glove blank still unconfirmed. `--fingers` CLOSED on the chest.
+**Updated:** 2026-08-23 (**emotes shipped on branch `activities`, not yet pressed** — an emote is a plug in the Emote Collection, never equipment; needs the newly built DLL). Cosmetics: **left-hand roll −25° confirmed in game**. Earlier that day (**left-hand roll −25° shipped, not yet seen** — `037c_34` / `037d_32` / `0698_30`). The v24 hand refit under it is **user-confirmed better** in game. FP arms on gauntlets `(0, 16326)` confirmed in-world. Host Intake tool is live. Race-glove blank still unconfirmed. `--fingers` CLOSED on the chest.
 
 **Live / restore:** newest is the **v25 left-hand roll** over the **v24 refit** (`037c_33` / `037d_31` / `0698_29`, confirmed good), both on top of `20260823-141400.json` (100 layers — FP arms + race-glove blanks, v23 hands). Roll too strong or the wrong way? Change `HAND_ROLL` and re-run; the refit underneath is sound. Older floors: `20260822-235602` (92 layers, hands-on-gauntlets confirmed), `20260822-225414` (v23 wrists-only). Tiled `0698_25` stays in `packages\_reverted_uv_tiles\`. Do **not** `--restore` `150046`. **Durable status:** `docs/CUSTOM_CHARACTER.md`. Destiny must be closed to write packages or overwrite the DLL.
 
@@ -9,6 +9,56 @@
 ---
 
 ## NEXT AGENT — start here
+
+### Emotes: an emote is a plug, not equipment. SHIPPED, awaiting one launch. (branch `activities`)
+
+The worlds being empty and the emotes never playing are separate problems with separate causes.
+This is the emote one, and it is settled from the installed data — no launch was needed to find it.
+
+The authored state equipped emote `0x7979AE7D` ("Blowing a Kiss") into the emote equipment slot
+with `plugs: []`, and it has been there all along. It resolves, publishes, and does nothing,
+because **that is not how the game reaches an emote**:
+
+| item | bucket | equipment slot | ordinary sockets |
+|---|---|---|---|
+| every one of the 307 emotes, incl. `0x7979AE7D` | 41 | 14 | **0** |
+| **Emote Collection `0xBDBB7999`** | 12 | **absent (−1)** | **4** |
+
+Each of the Emote Collection's four lanes accepts **all 307 emotes** — verified against the
+extracted plug pools, not guessed:
+
+```powershell
+python tools\pkg\build_cache.py --plugs 0xBDBB7999   # lanes 0-3, 307 plug(s) each
+python tools\pkg\build_cache.py --slot 14            # 307 items, every one with 0 sockets
+```
+
+Four lanes, four `emote_1..4` keys (`up` / `down` / `left` / `right` in
+`resources/default_settings.json`). The emote is the **plug**; the Collection is the item.
+
+**The blocker was one line of ours.** `loadout_item_resolver.cpp` required
+`*itemDetail.equipmentSlot >= 0`, so an item with no equipment slot could never be carried at all —
+the Emote Collection was unreachable from authored state no matter how it was written. Lifted, with
+`loadout::kNoEquipmentSlot` (`0xFF`) marking a carried-only row. Nothing can now equip what has no
+slot: the equipped path hands that sentinel to `record_equipment_slot`, whose bound check rejects
+it, and `character_encoder`'s `valid()` rejects `equipped && kNoEquipmentSlot` outright.
+
+Shipped: an Emote Collection per character in `inventory`, with Cheer / Slow Clap / Point on
+up/down/left and the character's own class Sit on right (`0x0AD5589A` Hunter, `0x78380468` Titan,
+`0x0203AD93` Warlock — class-matched deliberately, since the pools do not gate by class and a
+wrong-class emote may have no animation). Both `resources/default_settings.json` and the live
+`C:\Sunrise\bin\x64\Sunrise\settings.json` carry it; the live file needs the **new DLL**, because
+the old one rejects the row and fails the whole loadout.
+
+**What one launch decides:** press Up / Down / Left / Right in world. If the log says
+`report_failure("loadout")` the row is malformed; if the character screen is normal and the keys do
+nothing, the Collection is carried but the client reads its quick slots from somewhere else, and
+the next question is whether the game wants it in a *profile* bucket rather than a character one.
+
+**Do not re-derive:** `lookup_item.py` is dead — it hardcoded a record layout, upstream moved the
+cache to format 44, and it then answered "not in this install" **for the weapon and helmet the
+character is visibly wearing**. Use `build_cache.py`, which derives the layout from `format.h` and
+validates it against the file size. Control before concluding: the helmet reports 11 sockets and
+the kinetic 12, which is what proves the emotes' 0 is real data and not a broken reader.
 
 ### The twisted hand: SHIPPED as `037c_33` / `037d_31` / `0698_29`, awaiting one launch
 

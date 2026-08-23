@@ -576,6 +576,18 @@
         },
         "inventory": [
           {
+            "instance_soid": "0x4000000000000103",
+            "definition_hash": "0xBDBB7999",
+            "level": 0,
+            "quantity": 1,
+            "plugs": [
+              "0xA8F9A838",
+              "0x711A1BAD",
+              "0x9F43390F",
+              "0x0AD5589A"
+            ]
+          },
+          {
             "instance_soid": "0x4000000000000011",
             "definition_hash": "0x3E7B47F8",
             "level": 106,
@@ -1095,6 +1107,18 @@
         },
         "inventory": [
           {
+            "instance_soid": "0x4000000000000104",
+            "definition_hash": "0xBDBB7999",
+            "level": 0,
+            "quantity": 1,
+            "plugs": [
+              "0xA8F9A838",
+              "0x711A1BAD",
+              "0x9F43390F",
+              "0x78380468"
+            ]
+          },
+          {
             "instance_soid": "0x4000000000000075",
             "definition_hash": "0x3E7B47F8",
             "level": 106,
@@ -1613,6 +1637,18 @@
           }
         },
         "inventory": [
+          {
+            "instance_soid": "0x4000000000000105",
+            "definition_hash": "0xBDBB7999",
+            "level": 0,
+            "quantity": 1,
+            "plugs": [
+              "0xA8F9A838",
+              "0x711A1BAD",
+              "0x9F43390F",
+              "0x0203AD93"
+            ]
+          },
           {
             "instance_soid": "0x40000000000000D9",
             "definition_hash": "0x3E7B47F8",

@@ -68,7 +68,10 @@ constexpr std::int32_t kOccupiedRowWatermark = 1;
         const instance::ResolvedInstance& itemInstance = item.instance;
         const auto priorSoidsEnd = instanceSoids.cbegin() + static_cast<std::ptrdiff_t>(index);
         if (item.inventoryRow >= occupiedRows.size()
-            || item.equipmentSlot >= occupiedEquipmentSlots.size() || item.quantity <= 0
+            || (item.equipmentSlot != loadout::kNoEquipmentSlot
+                && item.equipmentSlot >= occupiedEquipmentSlots.size())
+            || (item.equipped && item.equipmentSlot == loadout::kNoEquipmentSlot)
+            || item.quantity <= 0
             || itemInstance.instanceSoid == 0 || itemInstance.bounds.itemDefinitionCount == 0
             || itemInstance.bounds.itemDefinitionCount > instance::layout::kDefinitionIndexCapacity
             || itemInstance.baseDefinitionIndex == kEmptyDefinitionIndex
