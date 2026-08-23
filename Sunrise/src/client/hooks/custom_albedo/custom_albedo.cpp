@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <d3dcompiler.h>
 #include <string>
 #include <string_view>
@@ -44,27 +45,37 @@ using DrawIndexedInstanced =
 using CreatePixelShaderFn = HRESULT(STDMETHODCALLTYPE*)(
     ID3D11Device*, const void*, SIZE_T, ID3D11ClassLinkage*, ID3D11PixelShader**);
 
-struct GpuImage {
-    ID3D11Texture2D* texture{};
-    ID3D11ShaderResourceView* view{};
-};
-
-template <typename Interface> void release_com(Interface*& object) noexcept {
-    if (object != nullptr) {
-        object->Release();
-        object = nullptr;
-    }
-}
-
-struct RuntimePart {
+struct Part {
     UINT start{};
     UINT count{};
-    std::string name{};
-    std::wstring albedoFile{};
-    std::wstring materialFile{};
-    GpuImage albedoImage{};
-    GpuImage materialImage{};
+    char name[32]{};
+    wchar_t file[80]{};
+    wchar_t material[80]{};
+    bool hasMaterial{};
 };
+
+struct PartSpec {
+    UINT start{};
+    UINT count{};
+    const char* name{};
+    const wchar_t* file{};
+    const wchar_t* material{};
+};
+
+constexpr UINT kMaxParts = 16;
+constexpr std::array<PartSpec, 6> kDefaultParts{{
+    {0, 74358, "tank", L"\\custom_tank.png", L"\\custom_tank_mr.png"},
+    {74358, 11580, "mask", L"\\custom_mask.png", L"\\custom_mask_mr.png"},
+    {85938, 3570, "necklace", L"\\custom_necklace.png", L"\\custom_necklace_mr.png"},
+    {89508, 26760, "skin", L"\\custom_skin.png", L"\\custom_skin_mr.png"},
+    {116268, 6036, "twirl", L"\\custom_twirl.png", nullptr},
+    {0, 16326, "hands", L"\\custom_skin.png", L"\\custom_skin_mr.png"},
+}};
+
+std::array<Part, kMaxParts> g_parts{};
+UINT g_partCount{};
+
+constexpr UINT kMeshIndices = 122304;
 
 struct LoadedProfile {
     std::string id{};
@@ -150,15 +161,12 @@ hooking::detour::Handle g_createPixelShader{};
 ID3D11PixelShader* g_shader{};
 ID3D11SamplerState* g_sampler{};
 ID3D11BlendState* g_blend{};
-
-SRWLOCK g_modelLock{SRWLOCK_INIT};
-bool g_enabled = true;
-std::string g_activeModelId = "default";
-LoadedProfile g_activeProfile{};
-std::vector<ModelProfile> g_discoveredModels{};
-
+std::array<GpuImage, kMaxParts> g_images{};
+std::array<GpuImage, kMaxParts> g_materials{};
 std::uint32_t g_loggedParts{};
 std::uint32_t g_loggedMisses{};
+constexpr UINT kMaxLoggedMisses = 64;
+std::array<UINT64, kMaxLoggedMisses> g_seenMisses{};
 bool g_loggedTargets{};
 bool g_loggedDepthOnly{};
 bool g_dumpedPs{};
@@ -168,22 +176,69 @@ UINT g_loggedSkips{};
 SRWLOCK g_psLock{SRWLOCK_INIT};
 std::vector<PsRecord> g_pixelShaders{};
 
-[[nodiscard]] HMODULE owning_module() noexcept {
-    HMODULE module = nullptr;
-    (void)GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
-                                 | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                             reinterpret_cast<LPCWSTR>(&owning_module),
-                             &module);
-    return module;
+[[nodiscard]] HMODULE owning_module() noexcept;
+
+[[nodiscard]] const Part* match(UINT start, UINT count) noexcept {
+    // Exact pairs only. v13 subset-match treated start=0 UI quads as the tank
+    // and smashed character select (ALWAYS depth + RT0 RGB).
+    for (UINT i = 0; i < g_partCount && i < kMaxParts; ++i) {
+        if (g_parts[i].start == start && g_parts[i].count == count) {
+            return &g_parts[i];
+        }
+    }
+    return nullptr;
 }
 
-std::string to_utf8(std::wstring_view wide) {
-    if (wide.empty()) return "";
-    const int len = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
-    if (len <= 0) return "";
-    std::string result(len, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), result.data(), len, nullptr, nullptr);
-    return result;
+void note_miss(UINT start, UINT count) noexcept {
+    // Leftover race gloves will not share the chest index range. Log unique
+    // unmatched draws so one launch can name them. Do not subset-match.
+    if (count < 3 || g_loggedMisses >= kMaxLoggedMisses) {
+        return;
+    }
+    const UINT64 key = (static_cast<UINT64>(start) << 32) | static_cast<UINT64>(count);
+    for (UINT i = 0; i < g_loggedMisses; ++i) {
+        if (g_seenMisses[i] == key) {
+            return;
+        }
+    }
+    g_seenMisses[g_loggedMisses] = key;
+    ++g_loggedMisses;
+    std::array<char, 160> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=custom_albedo stage=miss start=%u count=%u",
+                                      start,
+                                      count);
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         std::string_view(line.data(), static_cast<std::size_t>(written)));
+    }
+}
+
+void note_first(const Part& part, UINT start, UINT count, const BoundTargets& targets) noexcept {
+    const std::uint32_t bit = 1u << static_cast<std::uint32_t>(&part - g_parts.data());
+    if ((g_loggedParts & bit) != 0) {
+        return;
+    }
+    g_loggedParts |= bit;
+    std::array<char, 192> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=custom_albedo stage=draw part=%s start=%u count=%u "
+                                      "nrt=%u f0=%u f1=%u f2=%u result=ok",
+                                      part.name,
+                                      start,
+                                      count,
+                                      targets.bound,
+                                      targets.formats[0],
+                                      targets.formats[1],
+                                      targets.formats[2]);
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         std::string_view(line.data(), static_cast<std::size_t>(written)));
+    }
 }
 
 std::wstring to_wide(std::string_view utf8) {
@@ -301,106 +356,169 @@ std::vector<std::wstring> get_search_directories_internal() noexcept {
         && image.view != nullptr;
 }
 
-void release_profile_gpu_resources(LoadedProfile& profile) noexcept {
-    for (RuntimePart& part : profile.parts) {
-        release_com(part.albedoImage.view);
-        release_com(part.albedoImage.texture);
-        release_com(part.materialImage.view);
-        release_com(part.materialImage.texture);
+void seed_part(UINT index,
+               UINT start,
+               UINT count,
+               const char* name,
+               const wchar_t* file,
+               const wchar_t* material) noexcept {
+    Part& part = g_parts[index];
+    part = {};
+    part.start = start;
+    part.count = count;
+    (void)std::snprintf(part.name, sizeof(part.name), "%s", name);
+    if (file != nullptr) {
+        wcsncpy_s(part.file, file, _TRUNCATE);
+    }
+    if (material != nullptr && material[0] != L'\0') {
+        wcsncpy_s(part.material, material, _TRUNCATE);
+        part.hasMaterial = true;
     }
 }
 
-std::string find_json_string(std::string_view json, std::string_view key) {
-    const std::string search = "\"" + std::string(key) + "\"";
-    const size_t pos = json.find(search);
-    if (pos == std::string_view::npos) return "";
-    const size_t colon = json.find(':', pos + search.length());
-    if (colon == std::string_view::npos) return "";
-    const size_t quote1 = json.find('\"', colon + 1);
-    if (quote1 == std::string_view::npos) return "";
-    const size_t quote2 = json.find('\"', quote1 + 1);
-    if (quote2 == std::string_view::npos) return "";
-    return std::string(json.substr(quote1 + 1, quote2 - quote1 - 1));
+void seed_defaults() noexcept {
+    g_partCount = 0;
+    for (const PartSpec& spec : kDefaultParts) {
+        if (g_partCount >= kMaxParts) {
+            break;
+        }
+        seed_part(g_partCount, spec.start, spec.count, spec.name, spec.file, spec.material);
+        ++g_partCount;
+    }
 }
 
-UINT find_json_uint(std::string_view json, std::string_view key, UINT fallback = 0) {
-    const std::string search = "\"" + std::string(key) + "\"";
-    const size_t pos = json.find(search);
-    if (pos == std::string_view::npos) return fallback;
-    const size_t colon = json.find(':', pos + search.length());
-    if (colon == std::string_view::npos) return fallback;
-    size_t start = colon + 1;
-    while (start < json.length() && (json[start] == ' ' || json[start] == '\t' || json[start] == '\r' || json[start] == '\n')) {
-        ++start;
+void to_wide_suffix(const char* name, wchar_t* dest, std::size_t destCount) noexcept {
+    dest[0] = L'\\';
+    dest[1] = L'\0';
+    if (name == nullptr || destCount < 3) {
+        return;
     }
-    size_t end = start;
-    while (end < json.length() && json[end] >= '0' && json[end] <= '9') {
-        ++end;
+    std::size_t at = 1;
+    for (; name[0] != '\0' && at + 1 < destCount; ++name, ++at) {
+        dest[at] = static_cast<wchar_t>(static_cast<unsigned char>(name[0]));
     }
-    if (end > start) {
-        return static_cast<UINT>(std::strtoul(std::string(json.substr(start, end - start)).c_str(), nullptr, 10));
-    }
-    return fallback;
+    dest[at] = L'\0';
 }
 
-std::string read_file_to_string(const std::wstring& path) {
-    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return "";
-    LARGE_INTEGER size{};
-    if (!GetFileSizeEx(file, &size) || size.QuadPart > 20 * 1024 * 1024) {
-        CloseHandle(file);
-        return "";
-    }
-    std::string content(static_cast<std::size_t>(size.QuadPart), '\0');
-    DWORD read = 0;
-    ReadFile(file, content.data(), static_cast<DWORD>(content.size()), &read, nullptr);
-    CloseHandle(file);
-    return content;
-}
-
-LoadedProfile create_default_profile() noexcept {
+void load_parts_file() noexcept {
     core::path::Buffer directory{};
-    std::wstring rootDir = L"";
-    if (core::path::artifact_directory(owning_module(), directory)) {
-        rootDir.assign(directory.chars.data(), directory.length);
+    if (!core::path::artifact_directory(owning_module(), directory)
+        || !core::path::append(directory, L"\\custom_parts.txt")) {
+        return;
     }
-
-    LoadedProfile def{};
-    def.id = "default";
-    def.name = "Scatterhorn Void Gas Mask";
-    def.author = "Chiliz / Sunrise";
-    def.version = "GLB";
-    def.isDefault = true;
-    def.vertexCount = 23512;
-    def.folderPath = rootDir;
-
-    def.parts.push_back({0, 74358, "tank", rootDir + L"\\custom_tank.png", rootDir + L"\\custom_tank_mr.png"});
-    def.parts.push_back({74358, 11574, "mask", rootDir + L"\\custom_mask.png", rootDir + L"\\custom_mask_mr.png"});
-    def.parts.push_back({85932, 3570, "necklace", rootDir + L"\\custom_necklace.png", rootDir + L"\\custom_necklace_mr.png"});
-    def.parts.push_back({89502, 42666, "skin", rootDir + L"\\custom_skin.png", rootDir + L"\\custom_skin_mr.png"});
-    def.parts.push_back({132168, 6036, "twirl", rootDir + L"\\custom_twirl.png", L""});
-    return def;
+    const HANDLE file = CreateFileW(directory.chars.data(),
+                                    GENERIC_READ,
+                                    FILE_SHARE_READ,
+                                    nullptr,
+                                    OPEN_EXISTING,
+                                    FILE_ATTRIBUTE_NORMAL,
+                                    nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    std::vector<char> text(4096, 0);
+    DWORD read = 0;
+    const BOOL ok = ReadFile(file, text.data(), static_cast<DWORD>(text.size() - 1), &read, nullptr);
+    CloseHandle(file);
+    if (ok == FALSE || read == 0) {
+        return;
+    }
+    UINT loaded = 0;
+    char* cursor = text.data();
+    while (cursor != nullptr && *cursor != '\0' && loaded < kMaxParts) {
+        char* line = cursor;
+        char* next = std::strchr(cursor, '\n');
+        if (next != nullptr) {
+            *next = '\0';
+            cursor = next + 1;
+        } else {
+            cursor = nullptr;
+        }
+        if (line[0] == '\0' || line[0] == '#' || line[0] == '\r') {
+            continue;
+        }
+        char name[32]{};
+        char albedo[64]{};
+        char material[64]{};
+        unsigned start = 0;
+        unsigned count = 0;
+        const int fields = sscanf_s(line,
+                                    "%31s %u %u %63s %63s",
+                                    name,
+                                    static_cast<unsigned>(sizeof(name)),
+                                    &start,
+                                    &count,
+                                    albedo,
+                                    static_cast<unsigned>(sizeof(albedo)),
+                                    material,
+                                    static_cast<unsigned>(sizeof(material)));
+        if (fields < 4 || count == 0 || name[0] == '\0' || albedo[0] == '\0') {
+            continue;
+        }
+        wchar_t fileWide[80]{};
+        wchar_t materialWide[80]{};
+        to_wide_suffix(albedo, fileWide, 80);
+        if (fields >= 5 && material[0] != '\0' && std::strcmp(material, "-") != 0) {
+            to_wide_suffix(material, materialWide, 80);
+        }
+        seed_part(loaded,
+                  start,
+                  count,
+                  name,
+                  fileWide,
+                  materialWide[0] != L'\0' ? materialWide : nullptr);
+        ++loaded;
+    }
+    if (loaded == 0) {
+        return;
+    }
+    g_partCount = loaded;
+    std::array<char, 96> note{};
+    const int written = std::snprintf(note.data(),
+                                      note.size(),
+                                      "ev=custom_albedo stage=parts source=file count=%u",
+                                      loaded);
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         std::string_view(note.data(), static_cast<std::size_t>(written)));
+    }
 }
 
-void load_profile_textures(ID3D11Device* device, LoadedProfile& profile) noexcept {
-    for (RuntimePart& part : profile.parts) {
+[[nodiscard]] bool create_images(ID3D11Device* device) noexcept {
+    for (std::size_t index = 0; index < g_partCount && index < kMaxParts; ++index) {
         std::vector<std::uint32_t> pixels;
-        UINT width = 0, height = 0;
-        UINT albedoWidth = 0, albedoHeight = 0;
-
-        if (!part.albedoFile.empty() && load_png_file(part.albedoFile, pixels, albedoWidth, albedoHeight)) {
-            (void)upload_image(device, pixels, albedoWidth, albedoHeight, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, part.albedoImage);
+        UINT width = 0;
+        UINT height = 0;
+        UINT albedoWidth = 0;
+        UINT albedoHeight = 0;
+        if (!load_png(g_parts[index].file, pixels, albedoWidth, albedoHeight)
+            || !upload_image(device,
+                             pixels,
+                             albedoWidth,
+                             albedoHeight,
+                             DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+                             g_images[index])) {
+            std::array<char, 128> line{};
+            const int written = std::snprintf(line.data(),
+                                              line.size(),
+                                              "ev=custom_albedo stage=atlas result=fail part=%s",
+                                              g_parts[index].name);
+            if (written > 0) {
+                core::log::write(core::log::Channel::client,
+                                 core::log::Level::error,
+                                 std::string_view(line.data(), static_cast<std::size_t>(written)));
+            }
+            return false;
         }
 
         pixels.clear();
         width = 0;
         height = 0;
-        bool mrLoaded = false;
-        if (!part.materialFile.empty()) {
-            mrLoaded = load_png_file(part.materialFile, pixels, width, height);
-        }
-        if (!mrLoaded) {
-            pixels.assign(1, 0xFF008DFF); // default 0.55 roughness
+        const wchar_t* material = g_parts[index].hasMaterial ? g_parts[index].material : nullptr;
+        const bool loaded = material != nullptr && load_png(material, pixels, width, height);
+        if (!loaded) {
+            pixels.assign(1, 0xFF008DFF);
             width = 1;
             height = 1;
         }
@@ -536,61 +654,19 @@ LoadedProfile load_profile_by_id(std::string_view profileId) {
                 break;
             }
         }
-    }
-
-    if (folderPath.empty()) {
-        return create_default_profile();
-    }
-
-    std::wstring manifestPath = folderPath + L"\\manifest.json";
-    std::string json = read_file_to_string(manifestPath);
-    if (json.empty()) {
-        manifestPath = folderPath + L"\\profile.json";
-        json = read_file_to_string(manifestPath);
-    }
-
-    LoadedProfile prof{};
-    prof.id = std::string(profileId);
-    prof.folderPath = folderPath;
-    prof.isDefault = false;
-
-    if (!json.empty()) {
-        prof.name = find_json_string(json, "name");
-        if (prof.name.empty()) prof.name = prof.id;
-        prof.author = find_json_string(json, "author");
-        prof.version = find_json_string(json, "version");
-        prof.vertexCount = find_json_uint(json, "vertex_count", 0);
-
-        // Parse parts
-        size_t pos = json.find("\"parts\"");
-        if (pos != std::string::npos) {
-            size_t arrayStart = json.find('[', pos);
-            size_t arrayEnd = json.rfind(']');
-            if (arrayStart != std::string::npos && arrayEnd != std::string::npos && arrayEnd > arrayStart) {
-                std::string_view partsView = std::string_view(json).substr(arrayStart, arrayEnd - arrayStart + 1);
-                size_t objStart = 0;
-                while ((objStart = partsView.find('{', objStart)) != std::string_view::npos) {
-                    size_t objEnd = partsView.find('}', objStart);
-                    if (objEnd == std::string_view::npos) break;
-                    std::string_view obj = partsView.substr(objStart, objEnd - objStart + 1);
-
-                    RuntimePart part{};
-                    part.start = find_json_uint(obj, "start");
-                    part.count = find_json_uint(obj, "count");
-                    part.name = find_json_string(obj, "name");
-
-                    std::string albedo = find_json_string(obj, "albedo");
-                    if (!albedo.empty()) {
-                        part.albedoFile = folderPath + L"\\" + to_wide(albedo);
-                    }
-                    std::string mat = find_json_string(obj, "material");
-                    if (!mat.empty()) {
-                        part.materialFile = folderPath + L"\\" + to_wide(mat);
-                    }
-                    prof.parts.push_back(part);
-                    objStart = objEnd + 1;
-                }
-            }
+        std::array<char, 192> line{};
+        const int written = std::snprintf(line.data(),
+                                          line.size(),
+                                          "ev=custom_albedo stage=atlas result=ok part=%s "
+                                          "w=%u h=%u source=png material=%s",
+                                          g_parts[index].name,
+                                          albedoWidth,
+                                          albedoHeight,
+                                          loaded ? "glb" : "default");
+        if (written > 0) {
+            core::log::write(core::log::Channel::client,
+                             core::log::Level::info,
+                             std::string_view(line.data(), static_cast<std::size_t>(written)));
         }
     }
 
@@ -765,8 +841,9 @@ void draw_replaced(ID3D11DeviceContext* context,
         draw();
         return;
     }
-
-    ID3D11ShaderResourceView* views[2]{part.albedoImage.view, part.materialImage.view};
+    note_first(part, start, count, targets);
+    const std::size_t index = static_cast<std::size_t>(&part - g_parts.data());
+    ID3D11ShaderResourceView* views[2]{g_images[index].view, g_materials[index].view};
     SavedPs saved{};
     capture_ps(context, saved);
     context->PSSetShader(g_shader, nullptr, 0);
@@ -884,8 +961,9 @@ void attach(ID3D11Device* device, ID3D11DeviceContext* context) noexcept {
     if (device == nullptr || context == nullptr) {
         return;
     }
-    g_device = device;
-    if (!compile_shader(device) || !install_hooks(device, context)) {
+    seed_defaults();
+    load_parts_file();
+    if (!compile_shader(device) || !create_images(device) || !install_hooks(device, context)) {
         detach();
         return;
     }
@@ -924,6 +1002,7 @@ void detach() noexcept {
     g_device = nullptr;
     g_loggedParts = 0;
     g_loggedMisses = 0;
+    g_seenMisses.fill(0);
     g_loggedTargets = false;
     g_loggedDepthOnly = false;
     g_dumpedPs = false;

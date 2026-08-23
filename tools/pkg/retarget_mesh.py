@@ -22,40 +22,144 @@ vertex keeps the weights its artist gave it instead of copying them off whicheve
 vertex happened to be nearest. Fingers collapse onto the wrist because the rig's finger joints
 are above the index ceiling of 28.
 
+**The hand is retargeted too, since 2026-08-23.** The arm chain alone left each wrist 4.9 cm
+from the joint that drives it, because the GLB's upper arm hangs from its own shoulder rather
+than the rig's, and the game rotates the hand about *its* joint - so that gap acted as a lever
+and the hand read as screwed on at the wrong angle. `fit_hands()` re-aims and scales the forearm
+onto the real wrist joint and turns the hand so its knuckles fan like the donor's. Pass
+`--no-fit-hands` to get the old behaviour. Targets come from `hand_targets.py`.
+
 Usage (from tools/pkg):
-    blender --background --python retarget_mesh.py -- 23512 character_body.obj
-    blender --background --python retarget_mesh.py -- 23512 character_body.obj --no-retarget
+    blender --background --python retarget_mesh.py -- 65535 out.obj --keep-seams --fingers --glb path.glb
+    blender --background --python retarget_mesh.py -- ... --no-fit-hands
 """
 import json
+import math
 import os
 import sys
 
 import bpy
 from mathutils import Matrix, Vector
 
-ARGV = sys.argv[sys.argv.index("--") + 1:]
-TARGET = int(ARGV[0])
-OUT = ARGV[1]
-RETARGET = "--no-retarget" not in ARGV
-GLB = r"C:\Chiliz\Destiny2SunriseCharacters\void_4003GasMask.glb"
+ARGV = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
 HERE = os.path.dirname(os.path.abspath(__file__))
 RIG = os.path.join(HERE, "objs", "skeleton", "rig.json")
+DEFAULT_GLB = os.environ.get("SUNRISE_GLB", "")
 
-# GLB vertex group -> rig bone index. Fingers, jaw and eyes fold into their parent because the
-# rig's own finger joints are 34-71, above the ceiling an armour mesh may write.
+
+def _take_opt(args, name, default=None):
+    if name not in args:
+        return default
+    at = args.index(name)
+    if at + 1 >= len(args):
+        raise SystemExit(f"{name} needs a value")
+    value = args[at + 1]
+    del args[at:at + 2]
+    return value
+
+
+_ARGS = list(ARGV)
+GLB = _take_opt(_ARGS, "--glb", DEFAULT_GLB)
+BONE_MAP_FILE = _take_opt(_ARGS, "--bone-map")
+MATERIAL_MAP_FILE = _take_opt(_ARGS, "--material-map")
+RETARGET = "--no-retarget" not in _ARGS
+KEEP_SEAMS = "--keep-seams" in _ARGS
+FINGERS = "--fingers" in _ARGS
+FIT_HANDS = "--no-fit-hands" not in _ARGS
+HAND_TARGETS = os.path.join(HERE, "objs", "skeleton", "hand_targets.json")
+
+# Artistic roll, applied after the fit: degrees about the forearm axis (pronation - the palm-up to
+# palm-down motion). The fit itself puts the hand on Destiny's own frame to 0.1 deg, so anything
+# here is taste, not correctness. **The sign matches the preview panel labels**, so pick a value by
+# looking rather than by reasoning about the right-hand rule - no launch needed:
+#     python hand_view.py out.png --side back --axis forearm --angles -40,-20,0,20,40
+# User picked -25 on the left hand, 2026-08-23, off exactly that sheet. Right hand left alone.
+HAND_ROLL = {"L": -25.0, "R": 0.0}
+_ROLL_OPT = _take_opt(_ARGS, "--hand-roll")
+if _ROLL_OPT:
+    for _item in _ROLL_OPT.split(","):
+        _side, _, _value = _item.partition("=")
+        HAND_ROLL[_side.strip().upper()] = float(_value)
+_POSITIONAL = [item for item in _ARGS if not item.startswith("--")]
+if len(_POSITIONAL) < 2:
+    raise SystemExit("usage: blender --background --python retarget_mesh.py -- "
+                     "<target_verts> <out.obj> --glb path.glb [--keep-seams] [--fingers] "
+                     "[--bone-map path] [--material-map path]")
+TARGET = int(_POSITIONAL[0])
+OUT = _POSITIONAL[1]
+if not GLB or not os.path.isfile(GLB):
+    raise SystemExit(
+        "pass --glb path.glb (or set SUNRISE_GLB). "
+        "retarget_mesh does not ship a character."
+    )
+
+# GLB vertex group -> rig bone index.
+#
+# The live map skipped bone 8 (spine_upper) and parked Neck on the chest (11). Mid-back verts
+# then blended 5↔11 across the missing joint, which is the slide/stretch when the pawn bends.
+# The GLB has no UpperChest, so Chest is split 8/11 by vertex height after the pose bake.
+# Neck is 13. Do not pose the torso to line up with bone 5 — that bone sits at y −0.120.
 BONE_MAP = {
-    "Hips": 1, "Spine": 5, "Chest": 11, "Neck": 11, "Head": 18,
+    "Hips": 1, "Spine": 5, "Neck": 13, "Head": 18,
     "Jaw": 18, "LeftEye": 18, "RightEye": 18,
     "Left shoulder": 27, "Left arm": 15, "Left elbow": 19, "Left wrist": 21,
     "Right shoulder": 28, "Right arm": 17, "Right elbow": 20, "Right wrist": 22,
     "Left leg": 3, "Left knee": 6, "Left ankle": 9, "Left toe": 25,
     "Right leg": 4, "Right knee": 7, "Right ankle": 10, "Right toe": 26,
 }
-for side, hand in (("_L", 21), ("_R", 22)):
-    for finger in ("Thumb0", "Thumb1", "Thumb2", "IndexFinger1", "IndexFinger2", "IndexFinger3",
-                   "MiddleFinger1", "MiddleFinger2", "MiddleFinger3",
-                   "LittleFinger1", "LittleFinger2", "LittleFinger3"):
-        BONE_MAP[finger + side] = hand
+# Chest is not a single joint. Split between spine_upper (8) and chest (11) by Destiny Z.
+CHEST_GROUP = "Chest"
+SPINE_UPPER = 8
+CHEST_BONE = 11
+
+# Gauntlet finger indices, recovered from Scatterhorn co-weights (see recover_finger_joints.py).
+# 34/39 are the glove-back pad, not a digit — leave them unused. Each non-thumb finger is a
+# two-joint chain; GLB tips fold onto the distal joint. Off unless --fingers: those indices
+# sit above BODY_BONE_CEILING and the chest draw has never posed them without needles.
+FINGER_MAP = {
+    "Thumb0_L": 45, "Thumb1_L": 56, "Thumb2_L": 66,
+    "IndexFinger1_L": 40, "IndexFinger2_L": 52, "IndexFinger3_L": 52,
+    "MiddleFinger1_L": 42, "MiddleFinger2_L": 53, "MiddleFinger3_L": 53,
+    "LittleFinger1_L": 43, "LittleFinger2_L": 54, "LittleFinger3_L": 54,
+    "Thumb0_R": 51, "Thumb1_R": 61, "Thumb2_R": 71,
+    "IndexFinger1_R": 46, "IndexFinger2_R": 57, "IndexFinger3_R": 57,
+    "MiddleFinger1_R": 48, "MiddleFinger2_R": 58, "MiddleFinger3_R": 58,
+    "LittleFinger1_R": 49, "LittleFinger2_R": 59, "LittleFinger3_R": 59,
+}
+WRIST_FOLD = {name: (21 if name.endswith("_L") else 22) for name in FINGER_MAP}
+
+
+def _load_json_map(path):
+    if not path:
+        return {}, {}
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    if isinstance(data, dict) and "groups" in data:
+        groups = dict(data["groups"])
+        fingers = dict(data.get("fingers") or {})
+        chest = data.get("chest_group")
+        if chest:
+            global CHEST_GROUP
+            CHEST_GROUP = chest
+        return groups, fingers
+    return dict(data), {}
+
+
+if BONE_MAP_FILE:
+    extra_groups, extra_fingers = _load_json_map(BONE_MAP_FILE)
+    BONE_MAP.update(extra_groups)
+    FINGER_MAP.update(extra_fingers)
+    WRIST_FOLD = {name: (21 if name.endswith("_L") else 22) for name in FINGER_MAP}
+
+if FINGERS:
+    BONE_MAP.update(FINGER_MAP)
+else:
+    BONE_MAP.update(WRIST_FOLD)
+
+MATERIAL_RENAME = {}
+if MATERIAL_MAP_FILE:
+    with open(MATERIAL_MAP_FILE, encoding="utf-8") as handle:
+        MATERIAL_RENAME = json.load(handle)
 
 # (pose bone, rig joint at its head, rig joint at its tail). Parent first - posing the upper arm
 # moves the elbow, so the elbow has to be aligned against where it ends up.
@@ -64,6 +168,29 @@ ARM_CHAINS = [
     ("Right arm", 28, 20), ("Right elbow", 20, 22),
 ]
 MAX_INFLUENCES = 4
+
+# The hand fit. `ARM_CHAINS` aims each bone from the *rig's* joint, but the GLB's upper arm hangs
+# from its own shoulder — ~4.8 cm inboard of rig joint 27 — so the error is inherited all the way
+# down and the wrist lands 4.9 cm from the joint that drives it. The game rotates our hand about
+# **its** joint, so that gap is a lever arm: every wrist bend swings the hand ~5 cm wide of the
+# forearm and reads as a hand screwed on at the wrong angle (user, 2026-08-23, both first person
+# and the character screen).
+#
+# Two corrections per side, and deliberately no more:
+#   1. Re-aim the forearm at the real wrist joint from wherever our elbow actually is, then scale
+#      it along its own length so the tail lands *on* that joint. The arm above the elbow is
+#      untouched, so the confirmed silhouette survives.
+#   2. Rotate the hand so its knuckle fan matches the donor's. Rotation only - our knuckles sit
+#      31% closer to the wrist and our fingers run 8 cm longer than Destiny's, and that is the
+#      character's hand, not a defect. Scaling to match would trade one wrong hand for another.
+HAND_FIT = [
+    ("L", "Left elbow", "Left wrist",
+     {"index": "IndexFinger1_L", "middle": "MiddleFinger1_L",
+      "little": "LittleFinger1_L", "thumb": "Thumb0_L"}),
+    ("R", "Right elbow", "Right wrist",
+     {"index": "IndexFinger1_R", "middle": "MiddleFinger1_R",
+      "little": "LittleFinger1_R", "thumb": "Thumb0_R"}),
+]
 
 
 def to_destiny(p):
@@ -94,6 +221,144 @@ def align(armature, name, direction_world):
     pose_bone.matrix = armature.matrix_world.inverted() @ posed
     bpy.context.view_layer.update()
     return current, direction_world.normalized()
+
+
+def hand_frame(palm, index, middle, little):
+    """@return Orthonormal frame of a hand: down the hand, across the knuckles, palm normal.
+
+    **Not** a Procrustes fit over knuckle positions. Our knuckles sit 31% closer to the wrist
+    than Destiny's, and with radii that different, minimising landmark *position* trades
+    orientation away to buy radial error it can never win - measured: fitting positions left the
+    knuckle line 13.6 deg out and a second round made it 19.2 deg, while aligning these two
+    directions leaves 4.4 deg and a *lower* landmark error. Orientation is what we can fix
+    without rescaling the character's hand, so orientation is what this fits.
+    """
+    axis = (middle - palm).normalized()
+    across = index - little
+    across -= axis * across.dot(axis)
+    across.normalize()
+    return Matrix((axis, across, axis.cross(across))).transposed()
+
+
+def frame_rotation(ours, theirs):
+    """@return Rotation taking our hand frame onto the donor's, and its angle in degrees."""
+    rotation = theirs @ ours.transposed()
+    trace = rotation[0][0] + rotation[1][1] + rotation[2][2]
+    return rotation, float(math.degrees(math.acos(min(1.0, max(-1.0, (trace - 1) / 2)))))
+
+
+def rotate_pose_bone(armature, name, rotation):
+    """Turn one pose bone about its own head, keeping its children attached."""
+    pose_bone = armature.pose.bones[name]
+    world = armature.matrix_world @ pose_bone.matrix
+    head = world.translation.copy()
+    posed = (rotation @ world.to_3x3()).to_4x4()
+    posed.translation = head
+    pose_bone.matrix = armature.matrix_world.inverted() @ posed
+    bpy.context.view_layer.update()
+
+
+def posed_centroids(armature, wanted):
+    """@return name -> weight-averaged **posed** world position of the vertices in that group.
+
+    Positions come from the evaluated mesh (so the pose is applied) and weights from the original
+    (the armature modifier changes neither vertex count nor order). Same quantity the donor side
+    is measured with in `hand_targets.py`, which is the point — fitting one measure and checking
+    another is how the first version of this rolled the hand the wrong way.
+    """
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    totals = {name: [Vector((0.0, 0.0, 0.0)), 0.0] for name in wanted}
+    for obj in [o for o in bpy.data.objects if o.type == 'MESH']:
+        index_of = {group.name: group.index for group in obj.vertex_groups}
+        present = {name: index_of[bone] for name, bone in wanted.items() if bone in index_of}
+        if not present:
+            continue
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh()
+        matrix = evaluated.matrix_world
+        try:
+            for vertex, source in zip(mesh.vertices, obj.data.vertices):
+                weights = {element.group: element.weight for element in source.groups}
+                for name, group in present.items():
+                    weight = weights.get(group, 0.0)
+                    if weight > 0.0:
+                        totals[name][0] += (matrix @ vertex.co) * weight
+                        totals[name][1] += weight
+        finally:
+            evaluated.to_mesh_clear()
+    return {name: total / mass for name, (total, mass) in totals.items() if mass > 0.0}
+
+
+def fit_hands(armature):
+    """Put each wrist on the joint that drives it, then aim the knuckles like the donor's.
+
+    Runs after ARM_CHAINS, because it re-aims the forearm using where the elbow actually ended
+    up. Everything is done in Blender world space - converting a rotation between Blender and
+    Destiny axes is an easy sign error, and the targets convert cleanly the other way.
+    """
+    if not os.path.isfile(HAND_TARGETS):
+        print(f"  no {HAND_TARGETS}; run `python hand_targets.py`. Hands left unfitted.")
+        return
+    with open(HAND_TARGETS, encoding="utf-8") as handle:
+        targets = json.load(handle)["sides"]
+
+    for side, forearm_name, wrist_name, knuckle_names in HAND_FIT:
+        spec = targets.get(side)
+        if spec is None or forearm_name not in armature.pose.bones:
+            print(f"  {side}: no targets or no '{forearm_name}' bone; skipped")
+            continue
+        wrist_target = to_blender(spec["wrist"])
+        elbow = (armature.matrix_world @ armature.pose.bones[forearm_name].matrix).translation
+        before = ((armature.matrix_world @ armature.pose.bones[wrist_name].matrix).translation
+                  - wrist_target).length
+
+        # 1. aim the forearm at the real joint, then set its length so the tail lands on it
+        align(armature, forearm_name, wrist_target - elbow)
+        wrist_head = (armature.matrix_world @ armature.pose.bones[wrist_name].matrix).translation
+        reach = (wrist_head - elbow).length
+        want = (wrist_target - elbow).length
+        factor = 1.0
+        if reach > 1e-6:
+            factor = want / reach
+            # The hand must not inherit that squash: it would shorten the fingers along one axis
+            # and shear the palm. It still inherits rotation and translation, so it stays attached.
+            armature.data.bones[wrist_name].inherit_scale = 'NONE'
+            pose_bone = armature.pose.bones[forearm_name]
+            pose_bone.scale = (1.0, factor * pose_bone.scale.y, 1.0)
+            bpy.context.view_layer.update()
+        wrist_head = (armature.matrix_world @ armature.pose.bones[wrist_name].matrix).translation
+        print(f"  {side} wrist: {before * 100:5.2f} cm off the joint -> "
+              f"{(wrist_head - wrist_target).length * 100:4.2f} cm, forearm x{factor:.3f}")
+
+        # 2. turn the hand so it faces the way the donor's does
+        wanted = dict(knuckle_names)
+        wanted["palm"] = wrist_name
+        ours = posed_centroids(armature, wanted)
+        theirs = spec.get("centroids", {})
+        needed = ("palm", "index", "middle", "little")
+        missing = [key for key in needed if key not in ours or key not in theirs]
+        if missing:
+            print(f"  {side}: no centroid for {missing}; hand left unturned")
+            continue
+        rotation, angle = frame_rotation(
+            hand_frame(*(ours[key] for key in needed)),
+            hand_frame(*(to_blender(theirs[key]["position"]) for key in needed)))
+        rotate_pose_bone(armature, wrist_name, rotation)
+        after = posed_centroids(armature, wanted)
+        drift = [(after[key] - to_blender(theirs[key]["position"])).length
+                 for key in needed if key in after]
+        print(f"  {side} hand : turned {angle:5.1f} deg (frame fit), "
+              f"landmark drift {sum(drift) / len(drift) * 100:5.2f} cm")
+
+        # 3. artistic roll on top of the fit. Negated so the value matches the sign printed on the
+        # `hand_view.py --axis forearm` preview panels, which is how it gets chosen.
+        roll = HAND_ROLL.get(side, 0.0)
+        if roll:
+            axis = wrist_target - elbow
+            rotate_pose_bone(armature, wrist_name,
+                             Matrix.Rotation(math.radians(-roll), 3, axis.normalized()))
+            print(f"  {side} roll : {roll:+.1f} deg about the forearm (taste, not fit; "
+                  f"same sign as the preview sheet)")
 
 
 def corner_normal(mesh, loop, index):
@@ -179,6 +444,8 @@ def write_groups(obj, mesh, path):
     the alternative is rebuilding the mesh later just to learn this.
     """
     slots = [material.name if material else "<none>" for material in obj.data.materials]
+    if MATERIAL_RENAME:
+        slots = [MATERIAL_RENAME.get(name, name) for name in slots]
     faces = [poly.material_index for poly in mesh.polygons if len(poly.vertices) == 3]
     counts = {}
     for index in faces:
@@ -224,6 +491,11 @@ def main():
             was, now = align(armature, name, target)
             angle = was.angle(now)
             print(f"  {name:>14}: rig {head_bone}->{tail_bone}, turned {angle * 57.2958:5.1f} deg")
+        if FIT_HANDS:
+            print("hand fit:")
+            fit_hands(armature)
+        else:
+            print("--no-fit-hands: wrists stay wherever the arm chain leaves them")
         bpy.ops.object.mode_set(mode='OBJECT')
     else:
         print("--no-retarget: mesh stays in its T-pose")
@@ -249,40 +521,63 @@ def main():
 
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.remove_doubles(threshold=0.0001)
+    if KEEP_SEAMS:
+        # Destiny stores one UV/normal per vertex. Welding 61k GLB verts down to 23,512 forced
+        # 7,785 face corners to share a neighbour's UV — those are the visible weld seams.
+        # The unwelded mesh still fits under the 65,535 R16 index ceiling.
+        print("keep-seams: skipping remove_doubles")
+    else:
+        bpy.ops.mesh.remove_doubles(threshold=0.0001)
     bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
     bpy.ops.object.mode_set(mode='OBJECT')
-    print(f"joined+welded: {len(joined.data.vertices):,} verts, {len(joined.data.polygons):,} tris")
+    print(f"joined{'+seams-kept' if KEEP_SEAMS else '+welded'}: "
+          f"{len(joined.data.vertices):,} verts, {len(joined.data.polygons):,} tris")
 
     while joined.modifiers:
         bpy.ops.object.modifier_apply(modifier=joined.modifiers[0].name)
 
-    passes = 0
-    while len(joined.data.vertices) > TARGET:
-        passes += 1
-        if passes > 8:
-            raise RuntimeError(f"still {len(joined.data.vertices):,} verts; target {TARGET:,}")
-        modifier = joined.modifiers.new(name="dec", type='DECIMATE')
-        modifier.decimate_type = 'COLLAPSE'
-        modifier.ratio = max(0.05, TARGET / max(len(joined.data.vertices), 1) * 0.92)
-        bpy.ops.object.modifier_apply(modifier="dec")
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
-        bpy.ops.object.mode_set(mode='OBJECT')
-        print(f"decimated: {len(joined.data.vertices):,} verts, {len(joined.data.polygons):,} tris")
+    if KEEP_SEAMS:
+        if len(joined.data.vertices) > 0xFFFF:
+            raise RuntimeError(f"{len(joined.data.vertices):,} verts need 32-bit indices")
+        print(f"keep-seams: not decimating ({len(joined.data.vertices):,} <= 65535)")
+    else:
+        passes = 0
+        while len(joined.data.vertices) > TARGET:
+            passes += 1
+            if passes > 8:
+                raise RuntimeError(f"still {len(joined.data.vertices):,} verts; target {TARGET:,}")
+            modifier = joined.modifiers.new(name="dec", type='DECIMATE')
+            modifier.decimate_type = 'COLLAPSE'
+            modifier.ratio = max(0.05, TARGET / max(len(joined.data.vertices), 1) * 0.92)
+            bpy.ops.object.modifier_apply(modifier="dec")
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='SELECT')
+            bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
+            bpy.ops.object.mode_set(mode='OBJECT')
+            print(f"decimated: {len(joined.data.vertices):,} verts, {len(joined.data.polygons):,} tris")
 
     mesh = joined.data
     matrix = joined.matrix_world
     group_bone = {}
+    chest_groups = set()
     unmapped = set()
     for group in joined.vertex_groups:
-        if group.name in BONE_MAP:
+        if group.name == CHEST_GROUP:
+            chest_groups.add(group.index)
+        elif group.name in BONE_MAP:
             group_bone[group.index] = BONE_MAP[group.name]
         else:
             unmapped.add(group.name)
     if unmapped:
         print(f"unmapped vertex groups (ignored): {sorted(unmapped)}")
+    with open(RIG, encoding="utf-8") as fh:
+        rig_z = {joint["bone"]: joint["position"][2] for joint in json.load(fh)["joints"]}
+    z_upper = float(rig_z[SPINE_UPPER])
+    z_chest = float(rig_z[CHEST_BONE])
+    z_span = max(z_chest - z_upper, 1e-4)
+    print(f"chest split: bone {SPINE_UPPER} at z {z_upper:.3f} -> "
+          f"bone {CHEST_BONE} at z {z_chest:.3f}")
+    print(f"fingers: {'gauntlet joints 34-71' if FINGERS else 'folded onto wrists 21/22'}")
 
     lo = [1e9] * 3
     hi = [-1e9] * 3
@@ -295,8 +590,15 @@ def main():
             hi[axis] = max(hi[axis], point[axis])
         totals = {}
         for element in vertex.groups:
+            if element.weight <= 0.0:
+                continue
+            if element.group in chest_groups:
+                t = min(1.0, max(0.0, (point.z - z_upper) / z_span))
+                totals[SPINE_UPPER] = totals.get(SPINE_UPPER, 0.0) + element.weight * (1.0 - t)
+                totals[CHEST_BONE] = totals.get(CHEST_BONE, 0.0) + element.weight * t
+                continue
             bone = group_bone.get(element.group)
-            if bone is not None and element.weight > 0.0:
+            if bone is not None:
                 totals[bone] = totals.get(bone, 0.0) + element.weight
         best = sorted(totals.items(), key=lambda item: -item[1])[:MAX_INFLUENCES]
         total = sum(weight for _bone, weight in best)
@@ -327,6 +629,8 @@ def main():
                      "global bone indices. Weights are 0-255 and sum to 255. Vertex order "
                      "matches the OBJ beside this file exactly."),
             "retargeted": RETARGET,
+            "keep_seams": KEEP_SEAMS,
+            "fingers": FINGERS,
             "vertices": len(skins),
             "skins": skins,
         }, fh)

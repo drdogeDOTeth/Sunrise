@@ -1,8 +1,8 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-22 (**v18 CONFIRMED** in destinations). First fully textured custom guardian that holds up in-world. v17’s game-t2 designs are closed.
+**Updated:** 2026-08-23 (**left-hand roll −25° shipped, not yet seen** — `037c_34` / `037d_32` / `0698_30`). The v24 hand refit under it is **user-confirmed better** in game. FP arms on gauntlets `(0, 16326)` confirmed in-world. Host Intake tool is live. Race-glove blank still unconfirmed. `--fingers` CLOSED on the chest.
 
-**Live / restore:** `20260822-172401.json` (86 layers). `0698_25` stays in `packages\_reverted_uv_tiles\`. Do **not** `--restore` `150046` (that puts tiles back). **Durable status (full inventory):** `docs/CUSTOM_CHARACTER.md`. Destiny must be closed to write packages or overwrite the DLL.
+**Live / restore:** newest is the **v25 left-hand roll** over the **v24 refit** (`037c_33` / `037d_31` / `0698_29`, confirmed good), both on top of `20260823-141400.json` (100 layers — FP arms + race-glove blanks, v23 hands). Roll too strong or the wrong way? Change `HAND_ROLL` and re-run; the refit underneath is sound. Older floors: `20260822-235602` (92 layers, hands-on-gauntlets confirmed), `20260822-225414` (v23 wrists-only). Tiled `0698_25` stays in `packages\_reverted_uv_tiles\`. Do **not** `--restore` `150046`. **Durable status:** `docs/CUSTOM_CHARACTER.md`. Destiny must be closed to write packages or overwrite the DLL.
 
 **Target look:** the GLB in Blender. Reference: `tools/pkg/objs/textures/_glb_blender_preview.png`. Warlock only.
 
@@ -10,7 +10,110 @@
 
 ## NEXT AGENT — start here
 
-**2026-08-23 — Me.vrm is the live playable body.** Spine+arm+leg length-scale onto the dumped Warlock rig (head/hands/feet joints at 0–8 cm). Live layers: `037c_9` / `037d_8` / `0698_8`. Profile `models/me/` is PNG albedos, nine carrier ranges. Previous inspect shot had the Destiny bald head in the hoodie hole because the VRM face sat 20 cm too high. Do **not** `--undo`. Race head may still z-fight if it draws in front.
+### The twisted hand: SHIPPED as `037c_33` / `037d_31` / `0698_29`, awaiting one launch
+
+User 2026-08-23: the hand looks "screwed on at the wrong angle" in **first person and in the
+character screen** — both views, every pose. Both views mattering is what proved it was our bind
+pose and not the FP viewmodel rig.
+
+**Cause, and it is in the tool's own docstring:** *"this script poses the arms only."*
+`ARM_CHAINS` ends at `("Left elbow", 19, 21)`, so the wrist bone was never posed. Worse, each arm
+is rotated about the **GLB's** shoulder, which sits ~4.8 cm inboard of rig joint 27 — so the
+error is inherited all the way down and **each wrist landed 4.9 cm from the joint that drives
+it**. The game rotates our hand about *its* joint, so that gap was a lever arm: every wrist bend
+swung the hand ~5 cm wide. With **48% of the hands mesh (1,550 of 3,206 verts) on finger joints
+40–71**, that dominated the view.
+
+Fixed in `retarget_mesh.fit_hands()`, two corrections per side and deliberately no more:
+re-aim the forearm at the real wrist joint from wherever our elbow actually is and scale it along
+its length so the tail lands on that joint (×0.851 / ×0.892); then turn the hand so its frame
+matches the donor's.
+
+| measure | v23 (was live) | **v24 (shipped)** |
+|---|---:|---:|
+| wrist to its joint | 4.89 / 4.93 cm | **0.72 cm** |
+| hand axis vs donor | 6.3° / 6.8° | **0.1°** |
+| knuckle line vs donor | 28.6° / 25.3° | **0.1°** |
+| palm normal vs donor | 29.2° / 26.0° | **0.1°** |
+
+**The change is contained, verified vertex by vertex against the confirmed body:** chest, torso,
+legs and shoulders moved **0** vertices, upper arm 30 verts by ≤2.6 mm, weights byte-identical.
+Only forearm-down moved. Index counts are unchanged (chest 122,304, hands 16,326), so
+`custom_parts.txt` and the hook need no edit. 0 dangling refs across 22 packages.
+
+Two traps this cost, both worth not repeating:
+
+- **Do not fit the hand to knuckle *blend joints*.** A blend region between palm and finger sits
+  on the **armoured back** of the glove, so the joint it estimates is biased dorsally; fitting to
+  it rolled the hand ~13° the wrong way (audit twist −2.3° → +11.4°). Use weighted centroids,
+  which is what `hand_targets.py` now emits and what `audit_hand_bind.py` checks — **fit and
+  check must optimise the same quantity.**
+- **Do not fit the hand by Procrustes over knuckle positions.** Our knuckles sit 31% closer to
+  the wrist and our fingers run 8 cm longer than Destiny's; with radii that different, minimising
+  position trades orientation away to buy radial error it can never win. Position-fitting left
+  the knuckle line 13.6° out and a second round made it 19.2°. Aligning two *directions*
+  (wrist→middle, index→little) leaves 0.1° **and** a lower landmark error (2.41 vs 2.61 cm).
+
+**Still open, by choice:** our knuckles remain ~2.5 cm inboard of Destiny's joints, so fingers
+still pivot slightly along their length rather than at the base. Closing it means scaling the
+hand ×1.4, which would make the character's already-long fingers 40% longer. Orientation and
+mounting are fixed; hand *proportions* are the character's, not a defect.
+
+### Artistic roll: `HAND_ROLL`, left hand at −25° (`037c_34` / `037d_32` / `0698_30`)
+
+User confirmed the refit ("looks better") and then asked for the left palm to roll over —
+pronation, the palm-up-to-palm-down motion, **not** a tilt within the palm plane. That is taste,
+not fit, so it lives in `retarget_mesh.HAND_ROLL` as degrees about the forearm axis. Left −25,
+right untouched. Verified: 24.8° of roll, fingers swung 3.5°, right hand moved **0** vertices,
+everything outside the hands 17 verts by ≤3.7 mm, index counts unchanged.
+
+**Pick the value by looking, never by reasoning about the right-hand rule.** `HAND_ROLL`'s sign
+matches the preview sheet's panel labels on purpose:
+
+```
+python hand_view.py out.png --side back --axis forearm --angles -40,-20,0,20,40
+```
+
+Two things that will mislead you here:
+
+- **A preview whose camera comes from the hand's own frame cannot show a roll** — the camera rolls
+  with the hand and the render looks untouched. Measure against a *fixed* frame (a previous
+  version's) to check a roll landed.
+- **Screen-right has to be defined once.** Two scratch scripts defined it with opposite signs and
+  produced contradictory readings of the same correct mesh. `cross(palm_normal, fingers)` is the
+  convention the preview sheet uses.
+
+Ruled out on the way, do not re-derive:
+
+- **`FINGER_MAP` is correct.** 40→52, 42→53, 43→54 and mirrors are the same digit's next joint
+  (1–3° apart from the wrist, ~1 cm further out); thumb 45→56→66 progresses properly. 43 is the
+  **pinky** and 44 the **ring** finger, which the GLB has no group for.
+- `recover_finger_joints.py` reports 52–60 as missing only because it looks at **dominant**
+  vertices; they are never dominant on the glove. Weighted centroids locate them fine.
+- **No cross-side weight bleed** — zero verts mix a left and right bone.
+- The bind **roll** is not the fault: twist about the forearm is −2.3° / −1.1°.
+- An early pass here claimed a 180° palm flip on the right hand. That was an **SVD sign
+  ambiguity** in a PCA axis, not real. Build hand frames from named bone chains, never from PCA.
+
+**Hands-on-gauntlets CONFIRMED in-world.** First-person draws the gauntlet mesh — upper arm, forearm, palm and fingers now live on that draw `(0, 16326)` so Ghost/weapon view is a complete arm (chest never draws in FP). Skip-draw is **reverted**. Finger bones 40–71 can still spaghetti on that path. Do not `--fingers` on the chest. Do not AABB-fit. Do not hide the draw.
+
+**Host Intake** (`bring_guardian.ps1` / `tools/pkg/bring_guardian.py`) is how a **caller-supplied** GLB becomes the Warlock: extract → Blender retarget (`--keep-seams --fingers`) → cut hands → `custom_parts.txt` → inject `--hands-on-gauntlets`. The tool does **not** ship a character (no baked-in gas-mask path). Hook reads `C:\Sunrise\bin\x64\Sunrise\custom_parts.txt` (defaults if missing).
+
+Race-default upper-body copies blanked (not yet seen). `--fingers` stays CLOSED.
+
+Live 981E/9809 draw our complete arms `(0, 16326)` (upper arm + forearm + palm + fingers + shoulder cuff). Bind is the chest frame (~1.01), not the glove 0.45 AABB. Arrangement 2292 has no sibling. The leftover leather is the replicated player-body piece with the **7685/7754** part signature:
+
+| tag | package | action |
+|---|---|---|
+| `0x815B9521` | `w64_globals_06dc_7.pkg` | blanked (was live in the last capture) |
+| `0x80FDBE41` | `w64_globals_03ed_6.pkg` | blanked (second globals copy) |
+| `0x80EFC649` | `ui_037e` | **left alone** — same mesh 0/1 plus select extras |
+
+Hook miss log now records unique unmatched `(start, count)` (cap 64, no chest-range filter). Look for: leftover leather gone; SkinTats hands; maybe the bald head gone too (same mesh). Leather still there = read `sunrise.log` misses, `--restore` `20260822-235602`. Do not blank `0x80EFC649`. Do not `--fingers`. Do not AABB-fit.
+
+---
+
+## NEXT AGENT — v18 floor (still live)
 
 **Character select is the Blender character** (user 2026-08-22). Green SkinTats, charcoal tank, black mask, striped pants, sneakers. That is done. Do not colour-probe. Do not pack another 512.
 
@@ -1608,18 +1711,13 @@ same default mesh the old `probe_heads.py` work could never find in `globals`. I
 character path, not by armour, which is why blanking armour never removed it. Options: find and
 blank that head, or accept it and design the custom head around it.
 
-**A glove still draws over the custom hands.** The gauntlet models we blank are `0x80EF981E` /
-`0x80EF9809`, from arrangement 2292 — so something else is drawing. Candidates, cheapest first:
+**A glove still draws over the custom hands.** `0x80EF981E` / `0x80EF9809` now *are* our
+hand mesh. Arrangement 2292 has no sibling. The leftover is the replicated default upper
+body (7685/7754 signature). Probe 2026-08-23 blanked `0x815B9521` and `0x80FDBE41`.
+Do **not** blank the UI copy `0x80EFC649`. Do not `--fingers`.
 
-1. **The gauntlet arrangement carries more than two models.** `lookup_arrangement.py` resolves an
-   arrangement hash to a pair; re-check whether 2292 yields further entity models beyond A/B, the
-   way the chest SEntity also carries the second robe `0x80EFA1D4` / `0x80EFA1B3`.
-2. **A sibling model on the same SEntity**, exactly like the second robe. Scan the gauntlet
-   SEntity's resource for every `0x808073A5` rather than taking the first.
-3. **Mesh 1 of the gauntlet models.** `blank_model` zeroes every part's index count across all
-   meshes, so this is unlikely, but worth confirming from the receipt.
-
-This is cosmetic and low-risk. Do not fix it in the same layer as a UV change.
+Separate: the GLB has no `RingFinger*` groups, so Destiny ring bones 44/55 have zero verts.
+That is the stiff digit, not a leftover mesh. Index/middle/thumb/pinky are weighted.
 
 ## `_21` shipped a stride bug. `_22` is the fix.
 

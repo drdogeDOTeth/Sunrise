@@ -5,8 +5,8 @@ alwaysApply: true
 
 # Destiny2ProjectSunrise — live memory
 
-Read `HANDOFF.md` before any package write. Root workspace `HANDOFF.md` is stale (`_18`); ignore it.
-Durable status: `docs/CUSTOM_CHARACTER.md`.
+Read `Sunrise/HANDOFF.md` before any package write. Root `HANDOFF.md` is stale (`_18`); ignore it.
+Durable status: `Sunrise/docs/CUSTOM_CHARACTER.md`.
 
 ## Hard stops
 
@@ -23,6 +23,8 @@ Durable status: `docs/CUSTOM_CHARACTER.md`.
 - Do **not** encode `TEXCOORD2` as the world normal (v16: select dark, world a hole).
 - Do **not** sample Destiny `t2` for material (v17: Scatterhorn designs on the body).
 - Do **not** `--restore` `20260822-150046` (puts tiled UVs back).
+- Do **not** `--fingers` / write bones 34–71 on the **chest** (needled hands to the feet).
+- Do **not** AABB-fit the hands. Do **not** use the glove 0.45 AABB. Hands stay on the gauntlet draw with the **chest bind frame**.
 - One launch is scarce. Combine distinguishable tests. Fill `dump/request.txt` (cap 1024) on the same trip.
 - Destiny must be closed to write packages or overwrite the DLL.
 
@@ -30,14 +32,14 @@ Durable status: `docs/CUSTOM_CHARACTER.md`.
 
 **Character select = the Blender character** (v12, user 2026-08-22). Geometry + five-part split + unique GLB albedos.
 
-**Live / restore = `20260822-172401.json`** (86 layers). `0698_25` is in `packages\_reverted_uv_tiles\`. Do not `--restore` 150046.
+**Live / restore = `20260822-235602.json`** (92 layers, **hands-on-gauntlets confirmed**). Live also has `globals_06dc_7` + `globals_03ed_6` (race-glove blank, not confirmed). Prior v23 wrists-only: `20260822-225414`. Tiled `0698_25` is in `packages\_reverted_uv_tiles\`. Do not `--restore` 150046.
 
-**Sunrise DLL is hook v18** (`mode=ours`, user-confirmed in destinations). First fully textured custom guardian that holds up in-world. v15 killed the quilt + green-world leak. Do not sample Destiny t2. Do not encode TEXCOORD2. Snapshot `20260822-172401`. Full inventory: `docs/CUSTOM_CHARACTER.md`.
+**Sunrise DLL is hook v18** plus a 6th exact part for gauntlet arms (now `(0, 16326)`, upper + forearm + palm). v23 spine/unweld confirmed. `--fingers` is **closed**. Hands-on-gauntlets is **the floor** (user: no needles, sword grip). Do not sample Destiny t2. Do not encode TEXCOORD2. Full inventory: `Sunrise/docs/CUSTOM_CHARACTER.md`.
 
 ## Next
 
-v18 is the floor. Leftover: stock gloves, bald race head, collapsed necklace UVs. Hang = revert DLL.
+First-person hand-skip is **reverted**. Arms ride the gauntlet draw `(0, 16326)` so FP Ghost/weapon has a complete arm, not a floating palm. Finger bones 40–71 can still spaghetti; do not hide the draw. Live packages `037c_32` / `037d_30` / `0698_28` are **not snapshotted** until the user confirms. Hang / needles / leftover leather still there = restore `20260822-235602`. Next custom GLB goes through `Sunrise/bring_guardian.ps1`. Race-glove probe live: blanked `0x815B9521` + `0x80FDBE41`. Do **not** blank UI `0x80EFC649`. Do not `--fingers`. Do not AABB-fit.
 
 ## Restore
 
-`python known_good.py --check` / `--restore` (newest snapshot = `20260822-172401`).
+`python known_good.py --check` / `--restore` (newest snapshot = `20260822-235602`).
