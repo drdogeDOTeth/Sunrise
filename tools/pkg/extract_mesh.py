@@ -38,9 +38,10 @@ import sys
 from pathlib import Path
 
 import parse_models as models_module
+from game_paths import dump_dir
 from parse_models import DUMP, Model, models, option
 
-GEOMETRY = Path(r"C:\Sunrise\bin\x64\Sunrise\dump")
+GEOMETRY = dump_dir()
 PACKED_MAX = 32767.0
 TRIANGLES = 3
 TRIANGLE_STRIP = 5
