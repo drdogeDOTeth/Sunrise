@@ -5,9 +5,12 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 #include <imgui.h>
 
 #include "../../../core/ui/components/toggle/ui_toggle_component.h"
+#include "../../hooks/custom_albedo/custom_albedo.h"
 #include "../../hooks/inactivity/inactivity_override.h"
 #include "../../inactivity/inactivity_settings_store.h"
 #include "../../player/player_settings_store.h"
@@ -17,6 +20,7 @@ namespace {
 
 namespace inactivity = client::inactivity;
 namespace toggle = core::ui::components::toggle;
+namespace custom_albedo = client::hooks::custom_albedo;
 
 /** Grid width. Seven columns lays the fourteen lanes out in two rows. */
 constexpr int kLaneColumns = 7;
@@ -157,10 +161,95 @@ void draw_inactivity() noexcept {
     }
 }
 
+/** Draws the custom character model and VRM switcher section. */
+void draw_custom_character() noexcept {
+    ImGui::TextUnformatted("Custom Character (VRM / GLB)");
+    ImGui::Separator();
+    ImGui::TextWrapped(
+        "This list is draw-hook profiles: albedos and index ranges. The body in the "
+        "world is whatever was last injected onto the Scatterhorn chest. Close Destiny "
+        "and run vrm_injector.py --inject to install a VRM as the full Warlock, not as "
+        "a helmet.");
+    ImGui::Spacing();
+
+    bool enabled = custom_albedo::is_enabled();
+    if (toggle::control("Enable Custom Model##custom_char_toggle", enabled)) {
+        custom_albedo::set_enabled(enabled);
+    }
+
+    ImGui::Spacing();
+
+    const std::vector<custom_albedo::ModelProfile> models = custom_albedo::get_available_models();
+    const std::string activeId = custom_albedo::get_active_model_id();
+
+    int currentIndex = 0;
+    for (std::size_t i = 0; i < models.size(); ++i) {
+        if (models[i].id == activeId) {
+            currentIndex = static_cast<int>(i);
+            break;
+        }
+    }
+
+    const char* currentLabel = models.empty() ? "None Available" : models[currentIndex].name.c_str();
+
+    ImGui::TextUnformatted("Active Model:");
+    ImGui::SetNextItemWidth(260.0f);
+    if (ImGui::BeginCombo("##active_model_combo", currentLabel)) {
+        for (std::size_t i = 0; i < models.size(); ++i) {
+            const bool isSelected = (static_cast<int>(i) == currentIndex);
+            if (ImGui::Selectable(models[i].name.c_str(), isSelected)) {
+                custom_albedo::select_model(models[i].id);
+            }
+            if (isSelected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh##btn_refresh_models")) {
+        custom_albedo::refresh_models();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Open Folder##btn_open_models_dir")) {
+        custom_albedo::open_models_folder();
+    }
+
+    if (!models.empty() && static_cast<std::size_t>(currentIndex) < models.size()) {
+        const auto& active = models[currentIndex];
+        ImGui::Spacing();
+        ImGui::TextDisabled("Model ID: %s", active.id.c_str());
+        if (!active.author.empty() && active.author != "Unknown") {
+            ImGui::TextDisabled("Author: %s", active.author.c_str());
+        }
+        ImGui::TextDisabled("Parts: %u  |  Format: %s  |  Vertices: %u",
+                            active.partCount,
+                            active.version.empty() ? "GLB" : active.version.c_str(),
+                            active.vertexCount);
+        if (!active.folderPath.empty()) {
+            ImGui::TextDisabled("Path: %s", active.folderPath.c_str());
+        }
+    }
+
+    const auto searchPaths = custom_albedo::get_model_search_paths();
+    if (!searchPaths.empty() && ImGui::CollapsingHeader("Model Search Paths")) {
+        for (const auto& sp : searchPaths) {
+            ImGui::BulletText("%s", sp.c_str());
+        }
+    }
+}
+
 } // namespace
 
 /** Draws the player module inside the active Core UI frame. */
 void draw() noexcept {
+    draw_custom_character();
+
+    ImGui::Spacing();
+    ImGui::Spacing();
+
     client::player::Settings settings = client::player::get();
 
     ImGui::TextUnformatted("Infinite Ammo");

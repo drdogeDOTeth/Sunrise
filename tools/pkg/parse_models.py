@@ -54,10 +54,11 @@ import struct
 import sys
 from pathlib import Path
 
+from game_paths import artifact_dir, packages_dir
 from tigerpkg import HEADER_SIZE, TAG_BASE, TAG_ENTRY_BITS, TAG_ENTRY_MASK, Package, PackageError
 
-PACKAGES = Path(r"C:\Sunrise\packages")
-SUNRISE = Path(r"C:\Sunrise\bin\x64\Sunrise")
+PACKAGES = packages_dir()
+SUNRISE = artifact_dir()
 # Requests are always written to the live dump directory the game reads, but parsing reads from
 # wherever the models were archived, so a later geometry pass cannot overwrite them.
 REQUEST_DIR = SUNRISE / "dump"
@@ -275,21 +276,17 @@ class Model:
 DUMP = Path(option("--dump", str(SUNRISE / "dump_models")))
 
 models: list[Model] = []
-for path in sorted(DUMP.glob("tag_*.bin")):
-    data = path.read_bytes()
-    if len(data) < 0xA0:
-        continue
-    (declared,) = struct.unpack_from("<q", data, 0)
-    if declared != len(data):
-        continue
-    model = Model(int(path.stem[4:], 16), data)
-    if model.meshes:
-        models.append(model)
-
-if not models:
-    raise SystemExit(
-        f"no dumped entity models under {DUMP}\n"
-        "Build a request first:  python entity_models.py --request investment_0361,investment_01d3")
+if DUMP.is_dir():
+    for path in sorted(DUMP.glob("tag_*.bin")):
+        data = path.read_bytes()
+        if len(data) < 0xA0:
+            continue
+        (declared,) = struct.unpack_from("<q", data, 0)
+        if declared != len(data):
+            continue
+        model = Model(int(path.stem[4:], 16), data)
+        if model.meshes:
+            models.append(model)
 
 def main() -> None:
     """Command line. Kept out of import so `extract_mesh` can reuse the parsed models."""

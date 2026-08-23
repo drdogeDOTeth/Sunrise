@@ -10,6 +10,8 @@
 
 ## NEXT AGENT — start here
 
+**2026-08-23 — Me.vrm is the live playable body.** Spine+arm+leg length-scale onto the dumped Warlock rig (head/hands/feet joints at 0–8 cm). Live layers: `037c_9` / `037d_8` / `0698_8`. Profile `models/me/` is PNG albedos, nine carrier ranges. Previous inspect shot had the Destiny bald head in the hoodie hole because the VRM face sat 20 cm too high. Do **not** `--undo`. Race head may still z-fight if it draws in front.
+
 **Character select is the Blender character** (user 2026-08-22). Green SkinTats, charcoal tank, black mask, striped pants, sneakers. That is done. Do not colour-probe. Do not pack another 512.
 
 **In-world (v12):** near-black silhouette. Sprint/jump flashes the dye quilt (that PS *lights* in destinations). Our replace was killing o1/o2.

@@ -43,6 +43,7 @@ from pathlib import Path
 import numpy as np
 
 from extract_mesh import dumped, read_positions, vertex_stride
+from game_paths import dump_dir
 from inject_mesh import (
     PART_INDEX_COUNT,
     PART_INDEX_OFFSET,
@@ -65,7 +66,7 @@ from wrap_player_body import (
     swing_arms,
 )
 
-DUMP = Path(r"C:\Sunrise\bin\x64\Sunrise\dump")
+DUMP = dump_dir()
 PACKED_MAX = 32767.0
 PACKED_W = 32767
 MESH = Path(__file__).with_name("character_body.obj")
@@ -650,6 +651,12 @@ SLOT_MATERIALS = {
     "GLSLShader66": 0x80EFA1DC,   # GasMask
     "GLSLShader22": 0x81532AE0,   # Twirl
     "GLSLShader60": 0x81531EF0,   # Silver_Necklace
+    # Extra chest pass-1 materials. Safe to use for VRM groups because they already
+    # live on the Scatterhorn chest; off-chest steals still vanish the body.
+    "chest_extra_0": 0x80BFB5E5,
+    "chest_extra_1": 0x80EFA1DB,
+    "chest_extra_2": 0x81531EEF,
+    "chest_extra_3": 0x81531EEE,
 }
 GROUP_MATERIALS = dict(SLOT_MATERIALS)
 
@@ -687,8 +694,14 @@ def order_by_group(faces: np.ndarray, names: list[str],
             continue
         material = GROUP_MATERIALS.get(name)
         if material is None:
-            raise SystemExit(f"no carrier material mapped for source material {name}; "
-                             f"add it to GROUP_MATERIALS")
+            unused = [tag for tag in GROUP_MATERIALS.values()
+                      if tag not in {row[1] for row in groups}]
+            if not unused:
+                raise SystemExit(f"no carrier material mapped for source material {name}; "
+                                 f"add it to GROUP_MATERIALS or merge the VRM down to "
+                                 f"{len(GROUP_MATERIALS)} groups")
+            material = unused[0]
+            print(f"  {name}: unmapped, using spare chest material 0x{material:08X}")
         finder = SLOT_MATERIALS.get(name, material)
         groups.append((name, material, finder, at * 3, count * 3))
         at += count

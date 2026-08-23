@@ -307,6 +307,10 @@ The only globals heads in this install (body-space, ~0.31 m span at ~1.72 m):
 `probe_heads.py` blanked those three; the inspect screen still showed the bald Awoken, so the
 player head is not a separate globals helmet-sized mesh.
 
+Dumped base bodies for all three classes (chest / gauntlets / legs, no helmets) live in
+[`characters/`](characters/README.md): OBJ + weights + recovered rig. Use that for retarget.
+Do not guess a T-pose onto Scatterhorn.
+
 The playable-character path is `playable_character.py`. The custom GLB is already skinned
 (Mixamo-style: Hips / Spine / Head / limbs, 48 joints). Destiny will not play those bones, so
 each custom vertex copies bone indices from the nearest Destiny vertex.

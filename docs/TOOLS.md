@@ -70,6 +70,7 @@ entity_models.py -> entity_models.py -> (game dumps) -> parse_models.py -> live_
 | `inspect_entry.py` | Prints one dumped entry with the understood fields annotated. |
 | `classes.py` | Histograms entry classes across the install. Entry tables are plain, so this needs no keys. |
 | `lookup_arrangement.py` | Arrangement index → hash → assignment → entity-parent → model. Hop is **closed**. `--census` / `--request` / `--inspect` / no-args loadout walk. |
+| `dump_class_bodies.py` | Dump/extract Hunter, Titan, Warlock base bodies (no helmets) into `docs/characters/`. |
 
 ## Writing the container
 
