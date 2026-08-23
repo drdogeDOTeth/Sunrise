@@ -73,9 +73,11 @@ def dimensions(data: bytes) -> tuple[int, int] | None:
 
 
 def main() -> None:
-    if not GLB.is_file():
-        raise SystemExit(f"no GLB at {GLB}")
-    document, binary = chunks(GLB.read_bytes())
+    glb = Path(sys.argv[sys.argv.index("--glb") + 1]) if "--glb" in sys.argv else GLB
+    out = Path(sys.argv[sys.argv.index("--out") + 1]) if "--out" in sys.argv else OUT
+    if not glb.is_file():
+        raise SystemExit(f"no GLB at {glb}")
+    document, binary = chunks(glb.read_bytes())
 
     views = document.get("bufferViews", [])
     images = document.get("images", [])
@@ -103,7 +105,7 @@ def main() -> None:
 
     print(f"\n{len(images)} images, {len(materials)} materials\n")
     if "--extract" in sys.argv:
-        OUT.mkdir(parents=True, exist_ok=True)
+        out.mkdir(parents=True, exist_ok=True)
     total = 0
     for index, image in enumerate(images):
         view = views[image["bufferView"]]
@@ -118,11 +120,11 @@ def main() -> None:
         if "--extract" in sys.argv:
             suffix = ".png" if "png" in mime else ".jpg"
             name = image.get("name") or f"image{index:02d}"
-            path = OUT / f"{index:02d}_{name}{suffix}"
+            path = out / f"{index:02d}_{name}{suffix}"
             path.write_bytes(data)
     print(f"\n{total / 1e6:.1f} MB of texture data")
     if "--extract" in sys.argv:
-        print(f"extracted to {OUT}")
+        print(f"extracted to {out}")
     else:
         print("Re-run with --extract to write them out.")
 

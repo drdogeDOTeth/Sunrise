@@ -31,6 +31,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <d3dcompiler.h>
 #include <string_view>
 #include <vector>
@@ -56,20 +57,34 @@ using CreatePixelShaderFn = HRESULT(STDMETHODCALLTYPE*)(
 struct Part {
     UINT start{};
     UINT count{};
+    char name[32]{};
+    wchar_t file[80]{};
+    wchar_t material[80]{};
+    bool hasMaterial{};
+};
+
+struct PartSpec {
+    UINT start{};
+    UINT count{};
     const char* name{};
     const wchar_t* file{};
     const wchar_t* material{};
 };
 
-constexpr std::array<Part, 5> kParts{{
+constexpr UINT kMaxParts = 16;
+constexpr std::array<PartSpec, 6> kDefaultParts{{
     {0, 74358, "tank", L"\\custom_tank.png", L"\\custom_tank_mr.png"},
-    {74358, 11574, "mask", L"\\custom_mask.png", L"\\custom_mask_mr.png"},
-    {85932, 3570, "necklace", L"\\custom_necklace.png", L"\\custom_necklace_mr.png"},
-    {89502, 42666, "skin", L"\\custom_skin.png", L"\\custom_skin_mr.png"},
-    {132168, 6036, "twirl", L"\\custom_twirl.png", nullptr},
+    {74358, 11580, "mask", L"\\custom_mask.png", L"\\custom_mask_mr.png"},
+    {85938, 3570, "necklace", L"\\custom_necklace.png", L"\\custom_necklace_mr.png"},
+    {89508, 35508, "skin", L"\\custom_skin.png", L"\\custom_skin_mr.png"},
+    {125016, 6036, "twirl", L"\\custom_twirl.png", nullptr},
+    {0, 7902, "hands", L"\\custom_skin.png", L"\\custom_skin_mr.png"},
 }};
 
-constexpr UINT kMeshIndices = 138204;
+std::array<Part, kMaxParts> g_parts{};
+UINT g_partCount{};
+
+constexpr UINT kMeshIndices = 131052;
 
 struct GpuImage {
     ID3D11Texture2D* texture{};
@@ -155,10 +170,12 @@ hooking::detour::Handle g_createPixelShader{};
 ID3D11PixelShader* g_shader{};
 ID3D11SamplerState* g_sampler{};
 ID3D11BlendState* g_blend{};
-std::array<GpuImage, kParts.size()> g_images{};
-std::array<GpuImage, kParts.size()> g_materials{};
+std::array<GpuImage, kMaxParts> g_images{};
+std::array<GpuImage, kMaxParts> g_materials{};
 std::uint32_t g_loggedParts{};
 std::uint32_t g_loggedMisses{};
+constexpr UINT kMaxLoggedMisses = 64;
+std::array<UINT64, kMaxLoggedMisses> g_seenMisses{};
 bool g_loggedTargets{};
 bool g_loggedDepthOnly{};
 bool g_dumpedPs{};
@@ -168,25 +185,32 @@ UINT g_loggedSkips{};
 SRWLOCK g_psLock{SRWLOCK_INIT};
 std::vector<PsRecord> g_pixelShaders{};
 
+[[nodiscard]] HMODULE owning_module() noexcept;
+
 [[nodiscard]] const Part* match(UINT start, UINT count) noexcept {
     // Exact pairs only. v13 subset-match treated start=0 UI quads as the tank
     // and smashed character select (ALWAYS depth + RT0 RGB).
-    for (const Part& part : kParts) {
-        if (part.start == start && part.count == count) {
-            return &part;
+    for (UINT i = 0; i < g_partCount && i < kMaxParts; ++i) {
+        if (g_parts[i].start == start && g_parts[i].count == count) {
+            return &g_parts[i];
         }
     }
     return nullptr;
 }
 
 void note_miss(UINT start, UINT count) noexcept {
-    if (g_loggedMisses >= 16 || count == 0) {
+    // Leftover race gloves will not share the chest index range. Log unique
+    // unmatched draws so one launch can name them. Do not subset-match.
+    if (count < 3 || g_loggedMisses >= kMaxLoggedMisses) {
         return;
     }
-    const UINT end = start + count;
-    if (start >= kMeshIndices || end <= start) {
-        return;
+    const UINT64 key = (static_cast<UINT64>(start) << 32) | static_cast<UINT64>(count);
+    for (UINT i = 0; i < g_loggedMisses; ++i) {
+        if (g_seenMisses[i] == key) {
+            return;
+        }
     }
+    g_seenMisses[g_loggedMisses] = key;
     ++g_loggedMisses;
     std::array<char, 160> line{};
     const int written = std::snprintf(line.data(),
@@ -202,7 +226,7 @@ void note_miss(UINT start, UINT count) noexcept {
 }
 
 void note_first(const Part& part, UINT start, UINT count, const BoundTargets& targets) noexcept {
-    const std::uint32_t bit = 1u << static_cast<std::uint32_t>(&part - kParts.data());
+    const std::uint32_t bit = 1u << static_cast<std::uint32_t>(&part - g_parts.data());
     if ((g_loggedParts & bit) != 0) {
         return;
     }
@@ -484,14 +508,143 @@ void dump_game_ps(ID3D11PixelShader* shader) noexcept {
         && image.view != nullptr;
 }
 
+void seed_part(UINT index,
+               UINT start,
+               UINT count,
+               const char* name,
+               const wchar_t* file,
+               const wchar_t* material) noexcept {
+    Part& part = g_parts[index];
+    part = {};
+    part.start = start;
+    part.count = count;
+    (void)std::snprintf(part.name, sizeof(part.name), "%s", name);
+    if (file != nullptr) {
+        wcsncpy_s(part.file, file, _TRUNCATE);
+    }
+    if (material != nullptr && material[0] != L'\0') {
+        wcsncpy_s(part.material, material, _TRUNCATE);
+        part.hasMaterial = true;
+    }
+}
+
+void seed_defaults() noexcept {
+    g_partCount = 0;
+    for (const PartSpec& spec : kDefaultParts) {
+        if (g_partCount >= kMaxParts) {
+            break;
+        }
+        seed_part(g_partCount, spec.start, spec.count, spec.name, spec.file, spec.material);
+        ++g_partCount;
+    }
+}
+
+void to_wide_suffix(const char* name, wchar_t* dest, std::size_t destCount) noexcept {
+    dest[0] = L'\\';
+    dest[1] = L'\0';
+    if (name == nullptr || destCount < 3) {
+        return;
+    }
+    std::size_t at = 1;
+    for (; name[0] != '\0' && at + 1 < destCount; ++name, ++at) {
+        dest[at] = static_cast<wchar_t>(static_cast<unsigned char>(name[0]));
+    }
+    dest[at] = L'\0';
+}
+
+void load_parts_file() noexcept {
+    core::path::Buffer directory{};
+    if (!core::path::artifact_directory(owning_module(), directory)
+        || !core::path::append(directory, L"\\custom_parts.txt")) {
+        return;
+    }
+    const HANDLE file = CreateFileW(directory.chars.data(),
+                                    GENERIC_READ,
+                                    FILE_SHARE_READ,
+                                    nullptr,
+                                    OPEN_EXISTING,
+                                    FILE_ATTRIBUTE_NORMAL,
+                                    nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    std::vector<char> text(4096, 0);
+    DWORD read = 0;
+    const BOOL ok = ReadFile(file, text.data(), static_cast<DWORD>(text.size() - 1), &read, nullptr);
+    CloseHandle(file);
+    if (ok == FALSE || read == 0) {
+        return;
+    }
+    UINT loaded = 0;
+    char* cursor = text.data();
+    while (cursor != nullptr && *cursor != '\0' && loaded < kMaxParts) {
+        char* line = cursor;
+        char* next = std::strchr(cursor, '\n');
+        if (next != nullptr) {
+            *next = '\0';
+            cursor = next + 1;
+        } else {
+            cursor = nullptr;
+        }
+        if (line[0] == '\0' || line[0] == '#' || line[0] == '\r') {
+            continue;
+        }
+        char name[32]{};
+        char albedo[64]{};
+        char material[64]{};
+        unsigned start = 0;
+        unsigned count = 0;
+        const int fields = sscanf_s(line,
+                                    "%31s %u %u %63s %63s",
+                                    name,
+                                    static_cast<unsigned>(sizeof(name)),
+                                    &start,
+                                    &count,
+                                    albedo,
+                                    static_cast<unsigned>(sizeof(albedo)),
+                                    material,
+                                    static_cast<unsigned>(sizeof(material)));
+        if (fields < 4 || count == 0 || name[0] == '\0' || albedo[0] == '\0') {
+            continue;
+        }
+        wchar_t fileWide[80]{};
+        wchar_t materialWide[80]{};
+        to_wide_suffix(albedo, fileWide, 80);
+        if (fields >= 5 && material[0] != '\0' && std::strcmp(material, "-") != 0) {
+            to_wide_suffix(material, materialWide, 80);
+        }
+        seed_part(loaded,
+                  start,
+                  count,
+                  name,
+                  fileWide,
+                  materialWide[0] != L'\0' ? materialWide : nullptr);
+        ++loaded;
+    }
+    if (loaded == 0) {
+        return;
+    }
+    g_partCount = loaded;
+    std::array<char, 96> note{};
+    const int written = std::snprintf(note.data(),
+                                      note.size(),
+                                      "ev=custom_albedo stage=parts source=file count=%u",
+                                      loaded);
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         std::string_view(note.data(), static_cast<std::size_t>(written)));
+    }
+}
+
 [[nodiscard]] bool create_images(ID3D11Device* device) noexcept {
-    for (std::size_t index = 0; index < kParts.size(); ++index) {
+    for (std::size_t index = 0; index < g_partCount && index < kMaxParts; ++index) {
         std::vector<std::uint32_t> pixels;
         UINT width = 0;
         UINT height = 0;
         UINT albedoWidth = 0;
         UINT albedoHeight = 0;
-        if (!load_png(kParts[index].file, pixels, albedoWidth, albedoHeight)
+        if (!load_png(g_parts[index].file, pixels, albedoWidth, albedoHeight)
             || !upload_image(device,
                              pixels,
                              albedoWidth,
@@ -502,7 +655,7 @@ void dump_game_ps(ID3D11PixelShader* shader) noexcept {
             const int written = std::snprintf(line.data(),
                                               line.size(),
                                               "ev=custom_albedo stage=atlas result=fail part=%s",
-                                              kParts[index].name);
+                                              g_parts[index].name);
             if (written > 0) {
                 core::log::write(core::log::Channel::client,
                                  core::log::Level::error,
@@ -513,7 +666,7 @@ void dump_game_ps(ID3D11PixelShader* shader) noexcept {
         pixels.clear();
         width = 0;
         height = 0;
-        const wchar_t* material = kParts[index].material;
+        const wchar_t* material = g_parts[index].hasMaterial ? g_parts[index].material : nullptr;
         const bool loaded = material != nullptr && load_png(material, pixels, width, height);
         if (!loaded) {
             pixels.assign(1, 0xFF008DFF);
@@ -533,7 +686,7 @@ void dump_game_ps(ID3D11PixelShader* shader) noexcept {
                                           line.size(),
                                           "ev=custom_albedo stage=atlas result=ok part=%s "
                                           "w=%u h=%u source=png material=%s",
-                                          kParts[index].name,
+                                          g_parts[index].name,
                                           albedoWidth,
                                           albedoHeight,
                                           loaded ? "glb" : "default");
@@ -619,7 +772,7 @@ void draw_replaced(ID3D11DeviceContext* context,
         return;
     }
     note_first(part, start, count, targets);
-    const std::size_t index = static_cast<std::size_t>(&part - kParts.data());
+    const std::size_t index = static_cast<std::size_t>(&part - g_parts.data());
     ID3D11ShaderResourceView* views[2]{g_images[index].view, g_materials[index].view};
     SavedPs saved{};
     capture_ps(context, saved);
@@ -733,6 +886,8 @@ void attach(ID3D11Device* device, ID3D11DeviceContext* context) noexcept {
     if (device == nullptr || context == nullptr) {
         return;
     }
+    seed_defaults();
+    load_parts_file();
     if (!compile_shader(device) || !create_images(device) || !install_hooks(device, context)) {
         detach();
         return;
@@ -766,6 +921,7 @@ void detach() noexcept {
     ReleaseSRWLockExclusive(&g_psLock);
     g_loggedParts = 0;
     g_loggedMisses = 0;
+    g_seenMisses.fill(0);
     g_loggedTargets = false;
     g_loggedDepthOnly = false;
     g_dumpedPs = false;

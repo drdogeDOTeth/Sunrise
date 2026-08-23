@@ -1,14 +1,34 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-22 (**v18 CONFIRMED** in destinations). First fully textured custom guardian that holds up in-world. v17’s game-t2 designs are closed.
+**Updated:** 2026-08-23 (**FP hand-skip reverted** — those hands stay visible). Host Intake tool is live. Race-glove blank still unconfirmed. Hands-on-gauntlets CONFIRMED in-world. `--fingers` CLOSED. Restore of last good look: `20260822-235602`.
 
-**Live / restore:** `20260822-172401.json` (86 layers). `0698_25` stays in `packages\_reverted_uv_tiles\`. Do **not** `--restore` `150046` (that puts tiles back). **Durable status (full inventory):** `docs/CUSTOM_CHARACTER.md`. Destiny must be closed to write packages or overwrite the DLL.
+**Live / restore:** `20260822-235602.json` (92 layers, hands-on-gauntlets confirmed). Live now also has `globals_06dc_7` + `globals_03ed_6` (race-glove blank, not confirmed). Prior v23 wrists-only: `20260822-225414`. Tiled `0698_25` stays in `packages\_reverted_uv_tiles\`. Do **not** `--restore` `150046`. **Durable status:** `docs/CUSTOM_CHARACTER.md`. Destiny must be closed to write packages or overwrite the DLL.
 
 **Target look:** the GLB in Blender. Reference: `tools/pkg/objs/textures/_glb_blender_preview.png`. Warlock only.
 
 ---
 
 ## NEXT AGENT — start here
+
+**Hands-on-gauntlets CONFIRMED in-world.** First-person still draws `(0, 7902)` — the skip that hid them is **reverted**. FP/inspect smash is unposed bones 40–71 (same class as `--fingers` on the chest). Visible spaghetti is the known leftover; empty sleeves are not acceptable. Do not `--fingers`. Do not AABB-fit. Next FP fix is a dumped viewmodel, not another skip.
+
+**Host Intake** (`bring_guardian.ps1` / `tools/pkg/bring_guardian.py`) is the path for the next custom GLB: extract → Blender retarget (`--keep-seams --fingers`) → cut hands → `custom_parts.txt` → inject `--hands-on-gauntlets`. Hook reads `C:\Sunrise\bin\x64\Sunrise\custom_parts.txt` (defaults if missing).
+
+Race-default upper-body copies blanked (not yet seen). `--fingers` stays CLOSED.
+
+Live 981E/9809 only draw our `(0, 7902)` hands. Arrangement 2292 has no sibling. The leftover leather is the replicated player-body piece with the **7685/7754** part signature:
+
+| tag | package | action |
+|---|---|---|
+| `0x815B9521` | `w64_globals_06dc_7.pkg` | blanked (was live in the last capture) |
+| `0x80FDBE41` | `w64_globals_03ed_6.pkg` | blanked (second globals copy) |
+| `0x80EFC649` | `ui_037e` | **left alone** — same mesh 0/1 plus select extras |
+
+Hook miss log now records unique unmatched `(start, count)` (cap 64, no chest-range filter). Look for: leftover leather gone; SkinTats hands; maybe the bald head gone too (same mesh). Leather still there = read `sunrise.log` misses, `--restore` `20260822-235602`. Do not blank `0x80EFC649`. Do not `--fingers`. Do not AABB-fit.
+
+---
+
+## NEXT AGENT — v18 floor (still live)
 
 **Character select is the Blender character** (user 2026-08-22). Green SkinTats, charcoal tank, black mask, striped pants, sneakers. That is done. Do not colour-probe. Do not pack another 512.
 
@@ -1606,18 +1626,13 @@ same default mesh the old `probe_heads.py` work could never find in `globals`. I
 character path, not by armour, which is why blanking armour never removed it. Options: find and
 blank that head, or accept it and design the custom head around it.
 
-**A glove still draws over the custom hands.** The gauntlet models we blank are `0x80EF981E` /
-`0x80EF9809`, from arrangement 2292 — so something else is drawing. Candidates, cheapest first:
+**A glove still draws over the custom hands.** `0x80EF981E` / `0x80EF9809` now *are* our
+hand mesh. Arrangement 2292 has no sibling. The leftover is the replicated default upper
+body (7685/7754 signature). Probe 2026-08-23 blanked `0x815B9521` and `0x80FDBE41`.
+Do **not** blank the UI copy `0x80EFC649`. Do not `--fingers`.
 
-1. **The gauntlet arrangement carries more than two models.** `lookup_arrangement.py` resolves an
-   arrangement hash to a pair; re-check whether 2292 yields further entity models beyond A/B, the
-   way the chest SEntity also carries the second robe `0x80EFA1D4` / `0x80EFA1B3`.
-2. **A sibling model on the same SEntity**, exactly like the second robe. Scan the gauntlet
-   SEntity's resource for every `0x808073A5` rather than taking the first.
-3. **Mesh 1 of the gauntlet models.** `blank_model` zeroes every part's index count across all
-   meshes, so this is unlikely, but worth confirming from the receipt.
-
-This is cosmetic and low-risk. Do not fix it in the same layer as a UV change.
+Separate: the GLB has no `RingFinger*` groups, so Destiny ring bones 44/55 have zero verts.
+That is the stiff digit, not a leftover mesh. Index/middle/thumb/pinky are weighted.
 
 ## `_21` shipped a stride bug. `_22` is the fix.
 

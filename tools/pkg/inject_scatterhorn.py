@@ -83,14 +83,15 @@ DONORS = {
     0x80EFA1CA: {"chest": 0x80EFA1CA, "legs": 0x80EFA93B, "gaunt": 0x80EF981E},
     0x80EFA1A9: {"chest": 0x80EFA1A9, "legs": 0x80EFA92E, "gaunt": 0x80EF9809},
 }
-BLANK = [
+BLANK_ALWAYS = [
     0x80EFA859, 0x80EFA850,  # hood (stride 8, no inline skin)
     0x80EFA1D4, 0x80EFA1B3,  # second robe (stride 48)
     0x80EFA528, 0x80EFA51F,  # class item
     0x80EFA843,              # neighbouring 928 B cluster, not the bond
-    0x80EF981E, 0x80EF9809,  # gauntlets — the one body mesh already has hands
-    0x80EFA93B, 0x80EFA92E,  # legs — and legs
+    0x80EFA93B, 0x80EFA92E,  # legs
 ]
+BLANK_GAUNTLETS = [0x80EF981E, 0x80EF9809]
+BLANK = BLANK_ALWAYS + BLANK_GAUNTLETS
 RIGID_BONE = 1
 # Model header fields the texcoord buffer is dequantised through, beside scale/translation.
 MODEL_TEXCOORD_SCALE = 0x70
@@ -237,13 +238,25 @@ def load_donors(tags: tuple[int, ...], meshes: tuple[int, ...] = (0,),
     return np.asarray(points, dtype=np.float64), skins
 
 
-def load_authored(mesh_path: Path) -> list[bytes] | None:
+def wrist_for(bone: int) -> int:
+    """Fold a finger (or unknown high) index onto the wrist of the same hand."""
+    if bone in LEFT_HAND or bone == 21:
+        return 21
+    if bone in RIGHT_HAND or bone == 22:
+        return 22
+    return RIGID_BONE
+
+
+def load_authored(mesh_path: Path, ceiling: int = BODY_BONE_CEILING) -> list[bytes] | None:
     """@return One 8-byte weight/bone tail per vertex from `retarget_mesh.py`, or None.
 
     These are the artist's own weights, carried through the GLB armature and mapped onto the
     rig's global bone indices. They beat any donor transfer outright, because a transfer can
     only ever ask "which Scatterhorn vertex is nearest", and the answer is wrong wherever the
     two bodies are not the same shape - which is how the hands ended up on the forearm bones.
+
+    Influences above `ceiling` fold onto that hand's wrist (21/22), not bone 1. Parking a
+    fingertip on the pelvis is how a clamp used to stretch the hands to the waist.
     """
     path = mesh_path.with_name(mesh_path.stem + "_weights.json")
     if not path.is_file():
@@ -252,11 +265,17 @@ def load_authored(mesh_path: Path) -> list[bytes] | None:
     out: list[bytes] = []
     dropped = 0
     for skin in data["skins"]:
-        pairs = [(int(bone), int(weight)) for bone, weight in skin
-                 if weight > 0 and bone <= BODY_BONE_CEILING]
-        dropped += len(skin) - len(pairs)
-        pairs.sort(key=lambda pair: -pair[1])
-        pairs = pairs[:4]
+        totals: dict[int, int] = {}
+        for bone, weight in skin:
+            bone = int(bone)
+            weight = int(weight)
+            if weight <= 0:
+                continue
+            if bone > ceiling:
+                dropped += 1
+                bone = wrist_for(bone)
+            totals[bone] = totals.get(bone, 0) + weight
+        pairs = sorted(totals.items(), key=lambda item: -item[1])[:4]
         total = sum(weight for _bone, weight in pairs)
         if not pairs or total <= 0:
             pairs = [(RIGID_BONE, 255)]
@@ -270,7 +289,9 @@ def load_authored(mesh_path: Path) -> list[bytes] | None:
             bones.append(0)
         out.append(bytes(weights + bones))
     print(f"  authored weights: {len(out):,} vertices, retargeted={data.get('retargeted')}"
-          + (f", dropped {dropped} influences above bone {BODY_BONE_CEILING}" if dropped else ""))
+          + (f", keep_seams={data.get('keep_seams')}, fingers={data.get('fingers')}")
+          + (f", folded {dropped} influences above bone {ceiling} onto the wrists"
+             if dropped else ""))
     return out
 
 
@@ -652,6 +673,25 @@ SLOT_MATERIALS = {
     "GLSLShader60": 0x81531EF0,   # Silver_Necklace
 }
 GROUP_MATERIALS = dict(SLOT_MATERIALS)
+SLOT_ALIASES = {
+    "tank": "GLSLShader85",
+    "mask": "GLSLShader66",
+    "necklace": "GLSLShader60",
+    "skin": "GLSLShader13",
+    "twirl": "GLSLShader22",
+}
+
+
+def canonicalize_group(name: str) -> str:
+    return SLOT_ALIASES.get(name, name)
+
+
+def load_group_map() -> dict[str, str]:
+    path = option("--group-map", "")
+    if not path:
+        return {}
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    return {str(key): canonicalize_group(str(value)) for key, value in raw.items()}
 
 
 def load_groups(mesh_path: Path) -> tuple[list[str], np.ndarray] | None:
@@ -706,7 +746,8 @@ def slot_for_material(mesh, material: int) -> int:
 
 def rewrite_chest(model: Model, index_count: int, scale: float,
                   translation: np.ndarray, own_texcoords: bool = False,
-                  groups: list[tuple[str, int, int, int, int]] | None = None
+                  groups: list[tuple[str, int, int, int, int]] | None = None,
+                  native_one_part: bool = False
                   ) -> tuple[bytes, list[tuple[str, int, int, int, int]]]:
     """@return The rewritten model, and `(name, slot, material, offset, count)` per drawn part."""
     out = bytearray(model.data)
@@ -721,6 +762,11 @@ def rewrite_chest(model: Model, index_count: int, scale: float,
     for number, mesh in enumerate(model.meshes):
         if number != 0:
             plan: dict[int, tuple[int, int, int]] = {}
+        elif native_one_part:
+            lod0 = next((slot for slot, part in enumerate(mesh.parts) if part[4] == 0), 0)
+            material = mesh.parts[lod0][0]
+            plan = {lod0: (0, index_count, material)}
+            chosen = [("hands", lod0, material, 0, index_count)]
         elif groups:
             plan = {}
             for name, material, finder, offset, count in groups:
@@ -832,7 +878,8 @@ def inject_mesh0(by_package: dict[Path, dict[int, bytes]], tag: int,
                  scale: float, translation: np.ndarray,
                  uv_header_fb: bytes, uv_body_fb: bytes,
                  frame: np.ndarray | None = None,
-                 groups: list[tuple[str, int, int, int, int]] | None = None) -> None:
+                 groups: list[tuple[str, int, int, int, int]] | None = None,
+                 native_one_part: bool = False) -> None:
     model = load_model(tag)
     mesh = model.meshes[0]
     stride = vertex_stride(mesh.positions)
@@ -862,7 +909,7 @@ def inject_mesh0(by_package: dict[Path, dict[int, bytes]], tag: int,
                 "rebuild both with retarget_mesh.py")
         uv_header, uvs, uv_note = clone_uvs(mesh, len(placed), uv_header_fb, uv_body_fb)
     model_blob, chosen = rewrite_chest(model, faces.size, scale, translation, own_texcoords,
-                                       groups)
+                                       groups, native_one_part)
     print(f"\n0x{tag:08X}: original {old_count:,} verts, stride {stride}  "
           f"-> {len(placed):,} verts / {len(faces):,} tris, scale {scale:.3f}")
     print(f"  positions {len(original):,} -> {len(positions):,} B")
@@ -917,14 +964,20 @@ def inject_slot(by_package: dict[Path, dict[int, bytes]], tag: int, kind: str,
                 uv_header_fb: bytes, uv_body_fb: bytes, rigid: bool,
                 authored: list[bytes] | None = None,
                 frame: np.ndarray | None = None,
-                groups: list[tuple[str, int, int, int, int]] | None = None) -> None:
+                groups: list[tuple[str, int, int, int, int]] | None = None,
+                bind_frame: tuple[float, np.ndarray] | None = None,
+                native_one_part: bool = False) -> None:
     model = load_model(tag)
     mesh = model.meshes[0]
     stride = vertex_stride(mesh.positions)
-    scale, translation = fit_frame(model, world_points)
+    if bind_frame is not None:
+        scale, translation = bind_frame
+    else:
+        scale, translation = fit_frame(model, world_points)
     print(f"\n=== {kind} 0x{tag:08X} ===")
     print(f"  {len(world_points):,} verts / {len(world_faces):,} tris, "
-          f"scale {model.scale[0]:.3f} -> {scale:.3f}")
+          f"native scale {model.scale[0]:.3f} -> bind {scale:.3f} "
+          f"trans {translation[0]:.3f},{translation[1]:.3f},{translation[2]:.3f}")
     if rigid and kind in ("chest", "body"):
         positions = pack_rigid(world_points, stride, scale, translation)
     elif authored is not None:
@@ -937,7 +990,8 @@ def inject_slot(by_package: dict[Path, dict[int, bytes]], tag: int, kind: str,
         positions = pack_banded(world_points, stride, scale, translation,
                                 pools, world_faces, kind)
     inject_mesh0(by_package, tag, world_points, world_faces, positions,
-                 scale, translation, uv_header_fb, uv_body_fb, frame, groups)
+                 scale, translation, uv_header_fb, uv_body_fb, frame, groups,
+                 native_one_part)
 
 
 def main() -> None:
@@ -950,7 +1004,13 @@ def main() -> None:
             r"--background --python retarget_mesh.py -- 23512 character_body.obj"
         )
     points, faces = read_obj(source)
-    authored = None if "--no-authored" in sys.argv else load_authored(source)
+    if "--fingers" in sys.argv:
+        raise SystemExit(
+            "--fingers is closed (user 2026-08-22): bones 40-71 on the chest draw "
+            "needled the hands to the feet. Restore 20260822-225414. Do not retry."
+        )
+    finger_ceiling = BODY_BONE_CEILING
+    authored = None if "--no-authored" in sys.argv else load_authored(source, finger_ceiling)
     frame = None if "--no-uvs" in sys.argv else load_frame(source)
     if authored is None:
         # Legacy path: an unposed T-pose mesh with no weights of its own, swung by hand and
@@ -964,11 +1024,16 @@ def main() -> None:
                   "wear one texture set. Rebuild with retarget_mesh.py to split it.")
         else:
             names, face_group = loaded
+            remap = load_group_map()
+            if remap:
+                names = [remap.get(name, canonicalize_group(name)) for name in names]
+                print(f"group-map: {len(remap)} source materials -> carrier slots")
             faces, groups = order_by_group(faces, names, face_group)
     print(f"custom mesh: {len(points):,} verts, {len(faces):,} tris from {source.name}")
     if groups:
         print(f"parts: {len(groups)} - one per source material, sorted into contiguous ranges")
-    print(f"skin: one welded body on the chest draw, joints {sorted(BODY_BONES)}")
+    print(f"skin: one body on the chest draw, ceiling {finger_ceiling}, "
+          f"joints {sorted(b for b in (CHEST_BONES | LEG_BONES | GAUNT_BONES) if b <= finger_ceiling)}")
     print("      " + ("authored weights, mesh already posed on the rig"
                       if authored is not None else
                       f"nearest-donor weights, arms swung {option('--arm-swing', ARM_SWING)} deg"))
@@ -998,6 +1063,22 @@ def main() -> None:
           f"y {placed[:, 1].min():.3f}..{placed[:, 1].max():.3f}  "
           f"z {placed[:, 2].min():.3f}..{placed[:, 2].max():.3f}")
 
+    hands_on_gauntlets = "--hands-on-gauntlets" in sys.argv
+    hand_source = Path(option("--hands", str(Path(__file__).with_name("character_hands_v23.obj"))))
+    hand_points = hand_faces = hand_authored = hand_frame = None
+    if hands_on_gauntlets:
+        if not hand_source.is_file():
+            raise SystemExit(f"hand mesh not found: {hand_source}\n  python cut_hands.py")
+        hand_points, hand_faces = read_obj(hand_source)
+        hand_authored = load_authored(hand_source, 71)
+        hand_frame = None if "--no-uvs" in sys.argv else load_frame(hand_source)
+        if hand_authored is None or hand_frame is None:
+            raise SystemExit("hands-on-gauntlets needs authored weights and a tangent frame")
+        if len(hand_points) > 0xFFFF:
+            raise SystemExit(f"{len(hand_points):,} hand vertices need 32-bit indices")
+        print(f"hands: {len(hand_points):,} verts, {len(hand_faces):,} tris on the gauntlet draw, "
+              f"ceiling 71, same bind frame as the chest. Not --fingers.")
+
     by_package: dict[Path, dict[int, bytes]] = {}
     for tag in CHESTS:
         # One donor cloud for the whole character. The pieces are already in a common space -
@@ -1006,16 +1087,27 @@ def main() -> None:
         # weights straight into the chest buffer.
         donor_tags = tuple(DONORS[tag][name] for name in ("chest", "legs", "gaunt"))
         print(f"\n  body donors {['0x%08X' % t for t in donor_tags]}:")
-        pools = {"body": load_donors(donor_tags, meshes=(0, 1), allowed=BODY_BONES)}
+        allowed = frozenset(b for b in (CHEST_BONES | LEG_BONES | GAUNT_BONES) if b <= finger_ceiling)
+        pools = {"body": load_donors(donor_tags, meshes=(0, 1), allowed=allowed)}
+        chest_model = load_model(tag)
+        bind = fit_frame(chest_model, placed)
         inject_slot(by_package, tag, "body", placed, faces, pools,
-                    uv_header_fb, uv_body_fb, rigid, authored, frame, groups)
+                    uv_header_fb, uv_body_fb, rigid, authored, frame, groups,
+                    bind_frame=bind)
+        if hands_on_gauntlets:
+            gaunt = GAUNTLETS[tag]
+            gaunt_pools = {"body": load_donors((gaunt,), meshes=(0, 1), allowed=GAUNT_BONES)}
+            inject_slot(by_package, gaunt, "hands", hand_points, hand_faces, gaunt_pools,
+                        uv_header_fb, uv_body_fb, False, hand_authored, hand_frame, None,
+                        bind_frame=bind, native_one_part=True)
 
-    for tag in BLANK:
+    blank = BLANK_ALWAYS if hands_on_gauntlets else BLANK
+    for tag in blank:
         model = load_model(tag)
         put(by_package, model.tag, blank_model(model))
         print(f"  blank 0x{tag:08X}")
     class_a = 0x80EFA843
-    if class_a in BLANK:
+    if class_a in blank:
         put(by_package, 0x80EFA83A, by_package[package_of(class_a)][entry_index_of(class_a)])
         print("  blank 0x80EFA83A (copy of A)")
 
@@ -1028,7 +1120,11 @@ def main() -> None:
         return
     write_all(by_package, "")
     print("\nWhole custom body on the chest draw, one bind frame, joints 1-28.")
-    print("Legs, gauntlets, hood, second robe and class item are blanked.")
+    if hands_on_gauntlets:
+        print("Hands on the gauntlet draw, same bind frame, finger bones 40-71.")
+        print("Hood, second robe, class item and legs are blanked.")
+    else:
+        print("Legs, gauntlets, hood, second robe and class item are blanked.")
     print("Undo: python inject_mesh.py --undo")
 
 

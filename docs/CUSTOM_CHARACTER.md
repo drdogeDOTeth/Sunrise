@@ -8,9 +8,10 @@ Root `HANDOFF.md` is stale (`_18`); ignore it.
 looking like `tools/pkg/objs/textures/_glb_blender_preview.png` — green SkinTats graffiti, charcoal
 tank, black gas mask, twirl, teal necklace. Not a dye tint.
 
-**Live / restore:** snapshot `20260822-172401.json` (86 layers). Hook **v18** (`mode=ours`).
-User 2026-08-22: looks good in destinations — first fully textured custom guardian that holds
-up in-world. Destiny must be closed to write packages or overwrite the DLL.
+**Live / restore:** snapshot `20260822-235602.json` is **hands-on-gauntlets confirmed** (no
+needles, sword grip). `--fingers` is closed. Prior wrists-only v23: `20260822-225414`. Hook has
+six exact parts (chest 131052 + hands 7902). Destiny must be closed to write packages or
+overwrite the DLL.
 
 ---
 
@@ -20,7 +21,8 @@ User-confirmed 2026-08-22:
 
 | what | status |
 |---|---|
-| Geometry, skinning, tangent frame (`_22`) | in. Do not `--undo`. |
+| Geometry, skinning, tangent frame (`_22`) | in. Do not `--undo`. v23 retarget (spine 8/11, unwelded) **user-confirmed**. |
+| Hands-on-gauntlets (bones 40–71 on `981E`/`09`, chest bind frame) | in. No needles. Sword grip works. Do not `--fingers`. |
 | Five-part split on the Scatterhorn chest | in (`037c_28` / `037d_26`) |
 | 0–1 UVs | in (`0698_24`). Tiled `0698_25` is attic’d. |
 | Unique GLB albedos on **character select / inspect / menus** | in (v12, still true) |
@@ -58,12 +60,19 @@ The working path is a **draw-time pixel-shader replace** on five exact index ran
 | part | start | count | albedo | roughness |
 |---|---|---|---|---|
 | tank | 0 | 74358 | `custom_tank.png` (2048) | `custom_tank_mr.png` |
-| mask | 74358 | 11574 | `custom_mask.png` (2048) | `custom_mask_mr.png` |
-| necklace | 85932 | 3570 | `custom_necklace.png` (2048) | `custom_necklace_mr.png` |
-| skin | 89502 | 42666 | `custom_skin.png` (2048) | `custom_skin_mr.png` |
-| twirl | 132168 | 6036 | `custom_twirl.png` (512) | none — 1×1 G=0.55 |
+| mask | 74358 | 11580 | `custom_mask.png` (2048) | `custom_mask_mr.png` |
+| necklace | 85938 | 3570 | `custom_necklace.png` (2048) | `custom_necklace_mr.png` |
+| skin | 89508 | 35508 | `custom_skin.png` (2048) | `custom_skin_mr.png` |
+| twirl | 125016 | 6036 | `custom_twirl.png` (512) | none — 1×1 G=0.55 |
+| hands | 0 | 7902 | `custom_skin.png` (2048) | `custom_skin_mr.png` |
 
-Total mesh indices: 138204. LOD1+ parts were zeroed at inject.
+Chest mesh indices: **131052**. Hands are a separate gauntlet draw, exact `(0, 7902)` only.
+That draw stays **visible** in first-person (the skip was reverted — empty sleeves are not
+acceptable). Bones 40–71 are still unposed on the FP/inspect path, so the mesh can spaghetti
+until a real viewmodel is dumped. Do not skip it again. Do not `--fingers` on the chest.
+
+The hook also reads `C:\Sunrise\bin\x64\Sunrise\custom_parts.txt` so a new character's index
+ranges do not need a rebuild. Missing file = the six shipped defaults above.
 
 ### GLB material map (do not re-guess)
 
@@ -89,9 +98,11 @@ AO (`o2.y = 0.5`) is correct, not a missing texture.
 
 | layer | role |
 |---|---|
-| `w64_sandbox_037c_28.pkg` | five-part split geometry (verts byte-identical to `_22`) |
-| `w64_sandbox_037d_26.pkg` | all five parts name chest-native `0x80EFA1DC` |
-| `w64_sandbox_0698_24.pkg` | 0–1 UVs |
+| `w64_sandbox_037c_30.pkg` | nohands chest + hand-only gauntlets |
+| `w64_sandbox_037d_28.pkg` | chest five-part + gauntlet one-part |
+| `w64_sandbox_0698_26.pkg` | 0–1 UVs. Tiled attic `0698_25` is a *different* file |
+| `w64_globals_06dc_7.pkg` | blank `0x815B9521` (race upper body, not confirmed) |
+| `w64_globals_03ed_6.pkg` | blank `0x80FDBE41` (same mesh, second copy) |
 | `w64_sandbox_019b_9.pkg` | packed 512 still on the dye tile (unused while the hook fires) |
 
 `0698_25` (tiles) lives in `C:\Sunrise\packages\_reverted_uv_tiles\`.
@@ -122,6 +133,8 @@ Repo (durable):
 | `tools/pkg/known_good/live_chest_ps.bin` + `.asm` | dumped dye PS `0x81531EE6` (5772 B) |
 | `tools/pkg/objs/textures/*_BaseColor.png` + `*_Roughness.png` | GLB extracts |
 | `tools/pkg/glb_textures.py` | re-extract from the GLB |
+| `tools/pkg/bring_guardian.py` | next-character intake engine |
+| `bring_guardian.ps1` | intake desk / CLI launcher |
 | `Sunrise/src/client/hooks/custom_albedo/` | hook source |
 
 ---
@@ -183,15 +196,49 @@ Do not add emission. Cloudstrike already proves real emissives work; the coat is
 - Two-pass (game PS then our RT0)
 - `TEXCOORD2` as the world normal
 - Sampling Destiny `t2` for AO/roughness
+- `--fingers` / bone indices 34–71 on the chest draw (needled hands to the feet)
+
+---
+
+## Bring a new custom character
+
+Destiny closed to inject. Dry-run first.
+
+Full walkthrough: [`HOST_INTAKE.md`](HOST_INTAKE.md).
+
+```powershell
+cd Sunrise
+.\bring_guardian.ps1
+# or
+python tools/pkg/bring_guardian.py --inspect D:\models\host.glb
+python tools/pkg/bring_guardian.py --glb D:\models\host.glb --dry-run
+python tools/pkg/bring_guardian.py --glb D:\models\host.glb --inject
+```
+
+The desk assigns each GLB material to tank / mask / necklace / skin / twirl (five Destiny
+carriers on the chest — do not steal a sixth). `--fingers` is only used at **retarget** time;
+inject still refuses it on the chest. Hands go on the gauntlet draw with the chest bind frame.
 
 ---
 
 ## Still open
 
-1. **Leftover cosmetics:** stock gloves over custom hands; bald race head over the gas mask.
-   Necklace UVs on the mesh are collapsed (`u` 0.817–0.859, `v` ~0.410).
-2. Necklace metallic channel exists in the GLB (`08_…` B) but v18 writes `o2.z = 0` on purpose.
-3. Lighting can still be refined without reopening closed levers. Direct lamps already work (v15).
+1. **First-person / inspect hands:** skip-draw is closed (user: hands must stay visible).
+   Spaghetti / hip smash is unposed 40–71 on those paths. Next step is a dumped first-person
+   arms model, not `--fingers` and not another hide.
+2. **Next custom character:** `.\bring_guardian.ps1` (or `python tools/pkg/bring_guardian.py --ui`).
+   Dry-run first. Destiny closed to inject. See the script docstring.
+3. **Leftover stock gloves — probe live:** blanked `0x815B9521` (`globals_06dc_7`) and
+   `0x80FDBE41` (`globals_03ed_6`), the two globals copies of the 7685/7754 default upper
+   body. UI copy `0x80EFC649` was not touched. Not yet user-confirmed. Leather still there
+   = restore `20260822-235602` and read the new unique miss log.
+4. **Stiff ring (maybe pinky):** GLB has no `RingFinger*` groups, so bones 44/55 have zero
+   verts. Index/middle/thumb/pinky are weighted. Paint ring verts onto 44/55, recut, reinject
+   hands only. Do not `--fingers` on the chest.
+5. **Leftover cosmetics:** bald race head over the gas mask.
+   Necklace UVs on the mesh are collapsed (`u` 0.817–0.859, `v` ~0.410). Unweld does not fix that.
+6. Necklace metallic channel exists in the GLB (`08_…` B) but v18 writes `o2.z = 0` on purpose.
+7. Lighting can still be refined without reopening closed levers. Direct lamps already work (v15).
 
 ---
 
@@ -203,7 +250,7 @@ Destiny closed.
 .\build.ps1
 .\install.ps1
 python tools/pkg/known_good.py --check
-python tools/pkg/known_good.py --restore    # newest = 20260822-172401
+python tools/pkg/known_good.py --restore    # newest = 20260822-235602 (hands-on-gauntlets)
 ```
 
 Hang: copy `C:\Sunrise\bin\x64\steam_api64.dll.original` over `steam_api64.dll`.

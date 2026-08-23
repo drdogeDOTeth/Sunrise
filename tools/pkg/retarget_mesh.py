@@ -24,38 +24,115 @@ are above the index ceiling of 28.
 
 Usage (from tools/pkg):
     blender --background --python retarget_mesh.py -- 23512 character_body.obj
-    blender --background --python retarget_mesh.py -- 23512 character_body.obj --no-retarget
+    blender --background --python retarget_mesh.py -- 65535 character_body_v23.obj --keep-seams
+    blender --background --python retarget_mesh.py -- 65535 character_body_v23.obj --keep-seams --fingers
 """
 import json
 import os
 import sys
 
 import bpy
-from mathutils import Matrix, Vector
+from mathutils import Vector
 
-ARGV = sys.argv[sys.argv.index("--") + 1:]
-TARGET = int(ARGV[0])
-OUT = ARGV[1]
-RETARGET = "--no-retarget" not in ARGV
-GLB = r"C:\Chiliz\Destiny2SunriseCharacters\void_4003GasMask.glb"
+ARGV = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
 HERE = os.path.dirname(os.path.abspath(__file__))
 RIG = os.path.join(HERE, "objs", "skeleton", "rig.json")
+DEFAULT_GLB = r"C:\Chiliz\Destiny2SunriseCharacters\void_4003GasMask.glb"
 
-# GLB vertex group -> rig bone index. Fingers, jaw and eyes fold into their parent because the
-# rig's own finger joints are 34-71, above the ceiling an armour mesh may write.
+
+def _take_opt(args, name, default=None):
+    if name not in args:
+        return default
+    at = args.index(name)
+    if at + 1 >= len(args):
+        raise SystemExit(f"{name} needs a value")
+    value = args[at + 1]
+    del args[at:at + 2]
+    return value
+
+
+_ARGS = list(ARGV)
+GLB = _take_opt(_ARGS, "--glb", DEFAULT_GLB)
+BONE_MAP_FILE = _take_opt(_ARGS, "--bone-map")
+MATERIAL_MAP_FILE = _take_opt(_ARGS, "--material-map")
+RETARGET = "--no-retarget" not in _ARGS
+KEEP_SEAMS = "--keep-seams" in _ARGS
+FINGERS = "--fingers" in _ARGS
+_POSITIONAL = [item for item in _ARGS if not item.startswith("--")]
+if len(_POSITIONAL) < 2:
+    raise SystemExit("usage: blender --background --python retarget_mesh.py -- "
+                     "<target_verts> <out.obj> [--glb path] [--keep-seams] [--fingers] "
+                     "[--bone-map path] [--material-map path]")
+TARGET = int(_POSITIONAL[0])
+OUT = _POSITIONAL[1]
+
+# GLB vertex group -> rig bone index.
+#
+# The live map skipped bone 8 (spine_upper) and parked Neck on the chest (11). Mid-back verts
+# then blended 5↔11 across the missing joint, which is the slide/stretch when the pawn bends.
+# The GLB has no UpperChest, so Chest is split 8/11 by vertex height after the pose bake.
+# Neck is 13. Do not pose the torso to line up with bone 5 — that bone sits at y −0.120.
 BONE_MAP = {
-    "Hips": 1, "Spine": 5, "Chest": 11, "Neck": 11, "Head": 18,
+    "Hips": 1, "Spine": 5, "Neck": 13, "Head": 18,
     "Jaw": 18, "LeftEye": 18, "RightEye": 18,
     "Left shoulder": 27, "Left arm": 15, "Left elbow": 19, "Left wrist": 21,
     "Right shoulder": 28, "Right arm": 17, "Right elbow": 20, "Right wrist": 22,
     "Left leg": 3, "Left knee": 6, "Left ankle": 9, "Left toe": 25,
     "Right leg": 4, "Right knee": 7, "Right ankle": 10, "Right toe": 26,
 }
-for side, hand in (("_L", 21), ("_R", 22)):
-    for finger in ("Thumb0", "Thumb1", "Thumb2", "IndexFinger1", "IndexFinger2", "IndexFinger3",
-                   "MiddleFinger1", "MiddleFinger2", "MiddleFinger3",
-                   "LittleFinger1", "LittleFinger2", "LittleFinger3"):
-        BONE_MAP[finger + side] = hand
+# Chest is not a single joint. Split between spine_upper (8) and chest (11) by Destiny Z.
+CHEST_GROUP = "Chest"
+SPINE_UPPER = 8
+CHEST_BONE = 11
+
+# Gauntlet finger indices, recovered from Scatterhorn co-weights (see recover_finger_joints.py).
+# 34/39 are the glove-back pad, not a digit — leave them unused. Each non-thumb finger is a
+# two-joint chain; GLB tips fold onto the distal joint. Off unless --fingers: those indices
+# sit above BODY_BONE_CEILING and the chest draw has never posed them without needles.
+FINGER_MAP = {
+    "Thumb0_L": 45, "Thumb1_L": 56, "Thumb2_L": 66,
+    "IndexFinger1_L": 40, "IndexFinger2_L": 52, "IndexFinger3_L": 52,
+    "MiddleFinger1_L": 42, "MiddleFinger2_L": 53, "MiddleFinger3_L": 53,
+    "LittleFinger1_L": 43, "LittleFinger2_L": 54, "LittleFinger3_L": 54,
+    "Thumb0_R": 51, "Thumb1_R": 61, "Thumb2_R": 71,
+    "IndexFinger1_R": 46, "IndexFinger2_R": 57, "IndexFinger3_R": 57,
+    "MiddleFinger1_R": 48, "MiddleFinger2_R": 58, "MiddleFinger3_R": 58,
+    "LittleFinger1_R": 49, "LittleFinger2_R": 59, "LittleFinger3_R": 59,
+}
+WRIST_FOLD = {name: (21 if name.endswith("_L") else 22) for name in FINGER_MAP}
+
+
+def _load_json_map(path):
+    if not path:
+        return {}, {}
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    if isinstance(data, dict) and "groups" in data:
+        groups = dict(data["groups"])
+        fingers = dict(data.get("fingers") or {})
+        chest = data.get("chest_group")
+        if chest:
+            global CHEST_GROUP
+            CHEST_GROUP = chest
+        return groups, fingers
+    return dict(data), {}
+
+
+if BONE_MAP_FILE:
+    extra_groups, extra_fingers = _load_json_map(BONE_MAP_FILE)
+    BONE_MAP.update(extra_groups)
+    FINGER_MAP.update(extra_fingers)
+    WRIST_FOLD = {name: (21 if name.endswith("_L") else 22) for name in FINGER_MAP}
+
+if FINGERS:
+    BONE_MAP.update(FINGER_MAP)
+else:
+    BONE_MAP.update(WRIST_FOLD)
+
+MATERIAL_RENAME = {}
+if MATERIAL_MAP_FILE:
+    with open(MATERIAL_MAP_FILE, encoding="utf-8") as handle:
+        MATERIAL_RENAME = json.load(handle)
 
 # (pose bone, rig joint at its head, rig joint at its tail). Parent first - posing the upper arm
 # moves the elbow, so the elbow has to be aligned against where it ends up.
@@ -179,6 +256,8 @@ def write_groups(obj, mesh, path):
     the alternative is rebuilding the mesh later just to learn this.
     """
     slots = [material.name if material else "<none>" for material in obj.data.materials]
+    if MATERIAL_RENAME:
+        slots = [MATERIAL_RENAME.get(name, name) for name in slots]
     faces = [poly.material_index for poly in mesh.polygons if len(poly.vertices) == 3]
     counts = {}
     for index in faces:
@@ -249,40 +328,63 @@ def main():
 
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.remove_doubles(threshold=0.0001)
+    if KEEP_SEAMS:
+        # Destiny stores one UV/normal per vertex. Welding 61k GLB verts down to 23,512 forced
+        # 7,785 face corners to share a neighbour's UV — those are the visible weld seams.
+        # The unwelded mesh still fits under the 65,535 R16 index ceiling.
+        print("keep-seams: skipping remove_doubles")
+    else:
+        bpy.ops.mesh.remove_doubles(threshold=0.0001)
     bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
     bpy.ops.object.mode_set(mode='OBJECT')
-    print(f"joined+welded: {len(joined.data.vertices):,} verts, {len(joined.data.polygons):,} tris")
+    print(f"joined{'+seams-kept' if KEEP_SEAMS else '+welded'}: "
+          f"{len(joined.data.vertices):,} verts, {len(joined.data.polygons):,} tris")
 
     while joined.modifiers:
         bpy.ops.object.modifier_apply(modifier=joined.modifiers[0].name)
 
-    passes = 0
-    while len(joined.data.vertices) > TARGET:
-        passes += 1
-        if passes > 8:
-            raise RuntimeError(f"still {len(joined.data.vertices):,} verts; target {TARGET:,}")
-        modifier = joined.modifiers.new(name="dec", type='DECIMATE')
-        modifier.decimate_type = 'COLLAPSE'
-        modifier.ratio = max(0.05, TARGET / max(len(joined.data.vertices), 1) * 0.92)
-        bpy.ops.object.modifier_apply(modifier="dec")
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
-        bpy.ops.object.mode_set(mode='OBJECT')
-        print(f"decimated: {len(joined.data.vertices):,} verts, {len(joined.data.polygons):,} tris")
+    if KEEP_SEAMS:
+        if len(joined.data.vertices) > 0xFFFF:
+            raise RuntimeError(f"{len(joined.data.vertices):,} verts need 32-bit indices")
+        print(f"keep-seams: not decimating ({len(joined.data.vertices):,} <= 65535)")
+    else:
+        passes = 0
+        while len(joined.data.vertices) > TARGET:
+            passes += 1
+            if passes > 8:
+                raise RuntimeError(f"still {len(joined.data.vertices):,} verts; target {TARGET:,}")
+            modifier = joined.modifiers.new(name="dec", type='DECIMATE')
+            modifier.decimate_type = 'COLLAPSE'
+            modifier.ratio = max(0.05, TARGET / max(len(joined.data.vertices), 1) * 0.92)
+            bpy.ops.object.modifier_apply(modifier="dec")
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='SELECT')
+            bpy.ops.mesh.quads_convert_to_tris(quad_method='BEAUTY', ngon_method='BEAUTY')
+            bpy.ops.object.mode_set(mode='OBJECT')
+            print(f"decimated: {len(joined.data.vertices):,} verts, {len(joined.data.polygons):,} tris")
 
     mesh = joined.data
     matrix = joined.matrix_world
     group_bone = {}
+    chest_groups = set()
     unmapped = set()
     for group in joined.vertex_groups:
-        if group.name in BONE_MAP:
+        if group.name == CHEST_GROUP:
+            chest_groups.add(group.index)
+        elif group.name in BONE_MAP:
             group_bone[group.index] = BONE_MAP[group.name]
         else:
             unmapped.add(group.name)
     if unmapped:
         print(f"unmapped vertex groups (ignored): {sorted(unmapped)}")
+    with open(RIG, encoding="utf-8") as fh:
+        rig_z = {joint["bone"]: joint["position"][2] for joint in json.load(fh)["joints"]}
+    z_upper = float(rig_z[SPINE_UPPER])
+    z_chest = float(rig_z[CHEST_BONE])
+    z_span = max(z_chest - z_upper, 1e-4)
+    print(f"chest split: bone {SPINE_UPPER} at z {z_upper:.3f} -> "
+          f"bone {CHEST_BONE} at z {z_chest:.3f}")
+    print(f"fingers: {'gauntlet joints 34-71' if FINGERS else 'folded onto wrists 21/22'}")
 
     lo = [1e9] * 3
     hi = [-1e9] * 3
@@ -295,8 +397,15 @@ def main():
             hi[axis] = max(hi[axis], point[axis])
         totals = {}
         for element in vertex.groups:
+            if element.weight <= 0.0:
+                continue
+            if element.group in chest_groups:
+                t = min(1.0, max(0.0, (point.z - z_upper) / z_span))
+                totals[SPINE_UPPER] = totals.get(SPINE_UPPER, 0.0) + element.weight * (1.0 - t)
+                totals[CHEST_BONE] = totals.get(CHEST_BONE, 0.0) + element.weight * t
+                continue
             bone = group_bone.get(element.group)
-            if bone is not None and element.weight > 0.0:
+            if bone is not None:
                 totals[bone] = totals.get(bone, 0.0) + element.weight
         best = sorted(totals.items(), key=lambda item: -item[1])[:MAX_INFLUENCES]
         total = sum(weight for _bone, weight in best)
@@ -327,6 +436,8 @@ def main():
                      "global bone indices. Weights are 0-255 and sum to 255. Vertex order "
                      "matches the OBJ beside this file exactly."),
             "retargeted": RETARGET,
+            "keep_seams": KEEP_SEAMS,
+            "fingers": FINGERS,
             "vertices": len(skins),
             "skins": skins,
         }, fh)
