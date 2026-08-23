@@ -34,11 +34,11 @@ Durable status: `Sunrise/docs/CUSTOM_CHARACTER.md`.
 
 **Live / restore = `20260822-235602.json`** (92 layers, **hands-on-gauntlets confirmed**). Live also has `globals_06dc_7` + `globals_03ed_6` (race-glove blank, not confirmed). Prior v23 wrists-only: `20260822-225414`. Tiled `0698_25` is in `packages\_reverted_uv_tiles\`. Do not `--restore` 150046.
 
-**Sunrise DLL is hook v18** plus a 6th exact part `(0, 7902)` for gauntlet hands. v23 spine/unweld confirmed. `--fingers` is **closed**. Hands-on-gauntlets is **the floor** (user: no needles, sword grip). Do not sample Destiny t2. Do not encode TEXCOORD2. Full inventory: `Sunrise/docs/CUSTOM_CHARACTER.md`.
+**Sunrise DLL is hook v18** plus a 6th exact part for gauntlet arms (now `(0, 16326)`, upper + forearm + palm). v23 spine/unweld confirmed. `--fingers` is **closed**. Hands-on-gauntlets is **the floor** (user: no needles, sword grip). Do not sample Destiny t2. Do not encode TEXCOORD2. Full inventory: `Sunrise/docs/CUSTOM_CHARACTER.md`.
 
 ## Next
 
-First-person hand-skip is **reverted** — `(0, 7902)` stays visible. FP/inspect can still spaghetti (unposed 40–71); do not hide them again. Next custom GLB goes through `Sunrise/bring_guardian.ps1` (retarget / cut / `custom_parts.txt` / `--hands-on-gauntlets`). Race-glove probe live: blanked `0x815B9521` + `0x80FDBE41`. Do **not** blank UI `0x80EFC649`. Hang / needles / leftover leather still there = restore `20260822-235602`. Do not `--fingers`. Do not AABB-fit.
+First-person hand-skip is **reverted**. Arms ride the gauntlet draw `(0, 16326)` so FP Ghost/weapon has a complete arm, not a floating palm. Finger bones 40–71 can still spaghetti; do not hide the draw. Live packages `037c_32` / `037d_30` / `0698_28` are **not snapshotted** until the user confirms. Hang / needles / leftover leather still there = restore `20260822-235602`. Next custom GLB goes through `Sunrise/bring_guardian.ps1`. Race-glove probe live: blanked `0x815B9521` + `0x80FDBE41`. Do **not** blank UI `0x80EFC649`. Do not `--fingers`. Do not AABB-fit.
 
 ## Restore
 

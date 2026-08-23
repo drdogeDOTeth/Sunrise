@@ -1,10 +1,14 @@
-"""Split v23 into a chest mesh without distal hands, and a hand-only mesh.
+"""Split the retargeted body into a chest mesh and a complete arm+hand mesh.
 
-Chest keeps any triangle that is not purely fingers, so the wrist/palm stays on
-the body (bones 21/22, ceiling 28). Gauntlets take any triangle that touches a
-finger-weighted vertex, plus a ring of wrist triangles so the cut overlaps.
+First-person never draws the chest, so anything left on the body is invisible
+on Ghost and weapons. Gauntlets take every triangle whose verts are only
+upper-arm / forearm / wrist / finger, plus a cuff of arm-shoulder faces so
+the cut overlaps. The chest keeps the stump (not those arm-only faces).
 
-Does not write packages.
+Shoulder bones 27/28 stay on the chest: they carry tank-strap tris, and the
+gauntlet draw is one skin atlas.
+
+Does not write packages. Does not --fingers on the chest.
 """
 from __future__ import annotations
 
@@ -32,6 +36,10 @@ FINGER_BONES = frozenset({
     40, 42, 43, 44, 45, 46, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 66, 71,
 })
 WRISTS = frozenset({21, 22})
+FOREARMS = frozenset({19, 20})
+UPPER_ARMS = frozenset({15, 17})
+SHOULDERS = frozenset({27, 28})
+ARM_BONES = FINGER_BONES | WRISTS | FOREARMS | UPPER_ARMS
 
 
 def load_sidecars(stem: Path):
@@ -91,22 +99,29 @@ def main() -> None:
     prim = np.array([primary(s) for s in skins], dtype=np.int32)
     finger = np.isin(prim, list(FINGER_BONES))
     wrist = np.isin(prim, list(WRISTS))
+    forearm = np.isin(prim, list(FOREARMS))
+    upper = np.isin(prim, list(UPPER_ARMS))
     print(f"source {len(points):,} verts, {len(faces):,} tris")
-    print(f"  finger-primary {int(finger.sum()):,}  wrist-primary {int(wrist.sum()):,}")
+    print(f"  finger-primary {int(finger.sum()):,}  wrist-primary {int(wrist.sum()):,}  "
+          f"forearm-primary {int(forearm.sum()):,}  upper-primary {int(upper.sum()):,}")
 
-    finger_face = finger[faces].any(axis=1)
-    all_finger = finger[faces].all(axis=1)
-    chest_keep = ~all_finger
-    hand_keep = finger_face
-    print(f"  chest tris {int(chest_keep.sum()):,}  hand tris {int(hand_keep.sum()):,}  "
+    arm = np.isin(prim, list(ARM_BONES))
+    shoulder = np.isin(prim, list(SHOULDERS))
+    arm_only = arm[faces].all(axis=1)
+    cuff = arm[faces].any(axis=1) & shoulder[faces].any(axis=1)
+    chest_keep = ~arm_only
+    hand_keep = arm_only | cuff
+    print(f"  chest tris {int(chest_keep.sum()):,}  arm tris {int(hand_keep.sum()):,}  "
           f"overlap {int((chest_keep & hand_keep).sum()):,}")
 
     extract(points, faces, frame, skins, face_group, chest_keep,
             chest_out,
-            "minus purely-finger triangles. Wrist/palm stay on the chest.")
+            "minus arm-only triangles. Upper arm, forearm, palm and fingers live on the "
+            "gauntlet draw so first-person has a complete arm. Cuff overlaps the chest stump.")
     extract(points, faces, frame, skins, face_group, hand_keep,
             hands_out,
-            "triangles that touch a finger-primary vertex. Gauntlet draw only.")
+            "upper-arm + forearm + wrist + finger triangles plus a shoulder cuff. "
+            "Gauntlet draw only.")
 
 
 if __name__ == "__main__":

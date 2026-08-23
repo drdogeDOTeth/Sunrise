@@ -104,7 +104,9 @@ a new mesh’s index counts do not need a DLL rebuild.
 3. **Extract** the GLB’s own images
 4. **Copy atlases** to `custom_{tank,mask,necklace,skin,twirl}.png` (+ `_mr` when present)
 5. **Blender retarget** — pose arms to the Guardian A-pose, keep seams, keep finger weights, write OBJ + frame + groups + weights
-6. **Cut hands** — distal fingers onto the gauntlet draw; wrists stay on the chest (ceiling 28)
+6. **Cut hands** — complete arms (upper + forearm + palm + fingers + shoulder cuff)
+   onto the gauntlet draw so first-person is not a floating hand. Chest keeps the
+   shoulder/torso stump (ceiling 28). Bones 27/28 stay on the chest (tank straps).
 7. **Write `custom_parts.txt`** — exact `(start, count)` the hook matches
 8. **Inject** `--hands-on-gauntlets` — one body on the chest, hands on `981E` / `9809`, same bind frame; blank legs / hood / class item
 9. Optional **snapshot** of the live package set

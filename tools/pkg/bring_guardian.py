@@ -2,8 +2,8 @@
 
 This desk does not ship a character. You bring the .glb. The line extracts
 that model's textures, poses the arms onto the recovered Guardian rig in
-Blender, keeps seams and finger weights, cuts the hands onto the gauntlet
-draw, writes the hook's part table, copies atlases next to the DLL, and
+Blender, keeps seams and finger weights, cuts the arms (upper + forearm + palm)
+onto the gauntlet draw, writes the hook's part table, copies atlases next to the DLL, and
 injects with --hands-on-gauntlets.
 
 Closed on purpose:

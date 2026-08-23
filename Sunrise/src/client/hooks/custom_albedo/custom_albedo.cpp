@@ -76,15 +76,15 @@ constexpr std::array<PartSpec, 6> kDefaultParts{{
     {0, 74358, "tank", L"\\custom_tank.png", L"\\custom_tank_mr.png"},
     {74358, 11580, "mask", L"\\custom_mask.png", L"\\custom_mask_mr.png"},
     {85938, 3570, "necklace", L"\\custom_necklace.png", L"\\custom_necklace_mr.png"},
-    {89508, 35508, "skin", L"\\custom_skin.png", L"\\custom_skin_mr.png"},
-    {125016, 6036, "twirl", L"\\custom_twirl.png", nullptr},
-    {0, 7902, "hands", L"\\custom_skin.png", L"\\custom_skin_mr.png"},
+    {89508, 26760, "skin", L"\\custom_skin.png", L"\\custom_skin_mr.png"},
+    {116268, 6036, "twirl", L"\\custom_twirl.png", nullptr},
+    {0, 16326, "hands", L"\\custom_skin.png", L"\\custom_skin_mr.png"},
 }};
 
 std::array<Part, kMaxParts> g_parts{};
 UINT g_partCount{};
 
-constexpr UINT kMeshIndices = 131052;
+constexpr UINT kMeshIndices = 122304;
 
 struct GpuImage {
     ID3D11Texture2D* texture{};
