@@ -10,6 +10,30 @@
 
 ## NEXT AGENT — start here
 
+### The VRM merge is parked, not resolved (`cosmetics` @ `9b887c7`)
+
+PR #1 (Sleepy-Studio, "Add playable VRM injection workflow") merged into `origin/cosmetics` as
+`5e2f868` and **the tree did not compile**. `custom_albedo.cpp` was rewritten on both sides since
+the merge base `6d0bacb` — 184 lines ours, 973 theirs — and merge `d7e5262` interleaved them,
+keeping our `Part`/`PartSpec` helpers next to the profile branch's call sites. `GpuImage`,
+`release_com`, `RuntimePart`, `read_file_to_string`, `to_utf8`, `find_json_string` and the new
+`load_png`/`upload_image` signatures lost their definitions while every use stayed.
+
+`custom_albedo.cpp`, `custom_albedo.h` and `player_panel.cpp` are now **byte-identical to
+`ff351ea`** again. Everything else the PR brought stays: `vrm_injector.py`, `dump_class_bodies.py`,
+`game_paths.py`, `docs/characters/README.md`. Only `player_panel.cpp` called the model-profile API,
+so nothing else needed reverting; the in-game model picker is gone with it, and no doc describes it.
+
+**Do not "fix the merge" by taking their file.** `043dd75` predates the first-person arm work: it
+has **no `hands` part at all** and still carries `mask` at **11574**, not 11580. Both are
+user-confirmed in game. Redoing this means porting the arm work forward onto their profile
+structure, and it wants a launch to confirm the Warlock still renders.
+
+Two of their tool edits are live and worth knowing: `inject_scatterhorn.py` now falls back to a
+spare chest material instead of raising when a source material is unmapped (so a real mapping
+mistake is now a warning, not a stop), and `parse_models.py` no longer raises when the dump
+directory is empty — downstream tools get an empty `models` list instead of a clear error.
+
 ### Emotes: an emote is a plug, not equipment. SHIPPED, awaiting one launch. (branch `activities`)
 
 The worlds being empty and the emotes never playing are separate problems with separate causes.
