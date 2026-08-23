@@ -38,3 +38,4 @@ tools/pkg/*.obj
 tools/pkg/*.bin
 tools/pkg/request_*.txt
 tools/pkg/*_weights.json
+tools/pkg/*_groups.json

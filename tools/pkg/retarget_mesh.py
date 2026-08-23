@@ -22,15 +22,24 @@ vertex keeps the weights its artist gave it instead of copying them off whicheve
 vertex happened to be nearest. Fingers collapse onto the wrist because the rig's finger joints
 are above the index ceiling of 28.
 
+**The hand is retargeted too, since 2026-08-23.** The arm chain alone left each wrist 4.9 cm
+from the joint that drives it, because the GLB's upper arm hangs from its own shoulder rather
+than the rig's, and the game rotates the hand about *its* joint - so that gap acted as a lever
+and the hand read as screwed on at the wrong angle. `fit_hands()` re-aims and scales the forearm
+onto the real wrist joint and turns the hand so its knuckles fan like the donor's. Pass
+`--no-fit-hands` to get the old behaviour. Targets come from `hand_targets.py`.
+
 Usage (from tools/pkg):
     blender --background --python retarget_mesh.py -- 65535 out.obj --keep-seams --fingers --glb path.glb
+    blender --background --python retarget_mesh.py -- ... --no-fit-hands
 """
 import json
+import math
 import os
 import sys
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 ARGV = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:]
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -56,6 +65,21 @@ MATERIAL_MAP_FILE = _take_opt(_ARGS, "--material-map")
 RETARGET = "--no-retarget" not in _ARGS
 KEEP_SEAMS = "--keep-seams" in _ARGS
 FINGERS = "--fingers" in _ARGS
+FIT_HANDS = "--no-fit-hands" not in _ARGS
+HAND_TARGETS = os.path.join(HERE, "objs", "skeleton", "hand_targets.json")
+
+# Artistic roll, applied after the fit: degrees about the forearm axis (pronation - the palm-up to
+# palm-down motion). The fit itself puts the hand on Destiny's own frame to 0.1 deg, so anything
+# here is taste, not correctness. **The sign matches the preview panel labels**, so pick a value by
+# looking rather than by reasoning about the right-hand rule - no launch needed:
+#     python hand_view.py out.png --side back --axis forearm --angles -40,-20,0,20,40
+# User picked -25 on the left hand, 2026-08-23, off exactly that sheet. Right hand left alone.
+HAND_ROLL = {"L": -25.0, "R": 0.0}
+_ROLL_OPT = _take_opt(_ARGS, "--hand-roll")
+if _ROLL_OPT:
+    for _item in _ROLL_OPT.split(","):
+        _side, _, _value = _item.partition("=")
+        HAND_ROLL[_side.strip().upper()] = float(_value)
 _POSITIONAL = [item for item in _ARGS if not item.startswith("--")]
 if len(_POSITIONAL) < 2:
     raise SystemExit("usage: blender --background --python retarget_mesh.py -- "
@@ -145,6 +169,29 @@ ARM_CHAINS = [
 ]
 MAX_INFLUENCES = 4
 
+# The hand fit. `ARM_CHAINS` aims each bone from the *rig's* joint, but the GLB's upper arm hangs
+# from its own shoulder — ~4.8 cm inboard of rig joint 27 — so the error is inherited all the way
+# down and the wrist lands 4.9 cm from the joint that drives it. The game rotates our hand about
+# **its** joint, so that gap is a lever arm: every wrist bend swings the hand ~5 cm wide of the
+# forearm and reads as a hand screwed on at the wrong angle (user, 2026-08-23, both first person
+# and the character screen).
+#
+# Two corrections per side, and deliberately no more:
+#   1. Re-aim the forearm at the real wrist joint from wherever our elbow actually is, then scale
+#      it along its own length so the tail lands *on* that joint. The arm above the elbow is
+#      untouched, so the confirmed silhouette survives.
+#   2. Rotate the hand so its knuckle fan matches the donor's. Rotation only - our knuckles sit
+#      31% closer to the wrist and our fingers run 8 cm longer than Destiny's, and that is the
+#      character's hand, not a defect. Scaling to match would trade one wrong hand for another.
+HAND_FIT = [
+    ("L", "Left elbow", "Left wrist",
+     {"index": "IndexFinger1_L", "middle": "MiddleFinger1_L",
+      "little": "LittleFinger1_L", "thumb": "Thumb0_L"}),
+    ("R", "Right elbow", "Right wrist",
+     {"index": "IndexFinger1_R", "middle": "MiddleFinger1_R",
+      "little": "LittleFinger1_R", "thumb": "Thumb0_R"}),
+]
+
 
 def to_destiny(p):
     """Blender world -> Destiny (x forward, y left, z up). A +90 deg turn about Z."""
@@ -174,6 +221,144 @@ def align(armature, name, direction_world):
     pose_bone.matrix = armature.matrix_world.inverted() @ posed
     bpy.context.view_layer.update()
     return current, direction_world.normalized()
+
+
+def hand_frame(palm, index, middle, little):
+    """@return Orthonormal frame of a hand: down the hand, across the knuckles, palm normal.
+
+    **Not** a Procrustes fit over knuckle positions. Our knuckles sit 31% closer to the wrist
+    than Destiny's, and with radii that different, minimising landmark *position* trades
+    orientation away to buy radial error it can never win - measured: fitting positions left the
+    knuckle line 13.6 deg out and a second round made it 19.2 deg, while aligning these two
+    directions leaves 4.4 deg and a *lower* landmark error. Orientation is what we can fix
+    without rescaling the character's hand, so orientation is what this fits.
+    """
+    axis = (middle - palm).normalized()
+    across = index - little
+    across -= axis * across.dot(axis)
+    across.normalize()
+    return Matrix((axis, across, axis.cross(across))).transposed()
+
+
+def frame_rotation(ours, theirs):
+    """@return Rotation taking our hand frame onto the donor's, and its angle in degrees."""
+    rotation = theirs @ ours.transposed()
+    trace = rotation[0][0] + rotation[1][1] + rotation[2][2]
+    return rotation, float(math.degrees(math.acos(min(1.0, max(-1.0, (trace - 1) / 2)))))
+
+
+def rotate_pose_bone(armature, name, rotation):
+    """Turn one pose bone about its own head, keeping its children attached."""
+    pose_bone = armature.pose.bones[name]
+    world = armature.matrix_world @ pose_bone.matrix
+    head = world.translation.copy()
+    posed = (rotation @ world.to_3x3()).to_4x4()
+    posed.translation = head
+    pose_bone.matrix = armature.matrix_world.inverted() @ posed
+    bpy.context.view_layer.update()
+
+
+def posed_centroids(armature, wanted):
+    """@return name -> weight-averaged **posed** world position of the vertices in that group.
+
+    Positions come from the evaluated mesh (so the pose is applied) and weights from the original
+    (the armature modifier changes neither vertex count nor order). Same quantity the donor side
+    is measured with in `hand_targets.py`, which is the point — fitting one measure and checking
+    another is how the first version of this rolled the hand the wrong way.
+    """
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    totals = {name: [Vector((0.0, 0.0, 0.0)), 0.0] for name in wanted}
+    for obj in [o for o in bpy.data.objects if o.type == 'MESH']:
+        index_of = {group.name: group.index for group in obj.vertex_groups}
+        present = {name: index_of[bone] for name, bone in wanted.items() if bone in index_of}
+        if not present:
+            continue
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh()
+        matrix = evaluated.matrix_world
+        try:
+            for vertex, source in zip(mesh.vertices, obj.data.vertices):
+                weights = {element.group: element.weight for element in source.groups}
+                for name, group in present.items():
+                    weight = weights.get(group, 0.0)
+                    if weight > 0.0:
+                        totals[name][0] += (matrix @ vertex.co) * weight
+                        totals[name][1] += weight
+        finally:
+            evaluated.to_mesh_clear()
+    return {name: total / mass for name, (total, mass) in totals.items() if mass > 0.0}
+
+
+def fit_hands(armature):
+    """Put each wrist on the joint that drives it, then aim the knuckles like the donor's.
+
+    Runs after ARM_CHAINS, because it re-aims the forearm using where the elbow actually ended
+    up. Everything is done in Blender world space - converting a rotation between Blender and
+    Destiny axes is an easy sign error, and the targets convert cleanly the other way.
+    """
+    if not os.path.isfile(HAND_TARGETS):
+        print(f"  no {HAND_TARGETS}; run `python hand_targets.py`. Hands left unfitted.")
+        return
+    with open(HAND_TARGETS, encoding="utf-8") as handle:
+        targets = json.load(handle)["sides"]
+
+    for side, forearm_name, wrist_name, knuckle_names in HAND_FIT:
+        spec = targets.get(side)
+        if spec is None or forearm_name not in armature.pose.bones:
+            print(f"  {side}: no targets or no '{forearm_name}' bone; skipped")
+            continue
+        wrist_target = to_blender(spec["wrist"])
+        elbow = (armature.matrix_world @ armature.pose.bones[forearm_name].matrix).translation
+        before = ((armature.matrix_world @ armature.pose.bones[wrist_name].matrix).translation
+                  - wrist_target).length
+
+        # 1. aim the forearm at the real joint, then set its length so the tail lands on it
+        align(armature, forearm_name, wrist_target - elbow)
+        wrist_head = (armature.matrix_world @ armature.pose.bones[wrist_name].matrix).translation
+        reach = (wrist_head - elbow).length
+        want = (wrist_target - elbow).length
+        factor = 1.0
+        if reach > 1e-6:
+            factor = want / reach
+            # The hand must not inherit that squash: it would shorten the fingers along one axis
+            # and shear the palm. It still inherits rotation and translation, so it stays attached.
+            armature.data.bones[wrist_name].inherit_scale = 'NONE'
+            pose_bone = armature.pose.bones[forearm_name]
+            pose_bone.scale = (1.0, factor * pose_bone.scale.y, 1.0)
+            bpy.context.view_layer.update()
+        wrist_head = (armature.matrix_world @ armature.pose.bones[wrist_name].matrix).translation
+        print(f"  {side} wrist: {before * 100:5.2f} cm off the joint -> "
+              f"{(wrist_head - wrist_target).length * 100:4.2f} cm, forearm x{factor:.3f}")
+
+        # 2. turn the hand so it faces the way the donor's does
+        wanted = dict(knuckle_names)
+        wanted["palm"] = wrist_name
+        ours = posed_centroids(armature, wanted)
+        theirs = spec.get("centroids", {})
+        needed = ("palm", "index", "middle", "little")
+        missing = [key for key in needed if key not in ours or key not in theirs]
+        if missing:
+            print(f"  {side}: no centroid for {missing}; hand left unturned")
+            continue
+        rotation, angle = frame_rotation(
+            hand_frame(*(ours[key] for key in needed)),
+            hand_frame(*(to_blender(theirs[key]["position"]) for key in needed)))
+        rotate_pose_bone(armature, wrist_name, rotation)
+        after = posed_centroids(armature, wanted)
+        drift = [(after[key] - to_blender(theirs[key]["position"])).length
+                 for key in needed if key in after]
+        print(f"  {side} hand : turned {angle:5.1f} deg (frame fit), "
+              f"landmark drift {sum(drift) / len(drift) * 100:5.2f} cm")
+
+        # 3. artistic roll on top of the fit. Negated so the value matches the sign printed on the
+        # `hand_view.py --axis forearm` preview panels, which is how it gets chosen.
+        roll = HAND_ROLL.get(side, 0.0)
+        if roll:
+            axis = wrist_target - elbow
+            rotate_pose_bone(armature, wrist_name,
+                             Matrix.Rotation(math.radians(-roll), 3, axis.normalized()))
+            print(f"  {side} roll : {roll:+.1f} deg about the forearm (taste, not fit; "
+                  f"same sign as the preview sheet)")
 
 
 def corner_normal(mesh, loop, index):
@@ -306,6 +491,11 @@ def main():
             was, now = align(armature, name, target)
             angle = was.angle(now)
             print(f"  {name:>14}: rig {head_bone}->{tail_bone}, turned {angle * 57.2958:5.1f} deg")
+        if FIT_HANDS:
+            print("hand fit:")
+            fit_hands(armature)
+        else:
+            print("--no-fit-hands: wrists stay wherever the arm chain leaves them")
         bpy.ops.object.mode_set(mode='OBJECT')
     else:
         print("--no-retarget: mesh stays in its T-pose")

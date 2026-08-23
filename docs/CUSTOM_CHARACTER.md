@@ -8,10 +8,23 @@ Root `HANDOFF.md` is stale (`_18`); ignore it.
 looking like `tools/pkg/objs/textures/_glb_blender_preview.png` — green SkinTats graffiti, charcoal
 tank, black gas mask, twirl, teal necklace. Not a dye tint.
 
-**Live / restore:** snapshot `20260822-235602.json` is **hands-on-gauntlets confirmed** (no
-needles, sword grip). `--fingers` is closed. Prior wrists-only v23: `20260822-225414`. Hook has
-six exact parts (chest 131052 + hands 7902). Destiny must be closed to write packages or
-overwrite the DLL.
+**Live / restore:** newest is the **v24 hand refit** (`037c_33` / `037d_31` / `0698_29`, not yet
+seen in game) over snapshot `20260823-141400.json`. Snapshot `20260822-235602.json` is
+**hands-on-gauntlets confirmed** (no needles, sword grip). `--fingers` is closed on the chest.
+Prior wrists-only v23: `20260822-225414`. Hook has six exact parts (chest 122304 + hands 16326,
+arms on the gauntlets) — **the refit did not change either count**. Destiny must be closed to
+write packages or overwrite the DLL.
+
+**The hand is retargeted as of 2026-08-23.** `retarget_mesh.fit_hands()` puts each wrist on the
+joint that drives it (was 4.9 cm off, now 0.72) and turns the hand onto the donor's frame (palm
+normal was 29° out, now 0.1°). **User-confirmed better in game.** Verify offline, no launch, with
+`python audit_hand_bind.py --png objs/hand_overlay.png`. Full account and the two fitting traps:
+[`HANDOFF.md`](../HANDOFF.md).
+
+**`HAND_ROLL` is the taste knob** on top of that fit — degrees of pronation about the forearm
+axis, per hand. Left is **−25°** by user pick, right is 0. Its sign matches the panel labels from
+`python hand_view.py out.png --side back --axis forearm --angles -40,-20,0,20,40`, so choose a
+value by looking at the sheet rather than reasoning about rotation direction.
 
 ---
 
@@ -62,11 +75,12 @@ The working path is a **draw-time pixel-shader replace** on five exact index ran
 | tank | 0 | 74358 | `custom_tank.png` (2048) | `custom_tank_mr.png` |
 | mask | 74358 | 11580 | `custom_mask.png` (2048) | `custom_mask_mr.png` |
 | necklace | 85938 | 3570 | `custom_necklace.png` (2048) | `custom_necklace_mr.png` |
-| skin | 89508 | 35508 | `custom_skin.png` (2048) | `custom_skin_mr.png` |
-| twirl | 125016 | 6036 | `custom_twirl.png` (512) | none — 1×1 G=0.55 |
-| hands | 0 | 7902 | `custom_skin.png` (2048) | `custom_skin_mr.png` |
+| skin | 89508 | 26760 | `custom_skin.png` (2048) | `custom_skin_mr.png` |
+| twirl | 116268 | 6036 | `custom_twirl.png` (512) | none — 1×1 G=0.55 |
+| hands | 0 | 16326 | `custom_skin.png` (2048) | `custom_skin_mr.png` |
 
-Chest mesh indices: **131052**. Hands are a separate gauntlet draw, exact `(0, 7902)` only.
+Chest mesh indices: **122304**. Hands are a separate gauntlet draw, exact `(0, 16326)` —
+upper arm + forearm + palm so first-person is a complete arm, not a floating hand.
 That draw stays **visible** in first-person (the skip was reverted — empty sleeves are not
 acceptable). Bones 40–71 are still unposed on the FP/inspect path, so the mesh can spaghetti
 until a real viewmodel is dumped. Do not skip it again. Do not `--fingers` on the chest.
@@ -98,9 +112,9 @@ AO (`o2.y = 0.5`) is correct, not a missing texture.
 
 | layer | role |
 |---|---|
-| `w64_sandbox_037c_30.pkg` | nohands chest + hand-only gauntlets |
-| `w64_sandbox_037d_28.pkg` | chest five-part + gauntlet one-part |
-| `w64_sandbox_0698_26.pkg` | 0–1 UVs. Tiled attic `0698_25` is a *different* file |
+| `w64_sandbox_037c_32.pkg` | nohands chest + gauntlet arms (upper + forearm + palm) |
+| `w64_sandbox_037d_30.pkg` | chest five-part + gauntlet one-part |
+| `w64_sandbox_0698_28.pkg` | 0–1 UVs. Tiled attic `0698_25` is a *different* file |
 | `w64_globals_06dc_7.pkg` | blank `0x815B9521` (race upper body, not confirmed) |
 | `w64_globals_03ed_6.pkg` | blank `0x80FDBE41` (same mesh, second copy) |
 | `w64_sandbox_019b_9.pkg` | packed 512 still on the dye tile (unused while the hook fires) |
@@ -223,9 +237,11 @@ inject still refuses it on the chest. Hands go on the gauntlet draw with the che
 
 ## Still open
 
-1. **First-person / inspect hands:** skip-draw is closed (user: hands must stay visible).
-   Spaghetti / hip smash is unposed 40–71 on those paths. Next step is a dumped first-person
-   arms model, not `--fingers` and not another hide.
+1. **First-person / inspect arms:** upper arm, forearm and palm now ride the gauntlet
+   draw (`(0, 16326)`). Skip-draw is closed. Finger bones 40–71 can still spaghetti.
+   Shoulder bones 27/28 stay on the chest (tank straps). If FP still looks armless at
+   the camera edge, that is the stock viewmodel, not a missing triangle. Do not
+   `--fingers`. Do not AABB-fit. Do not hide the draw.
 2. **Next custom character:** `.\bring_guardian.ps1` (or `python tools/pkg/bring_guardian.py --ui`).
    Dry-run first. Destiny closed to inject. See the script docstring.
 3. **Leftover stock gloves — probe live:** blanked `0x815B9521` (`globals_06dc_7`) and
