@@ -65,9 +65,36 @@ past 2048 lines (`kMapCapacity`) is dropped on read. Z is up: `place_from_map` g
 
 The tag on a line is **not** the entity that was authored there. Both routes below discard the
 authored tags and round-robin the world's own combatants across the positions instead, because the
-point of the map is where a body can stand, not what stood there. `place_from_map` re-checks
-residency and re-grounds every point at placement time, so a tag this destination does not stream
-costs a retry rather than a bad spawn.
+point of the map is where a body can stand, not what stood there.
+
+### The tags are a pool, not an assignment
+
+**A map is authored where nothing can know which entities a destination streams.** Entity
+definitions live in shared packages, so neither the package id carried in a tag nor the
+destination's own package list settles it — measured, zero of the 191 named combatants live in any
+destination's package list. Upstream answered this with `kWorldFactions`, a hardcoded world-to-
+faction table, which is a guess and was wrong for Nessus.
+
+The game answers it for free: `is_tag_resident` is one resolver lookup, and a map names about a
+hundred distinct tags, so the whole set sweeps for less than the placement it precedes. So the tags
+in a map file are read as a **pool of candidate bodies**. When a point's authored body is not
+streamed in this world, the point fills with one that is, rather than standing empty. Swept at most
+every 15 s (a bubble change alters what streams) and never at load, when the world is still
+streaming in.
+
+The panel reports the outcome directly:
+
+```
+Bodies: 47 of the map's 115 entities stream in this world
+```
+
+**A zero there is why a world stays empty.** If it happens, `Fill positions with filtered
+combatants` then `Save map` re-tags that destination from what the game has streamed in — it
+prefers the world's factions and falls back to every resident combatant, so it cannot come back
+empty in a world that has enemies in it.
+
+`place_from_map` also re-grounds every point at placement time, so an authored height that drifted
+costs a snap rather than a body in the floor.
 
 ### Route 1 — in game, from the authored placement chain
 

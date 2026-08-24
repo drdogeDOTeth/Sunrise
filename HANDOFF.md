@@ -37,12 +37,12 @@ what objective.
   frame it was authored in
 - **`autoOnLoad`** off by default: *"a world that fills itself is a change the player opts into"*
 
-### Map mode is on and the maps are written — offline. Not yet launched.
+### Map mode works. Nessus/Io were empty for a nameable reason, now fixed and installed.
 
 `use_map`, `auto_on_load` and `enabled` are all **true** in
 `C:\Sunrise\bin\x64\Sunrise\population.json`, and **423 map files, 130,535 points** are in the
 artifact directory beside it. Arriving anywhere should now fill the world at its authored positions.
-**Nobody has launched since.** Full detail: [`docs/WORLD_POPULATION.md`](docs/WORLD_POPULATION.md).
+**Confirmed in game:** EDZ filled and fought at the authored positions (`Map: 952 points`, the exact count the offline writer produced). Nessus and Io reached 2 and 0 with `last step: entity not streamed in` — right positions, wrong bodies. **Nothing offline can know which entities a destination streams**; entity definitions live in shared packages, so a map's tags are now read as a *pool* and `is_tag_resident` picks which of them this world can produce. Upstream's `kWorldFactions` also had Nessus wrong (`planet_x` tokenises to `planet`, which declared Hive). Both fixed, built, **installed, not yet launched**. Watch the new `Bodies: N of M` line. Full detail: [`docs/WORLD_POPULATION.md`](docs/WORLD_POPULATION.md).
 
 Those maps did **not** come from the in-game batch. The build cache already holds the game's own
 spawn sets — 8,892 authored positions per map stem, with the package rules that say which
