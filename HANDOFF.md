@@ -10,6 +10,42 @@
 
 ## NEXT AGENT — start here
 
+### Enemies are spawned CLIENT-side. Merged PR #58. (branch `activities` @ bd4e6a4, built, not installed)
+
+**The correction that matters:** the physics server's `IActivityPolicy` reaches actors nothing
+renders. Every working enemy implementation in this community hooks **the game's own object-spawn
+function in the client** instead. The five-layer map below is accurate about the server and is the
+wrong road; keep it for what it says about the server, not as a plan.
+
+`stanuwu/Sunrise#58` (Adamya08) places enemies at each destination's **own authored positions**, on
+top of ReGlitched's entity spawner from **#46**. Neither was closed for not working:
+
+- **#46** - closed over hardcoded RVAs and an extraction path outside the cache stack. The author
+  then fixed most of it: `spawn_runtime` resolves through pattern scans, **one** RVA survives at
+  `0x1F93420`.
+- **#58** - closed **by its own author**, deferring to a server-side implementation rumoured on
+  Discord that has not appeared.
+- **#66 Playbook (mission creator)** - map markers, objectives, shareable JSON missions. Refused
+  because upstream had stopped taking feature PRs and calls this client-heavy modding out of line
+  with its architecture. That objection does not apply to a fork that already hooks `DrawIndexed`.
+  **Not merged**; it carries its own older copy of `spawn_runtime.cpp` and would have to be
+  reconciled against #58's.
+
+**Nothing turns on by itself.** `PopulationSettings::enabled` defaults false and lives in its own
+`population.json` beside the DLL, not in `settings.json`. Turn it on in the overlay's **Spawn**
+page. Defaults: 12 live placements, 18-55 m ring, forget at 140 m, one placement every 600 ms.
+
+**Carried caveats, from the author and the code:**
+
+- an entity **cannot be despawned** - the game offers no removal call the module can make, so
+  placements persist until the location unloads
+- **175 of 466 locations cannot extract placements, the Moon among them**; cause unknown
+- the surviving RVA is brittle if the build ever moves off Shadowkeep `86657.20.08.23`
+- steps do not progress on a Sparrow (that one is #66's, if it is ever taken)
+
+`ProvingPolicy` stays gated off. It measures a real subsystem honestly and is not the road to a
+visible enemy.
+
 ### Why the worlds are empty: five layers, and only two of them exist
 
 Read from source, not yet launched. The mission engine is not missing — it is **built, complete,
