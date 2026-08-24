@@ -13,16 +13,6 @@ namespace sunrise::middleware::datagen::family4::loadout {
 inline constexpr std::size_t kItemCapacity = state::account::inventory::kEquipmentSlotCount
                                              + state::account::inventory::kCharacterItemCapacity;
 
-/**
- * Marks a resolved row whose item has no native equipment slot at all.
- *
- * Not every character item is equipment. The Emote Collection is the case that matters: it sits in
- * a one-row character bucket with `equipmentSlot` absent and four ordinary sockets, and the four
- * emote quick-slots read the plugs in those sockets. An item like that can only ever be carried,
- * so it publishes this value and never an equipment index.
- */
-inline constexpr std::uint8_t kNoEquipmentSlot = 0xFF;
-
 /** One installed-build-resolved item ready for character and instance encoding. */
 struct ResolvedItem {
     std::uint16_t inventoryRow{};
