@@ -20,6 +20,8 @@
 #include "../hooks/teleport/runtime.h"
 #include "../inactivity/inactivity_settings_store.h"
 #include "../movement/movement_settings_store.h"
+#include "../playbook/playbook.h"
+#include "../playbook/playbook_share.h"
 #include "../spawn/population_settings_store.h"
 #include "../spawn/spawn_keybind_store.h"
 #include "../player/player_settings_store.h"
@@ -39,6 +41,9 @@ bool initialize(void* module) noexcept {
     // Loaded here too, so the populator holds the saved settings before the panel first draws.
     spawn::initialize_population(module);
     player::initialize(module);
+    // The roteiro of a destination is loaded on first arrival, so this only resolves its directory.
+    playbook::initialize(module);
+    playbook::share::initialize(module);
     inactivity::initialize(module);
     return ui::runtime::initialize();
 }
@@ -128,6 +133,8 @@ bool shutdown() noexcept {
     ui::runtime::shutdown();
     // The reverse of the order the stores initialize in.
     inactivity::shutdown();
+    playbook::share::shutdown();
+    playbook::shutdown();
     player::shutdown();
     spawn::shutdown_population();
     spawn::shutdown();

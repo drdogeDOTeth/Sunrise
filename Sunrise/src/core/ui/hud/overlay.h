@@ -12,6 +12,10 @@ enum class Overlay : std::uint8_t {
     currentStatus,
     /** The instances of the session the player is in. */
     session,
+    /** The roteiro step the player has just reached, if any. */
+    playbook,
+    /** A marker over the world where the roteiro's next beat is. */
+    objectiveMarker,
     count,
 };
 
@@ -21,6 +25,8 @@ enum class StatusLine : std::uint8_t {
     bubble,
     sliceSet,
     closestSpawn,
+    /** Live actor count from the Sunrise physics simulation. Off by default. */
+    actorCount,
     count,
 };
 
