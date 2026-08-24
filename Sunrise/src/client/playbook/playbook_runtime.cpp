@@ -24,6 +24,7 @@
 #include "../../core/logging/log.h"
 #include "../../server/runtime/server_runtime.h"
 #include "../diagnostics/activity_location.h"
+#include "../hooks/spawn/spawn_runtime.h"
 #include "internal.h"
 
 namespace sunrise::client::playbook {
@@ -194,7 +195,7 @@ void ensure_destination_locked(std::string_view destination) noexcept {
         case Gate::interaction:
             return at_place(step, sampled) && interactEdge;
         case Gate::clearArea:
-            return server::live_actor_count() <= static_cast<std::size_t>(step.targetActorCount);
+            return live_gate_actor_count() <= static_cast<std::size_t>(step.targetActorCount);
         case Gate::place:
         default:
             return at_place(step, sampled);
@@ -804,6 +805,11 @@ std::size_t reached_count() noexcept {
     }
     ReleaseSRWLockShared(&g_lock);
     return reached;
+}
+
+std::size_t live_gate_actor_count() noexcept {
+    const std::size_t populated = hooks::spawn::population_live();
+    return populated != 0 ? populated : server::live_actor_count();
 }
 
 } // namespace sunrise::client::playbook

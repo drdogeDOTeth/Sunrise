@@ -14,7 +14,6 @@
 #include <imgui.h>
 
 #include "../../../../client/playbook/playbook.h"
-#include "../../../../server/runtime/server_runtime.h"
 
 namespace sunrise::core::ui::hud::overlays::playbook {
 namespace {
@@ -63,7 +62,8 @@ void draw_tracker() noexcept {
         return;
     }
     if (run.nextIsClearArea) {
-        ImGui::TextDisabled("clear area  |  %zu actors live", server::live_actor_count());
+        ImGui::TextDisabled("clear area  |  %zu actors live",
+                            client::playbook::live_gate_actor_count());
         return;
     }
     if (run.nextDistanceKnown) {

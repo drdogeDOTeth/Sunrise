@@ -261,4 +261,17 @@ struct Route {
  */
 [[nodiscard]] Route route_ahead() noexcept;
 
+/**
+ * @return Combatants alive for the purposes of a `clearArea` gate.
+ *
+ * The client populator's count when it holds any, and the Sunrise-hosted actor store's otherwise.
+ * The actor store is what this gate was first written against, and it is gated off by default, so
+ * on its own the gate read zero and every `clearArea` step fired the instant it was reached. The
+ * enemies a player actually fights are the client's - see `docs/WORLD_POPULATION.md`.
+ *
+ * Both the gate and the overlay that reports it call this, so the number on screen is the number
+ * the step is waiting on.
+ */
+[[nodiscard]] std::size_t live_gate_actor_count() noexcept;
+
 } // namespace sunrise::client::playbook
