@@ -1085,7 +1085,9 @@ constexpr std::size_t kNoFaction = 99;
 constexpr std::array<WorldFactions, 12> kWorldFactions{
     WorldFactions{"edz", {0, 2, kNoFaction, kNoFaction}},
     WorldFactions{"eden", {3, 0, 2, kNoFaction}},
-    WorldFactions{"planet", {1, 0, kNoFaction, kNoFaction}},
+    // Nessus's stem is `planet_x`, so its token is `planet`. The `nessus` entry below never
+    // matched anything, and this one was handing Nessus a Hive roster it does not stream.
+    WorldFactions{"planet", {3, 0, 2, kNoFaction}},
     WorldFactions{"polaris", {3, 4, kNoFaction, kNoFaction}},
     WorldFactions{"mercury", {3, kNoFaction, kNoFaction, kNoFaction}},
     WorldFactions{"luna", {1, 0, 3, kNoFaction}},
@@ -1266,17 +1268,34 @@ void step_batch() noexcept {
     const bool known = state::build_data::find_scenario_layout(destination, layout);
     const std::string_view token =
         known ? destination_token(destination, layout) : std::string_view{};
-    std::vector<std::uint32_t> combatants{};
+    // Two passes over the same candidates. The first wants the world's own factions by name; the
+    // second takes anything the game types as a combatant here. Requiring a name is what emptied
+    // worlds: only 747 entities carry one, and a destination streams plenty that do not - being
+    // streamed in and typed as a combatant is the game's own answer, and it beats a name table.
+    std::vector<std::uint32_t> preferred{};
+    std::vector<std::uint32_t> anyCombatant{};
     for (const Candidate& candidate : g_main.candidates) {
+        if (candidate.type != kCombatantType) {
+            continue;
+        }
         const char* const name = name_of(candidate.tag);
-        if (candidate.type != kCombatantType || name == nullptr) {
+        if (name == nullptr) {
+            anyCombatant.push_back(candidate.tag);
             continue;
         }
         const std::string_view text{name};
+        // A name can only rule a candidate out here. Vehicles, champions and bosses are the three
+        // the player asked to be rid of, and they are recognisable by name alone.
+        if ((g_excludeVehicles && vehicle_name(text)) || (g_excludeChampions && champion_name(text))
+            || (g_excludeBosses && boss_name(text))) {
+            continue;
+        }
+        anyCombatant.push_back(candidate.tag);
         if (is_combatant_name(text) && world_faction(text, token)) {
-            combatants.push_back(candidate.tag);
+            preferred.push_back(candidate.tag);
         }
     }
+    std::vector<std::uint32_t>& combatants = preferred.empty() ? anyCombatant : preferred;
     std::vector<client::spawn::MapPoint> held(client::spawn::map_size());
     const std::size_t count = client::spawn::copy_map(held);
     if (combatants.empty() || count == 0) {
@@ -1468,6 +1487,11 @@ void draw_population() noexcept {
                                 status.points,
                                 kOutcomes[outcome]);
         }
+        // A map is authored where nothing knows what a destination streams, so this is the line
+        // that says whether its bodies exist here. A zero is why a world stays empty.
+        ImGui::TextDisabled("Bodies: %zu of the map's %zu entities stream in this world",
+                            status.residentTags,
+                            status.mapTags);
         // The two positions are printed together because the only way to tell an authored height
         // from a wrong one is to read it against where the player actually stands.
         ImGui::TextDisabled("You %.0f %.0f %.0f   last placement %.0f %.0f %.0f   ground moved it "

@@ -152,6 +152,10 @@ struct PopulationStatus {
     std::array<float, 3> placed{};
     /** Height the ground probe moved the last placement by, or zero when it did not run. */
     float snapped{};
+    /** Distinct entity tags the loaded map names. */
+    std::size_t mapTags{};
+    /** How many of those this world streams, as of the most recent sweep. */
+    std::size_t residentTags{};
 };
 
 /** @return The populator's current status. */

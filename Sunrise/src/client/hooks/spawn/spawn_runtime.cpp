@@ -190,6 +190,18 @@ SRWLOCK g_autoLoadLock{SRWLOCK_INIT};
 std::vector<MapSlot> g_points{};
 /** Recorded points currently filled, so map mode can answer its own live count. */
 std::size_t g_mapLive{};
+/**
+ * Distinct entity tags the loaded map names, and the subset of them this world streams.
+ *
+ * A map is authored offline, where nothing can know which entities a destination streams: entity
+ * definitions live in shared packages, so neither a package name nor a faction table settles it.
+ * The game does, and cheaply - the tag resolver answers per tag. So the map is read as positions
+ * plus a pool of candidate bodies, and the world decides which of them it can actually produce.
+ */
+std::vector<std::uint32_t> g_mapTags{};
+std::vector<std::uint32_t> g_mapResident{};
+/** Tick the resident sweep last ran, or zero when the pool has not been swept for this map. */
+std::uint64_t g_mapResidentAt{};
 /** Why the last map step placed nothing, and how far the closest free point was. */
 PlacementOutcome g_lastOutcome{PlacementOutcome::idle};
 float g_nearestFree{-1.0F};
@@ -643,6 +655,33 @@ void prune_population(const std::array<float, 3>& player, float forgetRadius) no
     return true;
 }
 
+/** How long a resident sweep is trusted. A bubble change alters what the world streams. */
+constexpr std::uint64_t kResidentSweepMs = 15000;
+
+/**
+ * Rebuilds the subset of the map's tags this world streams, at most once per sweep interval.
+ *
+ * Each test is one resolver lookup, and a map names on the order of a hundred distinct tags, so a
+ * whole sweep is cheaper than the placement it precedes. It is deliberately not done at load: the
+ * world is still streaming in on arrival, and a sweep taken then would write off entities that
+ * appear a second later.
+ *
+ * Called with the population lock held.
+ * @param now Current tick.
+ */
+void refresh_resident_tags(std::uint64_t now) noexcept {
+    if (g_mapResidentAt != 0 && now < g_mapResidentAt + kResidentSweepMs) {
+        return;
+    }
+    g_mapResidentAt = now == 0 ? 1 : now;
+    g_mapResident.clear();
+    for (const std::uint32_t tag : g_mapTags) {
+        if (is_tag_resident(tag)) {
+            g_mapResident.push_back(tag);
+        }
+    }
+}
+
 /**
  * Empties recorded points the game has reclaimed and those the player has walked away from.
  * Called with the population lock held.
@@ -718,12 +757,18 @@ void prune_map(const std::array<float, 3>& player,
         return false;
     }
     MapSlot& slot = g_points[chosen];
-    if (!is_tag_resident(slot.tag)) {
-        // Not streamed in for this destination. Hold the point off briefly rather than retrying it
-        // every step, so one absent entity cannot starve the rest of the map.
-        slot.readyAt = now + settings.intervalMs * 8;
-        g_lastOutcome = PlacementOutcome::notResident;
-        return false;
+    std::uint32_t tag = slot.tag;
+    if (!is_tag_resident(tag)) {
+        // The authored body is not streamed here. Rather than hold the point off and leave the
+        // world empty, fill it with one this destination does stream: the map's value is its
+        // positions, and a body the world cannot produce is not worth an empty position.
+        refresh_resident_tags(now);
+        if (g_mapResident.empty()) {
+            slot.readyAt = now + settings.intervalMs * 8;
+            g_lastOutcome = PlacementOutcome::notResident;
+            return false;
+        }
+        tag = g_mapResident[static_cast<std::size_t>(next_random() % g_mapResident.size())];
     }
     std::array<float, 3> position = slot.position;
     g_lastSnap = 0.0F;
@@ -742,7 +787,7 @@ void prune_map(const std::array<float, 3>& player,
     position[2] += settings.lift;
     g_lastPlaced = position;
     constexpr std::array<float, 4> upright{0.0F, 0.0F, 0.0F, 1.0F};
-    const std::uint32_t handle = spawn_one(slot.tag, position, upright, settings.scale);
+    const std::uint32_t handle = spawn_one(tag, position, upright, settings.scale);
     if (handle == kInvalidDatum) {
         g_lastOutcome = PlacementOutcome::spawnFailed;
         return false;
@@ -833,6 +878,9 @@ void service_population() noexcept {
         g_lastPlayer = player;
         if (settings.useMap) {
             prune_map(player, settings, now);
+            // Swept here as well as on a miss, so the status line reports what this world streams
+            // even while every point is filling from its authored body.
+            refresh_resident_tags(now);
             if (g_points.empty()) {
                 g_lastOutcome = PlacementOutcome::noPoints;
             } else if (g_mapLive >= settings.target) {
@@ -1115,12 +1163,20 @@ void set_population_points(std::span<const PopulationPoint> points) noexcept {
     AcquireSRWLockExclusive(&g_populationLock);
     g_points.clear();
     g_points.reserve(count);
+    g_mapTags.clear();
     for (std::size_t index = 0; index < count; ++index) {
         MapSlot slot{};
         slot.tag = points[index].tag;
         slot.position = points[index].position;
         g_points.push_back(slot);
+        if (slot.tag != kInvalidDatum
+            && std::find(g_mapTags.begin(), g_mapTags.end(), slot.tag) == g_mapTags.end()) {
+            g_mapTags.push_back(slot.tag);
+        }
     }
+    // A new map is a new world, so nothing is known about what streams until the next sweep.
+    g_mapResident.clear();
+    g_mapResidentAt = 0;
     g_mapLive = 0;
     ReleaseSRWLockExclusive(&g_populationLock);
 }
@@ -1135,6 +1191,8 @@ PopulationStatus population_status() noexcept {
     status.player = g_lastPlayer;
     status.placed = g_lastPlaced;
     status.snapped = g_lastSnap;
+    status.mapTags = g_mapTags.size();
+    status.residentTags = g_mapResident.size();
     ReleaseSRWLockShared(&g_populationLock);
     return status;
 }
