@@ -58,6 +58,25 @@ and 23 `gambit_*` rows have no authored combatant placements at all, and the bat
 Debugging the walk is no longer on the critical path; the offline route already covers every
 free-roam destination including the Moon.
 
+### Worlds that "never load" are an in-world teleport bug, root-caused 2026-08-24
+
+`tools/pkg/load_verdict.py` reads the verdict out of the log; never judge a load by the window.
+
+The client starts `transitioning:teleportation` to a new slice set, leaves both sessions
+gracefully, and both activity-host BAP connections raise `_connection_failure_suicide`. Nothing
+reconnects. Our server retires the old activity host, allocates a new one, advances the roster
+region, and reports `membership result=held reason=no_host_session`. The teleport wire fields exist
+and are mirrored, but the keepalive still reads `teleport_state=0 teleport_slice=-1` throughout.
+
+Ruled out by measurement, do not re-derive: the world population (Moon with its map deleted, zero
+population events, identical failure), per-world content (`eden_freeroam` passed then failed in one
+session; the EDZ loaded four times then failed on the teleport), our package layers
+(`known_good.py --check` matches, eden loaded with them live, every layer is `w64_sandbox_*`), a
+missing install (sparse patch numbering is normal - the Dreaming City works with gaps at 0, 1, 4),
+and the model tracer (the working run logged 42,000 of those lines).
+
+**Read `stanuwu/Sunrise#39` "Orbit slice set changing" (OPEN) before writing any of this.**
+
 ### `#66` Playbook is merged, builds clean, and is NOT installed
 
 `stanuwu/Sunrise#66` — 64-step missions with four gates (reach a place, wait a delay, press

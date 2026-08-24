@@ -23,6 +23,9 @@ from pathlib import Path
 LIVE = Path(r"C:\Sunrise\bin\x64\Sunrise\logs\sunrise.log")
 
 ENTER = "Entering state 'activity:initial_slice_set_loading'"
+IN_WORLD = "Entering state 'activity:in_world'"
+TELEPORT = re.compile(r"Starting a new transition of type 'transitioning:teleportation' to '([^']+)'")
+SUICIDE = "_connection_failure_suicide"
 STARTED = re.compile(r"Started\s+task 'ENUM\((\d+)\)'")
 COMPLETED = re.compile(r"Completed task 'ENUM\((\d+)\)' after '(\d+)ms'")
 DESTINATION = re.compile(r"dest=([a-z_0-9]+)")
@@ -73,6 +76,40 @@ def verdicts(text: str) -> list[tuple[str, str, str]]:
         if done:
             completed[done.group(1)] = done.group(2)
     settle()
+    out.extend(transitions(text))
+    return out
+
+
+def transitions(text: str) -> list[tuple[str, str, str]]:
+    """@return A verdict for each in-world teleport to another slice set.
+
+    A world can load perfectly and then hang on the move to a different part of it, which is a
+    different code path and was invisible to the check above - it reported four passes on a session
+    the player experienced as a hang. A teleport that lands reaches `activity:in_world` again; one
+    that does not ends with the activity-host connections raising `_connection_failure_suicide` and
+    never reconnecting.
+    """
+    out: list[tuple[str, str, str]] = []
+    pending: str | None = None
+    suicides = 0
+    for line in text.splitlines():
+        started = TELEPORT.search(line)
+        if started:
+            if pending is not None:
+                out.append(("teleport", "FAIL", f"to {pending}, never landed"))
+            pending, suicides = started.group(1), 0
+            continue
+        if pending is None:
+            continue
+        if SUICIDE in line:
+            suicides += 1
+        if IN_WORLD in line:
+            out.append(("teleport", "PASS", f"to {pending}, reached in_world"))
+            pending = None
+    if pending is not None:
+        out.append(("teleport", "FAIL",
+                    f"to {pending}, never reached in_world"
+                    f"{f', {suicides} bap connection suicides' if suicides else ''}"))
     return out
 
 
