@@ -14,14 +14,19 @@ read back by `spawn_keybind_store.cpp: read_map`.
 
 The tag on each line is not the authored entity - the batch discards those too. It is a combatant
 this world hosts, chosen from the named roster by the same faction rules the panel applies, and
-round-robined across the points by the batch's own expression. `place_from_map` re-checks residency
-and re-grounds every point at placement time, so a tag this world does not stream costs a retry,
-not a bad spawn.
+round-robined across the points by the batch's own expression.
+
+Those tags are a **pool**, not an assignment, and nothing here can do better: entity definitions
+live in shared packages, so neither a tag's package id nor the destination's package list says
+which entities a world streams. `place_from_map` sweeps the pool at runtime and fills a point whose
+authored body is absent with one the world does produce. So a wrong guess here costs variety, not
+an empty world - and the panel's `Bodies: N of M` line reports how much of a pool survived.
 
 Usage:
     python spawn_maps_build.py                     # dry run: what would be written, and why not
     python spawn_maps_build.py --write             # write them into the artifact directory
     python spawn_maps_build.py --write --only luna # just the destinations whose name matches
+    python spawn_maps_build.py --write --spacing 0 # keep every point, clusters and all
     python spawn_maps_build.py --clean             # remove every map this tool wrote
 """
 from __future__ import annotations
@@ -42,6 +47,10 @@ MAP_CAPACITY = 2048
 # broken load. The Tower is the specific worry - it is the most fragile world in this install and
 # nothing in it expects a combatant.
 SOCIAL_MARKERS = ("social", "city_tower", "cine_")
+
+# Minimum distance between kept points, in world units. See `thin`. Six leaves the distinct
+# locations intact while collapsing the squad clusters that otherwise spawn as a heap.
+DEFAULT_SPACING = 6.0
 
 
 def cache_tables():
@@ -107,6 +116,35 @@ def cache_tables():
     return stems, hashes, points, destinations
 
 
+def thin(positions: list, separation: float) -> list:
+    """Drops points that sit on top of a point already kept.
+
+    The game's spawn sets are squad positions: three or four bodies within a couple of metres, meant
+    to be used one set at a time. The populator fills every free point in its band at once, so a
+    whole cluster becomes a heap. Measured on Nessus, 651 points collapse to 191 at eight metres and
+    176 at twelve - so roughly seven in ten points are a duplicate of a neighbour, and the distinct
+    locations survive almost untouched.
+
+    @param positions Points in map order.
+    @param separation Minimum distance between kept points, in world units. Zero keeps everything.
+    """
+    if separation <= 0.0:
+        return positions
+    limit = separation * separation
+    kept: list = []
+    for point in positions:
+        close = False
+        for held in kept:
+            delta = ((point[0] - held[0]) ** 2 + (point[1] - held[1]) ** 2
+                     + (point[2] - held[2]) ** 2)
+            if delta < limit:
+                close = True
+                break
+        if not close:
+            kept.append(point)
+    return kept
+
+
 def loads_package(destination, row) -> bool:
     """The game's own rule, from `activity_destination_spawn_binding.cpp: loads_package`.
 
@@ -126,6 +164,8 @@ def safe_name(destination: str) -> str:
 
 def main() -> None:
     write = "--write" in sys.argv
+    separation = (float(sys.argv[sys.argv.index("--spacing") + 1])
+                  if "--spacing" in sys.argv else DEFAULT_SPACING)
     only = sys.argv[sys.argv.index("--only") + 1].lower() if "--only" in sys.argv else ""
 
     if "--clean" in sys.argv:
@@ -173,6 +213,7 @@ def main() -> None:
         if not placed:
             no_sets.append(name)
             continue
+        placed = thin(placed, separation)
 
         token = audit.leading_word(stem or name)
         fill = [tag for tag, entity in combatants if audit.world_faction(entity, token)]
@@ -195,7 +236,7 @@ def main() -> None:
         report.append((name, sets, len(placed)))
 
     verb = "wrote" if write else "would write"
-    print(f"{verb} {written} maps, {total_points:,} points"
+    print(f"{verb} {written} maps, {total_points:,} points, {separation:g}-unit spacing"
           f"{'' if write else '  (dry run - pass --write)'}")
     print(f"skipped: {len(social)} social spaces and cutscenes (pass --all to include), "
           f"{len(no_stem)} with no map stem, {len(no_sets)} whose stem offers them no set, "

@@ -103,6 +103,11 @@ registries and placed handles out of the packages, keeps the transforms, fills t
 and saves. Needs the block keys, so it only runs in the process, and it is slow enough that it steps
 one destination per frame to keep the game's own session alive.
 
+> **This button overwrites every map file**, the offline ones included, and its output is the weaker
+> of the two: measured against them it lost a third of the EDZ's points and over half of Io's.
+> `Populate this destination` overwrites one the same way. Recover with
+> `python tools/pkg/spawn_maps_build.py --clean` followed by `--write`.
+
 Its two failure buckets are reported as bare counts:
 
 - `skippedNoPlacements` — the walk found nothing, or `extract` refused the destination
@@ -122,9 +127,18 @@ python tools/pkg/spawn_maps_build.py --write    # write them
 python tools/pkg/spawn_maps_build.py --clean    # remove every map it wrote
 ```
 
-Current install: **423 maps, 130,535 points.** Every free-roam destination is covered, the Moon
-(`luna_freeroam`, 731 points) among them. Spread is real rather than clustered — the Moon's points
-cover roughly 3 km × 4 km across 172 distinct 50 m cells.
+Current install: **423 maps, 40,195 points at 6-unit spacing.** Every free-roam destination is
+covered, the Moon (`luna_freeroam`) among them.
+
+**Spacing matters more than it sounds.** The game's spawn sets are squad positions - three or four
+bodies within a couple of metres, meant to be used one set at a time - and the populator fills every
+free point in its band at once, so a raw cluster spawns as a heap. Nessus collapses from 651 points
+to 191 at eight units and 176 at twelve, so roughly seven in ten points are a duplicate of a
+neighbour and the distinct locations survive almost untouched. Six is the default; `--spacing 0`
+keeps everything.
+
+Spread is real rather than clustered — before thinning, the Moon's points cover roughly 3 km × 4 km
+across 172 distinct 50 m cells, and thinning removes duplicates rather than area.
 
 Social spaces, the Tower and cutscenes are skipped by default (`--all` includes them). Nothing in
 the Tower expects a combatant and it is the most fragile world in this install.
