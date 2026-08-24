@@ -39,6 +39,8 @@ inline constexpr std::size_t kHookCount = static_cast<std::size_t>(HookSlot::cou
  * The log rotates once per launch rather than by size, so a long capture costs disk, not history.
  */
 constexpr std::uint32_t kCaptureLimit = 200000;
+/** Returned for a read this module did not record, so its outcome is not reported either. */
+constexpr std::uint32_t kNotTraced = 0xFFFFFFFFU;
 /** Enough frames to pass through KernelBase/Detours and retain several game callers. */
 constexpr ULONG kStackFrameLimit = 16;
 /** Only game-image frames are serialized; four are enough to identify the loader chain. */
@@ -195,33 +197,36 @@ template <typename Function> [[nodiscard]] Function original(HookSlot slot) noex
     return length;
 }
 
-/** Records one game-originated package read before it is forwarded unchanged. */
-void trace_read(std::string_view api,
-                HANDLE file,
-                DWORD byteCount,
-                const OVERLAPPED* overlapped,
-                const void* caller) noexcept {
+/**
+ * Records one game-originated package read before it is forwarded unchanged.
+ * @return The sequence number this read was recorded under, or `kNotTraced`.
+ */
+[[nodiscard]] std::uint32_t trace_read(std::string_view api,
+                                       HANDLE file,
+                                       DWORD byteCount,
+                                       const OVERLAPPED* overlapped,
+                                       const void* caller) noexcept {
     const auto callerAddress = reinterpret_cast<std::uintptr_t>(caller);
     if (!g_capturing.load(std::memory_order_relaxed)
         || !diagnostics::contains(g_gameRange, callerAddress)) {
-        return;
+        return kNotTraced;
     }
 
     std::array<wchar_t, kPathCapacity> path{};
     const DWORD pathLength = GetFinalPathNameByHandleW(
         file, path.data(), static_cast<DWORD>(path.size()), FILE_NAME_NORMALIZED);
     if (pathLength == 0 || pathLength >= path.size()) {
-        return;
+        return kNotTraced;
     }
     const std::wstring_view pathView(path.data(), pathLength);
     if (!contains_ascii_case(pathView, L"\\packages\\")
         || !ends_with_ascii_case(pathView, L".pkg")) {
-        return;
+        return kNotTraced;
     }
 
     std::uint64_t offset = 0;
     if (!read_offset(file, overlapped, offset)) {
-        return;
+        return kNotTraced;
     }
     const std::uint32_t sequence = g_eventCount.fetch_add(1, std::memory_order_relaxed);
     if (sequence >= kCaptureLimit) {
@@ -238,13 +243,13 @@ void trace_read(std::string_view api,
                                                   static_cast<std::size_t>(length)));
             }
         }
-        return;
+        return kNotTraced;
     }
 
     std::array<char, kFileNameCapacity> name{};
     const std::size_t nameLength = utf8_name(basename(pathView), name);
     if (nameLength == 0) {
-        return;
+        return kNotTraced;
     }
     std::array<char, core::log::kLineCapacity> event{};
     const int written = std::snprintf(
@@ -262,13 +267,48 @@ void trace_read(std::string_view api,
         static_cast<unsigned long long>(callerAddress - g_gameRange.base),
         static_cast<unsigned long>(GetCurrentThreadId()));
     if (written <= 0) {
-        return;
+        return kNotTraced;
     }
     std::size_t length = (std::min)(static_cast<std::size_t>(written), event.size() - 1);
     length = append_game_stack(event, length);
     core::log::write(core::log::Channel::client,
                      core::log::Level::info,
                      std::string_view(event.data(), length));
+    return sequence;
+}
+
+/**
+ * Reports a read the operating system refused, which the pre-call record alone cannot show.
+ *
+ * Every package read in this client is `ReadFileEx`, whose data arrives through a completion
+ * routine rather than a return value. A refusal there is silent by construction: the caller is
+ * left waiting for a completion that will never run, which is indistinguishable from a slow disk
+ * until a watchdog fires twenty seconds later. `ERROR_IO_PENDING` is not a refusal - it is the
+ * normal answer for an overlapped `ReadFile` - so it is not reported.
+ *
+ * @param api Name of the entry point that was called.
+ * @param sequence Sequence number of the matching read record.
+ * @param error Last error captured immediately after the call.
+ */
+void trace_failure(std::string_view api, std::uint32_t sequence, DWORD error) noexcept {
+    if (sequence == kNotTraced || error == ERROR_IO_PENDING) {
+        return;
+    }
+    std::array<char, 160> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=package_trace stage=read_result seq=%u api=%.*s "
+                                      "result=fail error=%lu",
+                                      sequence,
+                                      static_cast<int>(api.size()),
+                                      api.data(),
+                                      static_cast<unsigned long>(error));
+    if (written <= 0) {
+        return;
+    }
+    const std::size_t length = (std::min)(static_cast<std::size_t>(written), line.size() - 1);
+    core::log::write(
+        core::log::Channel::client, core::log::Level::error, std::string_view(line.data(), length));
 }
 
 /** Exact ReadFile ABI replacement. */
@@ -277,9 +317,21 @@ __declspec(noinline) BOOL WINAPI read_file(HANDLE file,
                                            DWORD byteCount,
                                            LPDWORD bytesRead,
                                            LPOVERLAPPED overlapped) noexcept {
-    trace_read("ReadFile", file, byteCount, overlapped, _ReturnAddress());
+    const std::uint32_t sequence =
+        trace_read("ReadFile", file, byteCount, overlapped, _ReturnAddress());
     const ReadFileFunction next = original<ReadFileFunction>(HookSlot::readFile);
-    return next != nullptr ? next(file, buffer, byteCount, bytesRead, overlapped) : FALSE;
+    if (next == nullptr) {
+        return FALSE;
+    }
+    const BOOL result = next(file, buffer, byteCount, bytesRead, overlapped);
+    // The game reads its own last error after this returns, so the reporting path must not be
+    // allowed to overwrite it.
+    const DWORD error = GetLastError();
+    if (result == FALSE) {
+        trace_failure("ReadFile", sequence, error);
+    }
+    SetLastError(error);
+    return result;
 }
 
 /** Exact ReadFileEx ABI replacement. */
@@ -288,9 +340,19 @@ __declspec(noinline) BOOL WINAPI read_file_ex(HANDLE file,
                                               DWORD byteCount,
                                               LPOVERLAPPED overlapped,
                                               LPOVERLAPPED_COMPLETION_ROUTINE completion) noexcept {
-    trace_read("ReadFileEx", file, byteCount, overlapped, _ReturnAddress());
+    const std::uint32_t sequence =
+        trace_read("ReadFileEx", file, byteCount, overlapped, _ReturnAddress());
     const ReadFileExFunction next = original<ReadFileExFunction>(HookSlot::readFileEx);
-    return next != nullptr ? next(file, buffer, byteCount, overlapped, completion) : FALSE;
+    if (next == nullptr) {
+        return FALSE;
+    }
+    const BOOL result = next(file, buffer, byteCount, overlapped, completion);
+    const DWORD error = GetLastError();
+    if (result == FALSE) {
+        trace_failure("ReadFileEx", sequence, error);
+    }
+    SetLastError(error);
+    return result;
 }
 
 /** Releases the retained System32 module after every detour is gone. */
