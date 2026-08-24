@@ -37,12 +37,30 @@ what objective.
   frame it was authored in
 - **`autoOnLoad`** off by default: *"a world that fills itself is a change the player opts into"*
 
-**The top blocker is extraction, not combat:** placements fail on **175 of 466 locations, the Moon
-among them**, cause unknown. Map mode places nothing without a map. That is the highest-value thing
-left to debug.
+### Map mode is on and the maps are written — offline. Not yet launched.
 
-**Not merged:** `#66` Playbook — objectives, map markers, shareable JSON missions. It carries its
-own older copy of `spawn_runtime.cpp` and would have to be reconciled against #58's.
+`use_map`, `auto_on_load` and `enabled` are all **true** in
+`C:\Sunrise\bin\x64\Sunrise\population.json`, and **423 map files, 130,535 points** are in the
+artifact directory beside it. Arriving anywhere should now fill the world at its authored positions.
+**Nobody has launched since.** Full detail: [`docs/WORLD_POPULATION.md`](docs/WORLD_POPULATION.md).
+
+Those maps did **not** come from the in-game batch. The build cache already holds the game's own
+spawn sets — 8,892 authored positions per map stem, with the package rules that say which
+destination loads each — so `tools/pkg/spawn_maps_build.py` writes every map from disk with no
+launch. `--clean` removes them; social spaces, the Tower and cutscenes are skipped unless `--all`.
+
+**The "175 of 466 fail" note is half answered and was pointing the wrong way.**
+`tools/pkg/spawn_map_audit.py` reimplements the batch's roster filter from the tables it parses out
+of `spawn_panel.cpp`: **466 of 466 destinations find a roster here**, so `skippedNoRoster` explains
+nothing and every failure is in the package walk. Most of it is also correct behaviour — 86 `pvp_*`
+and 23 `gambit_*` rows have no authored combatant placements at all, and the batch skips `cine_*`,
+`mission_*` and `strike_*` bubbles on purpose because it passes `publicOnly`. That is about 175.
+Debugging the walk is no longer on the critical path; the offline route already covers every
+free-roam destination including the Moon.
+
+**Next, in order:** launch and confirm worlds fill on arrival, then `#66` Playbook — objectives, map
+markers, shareable JSON missions, **not merged**. It carries its own older copy of
+`spawn_runtime.cpp` and would have to be reconciled against #58's.
 
 **Carried caveats:** an entity cannot be despawned (the game offers no removal call the module can
 make) so placements persist until the location unloads; one hardcoded RVA survives at `0x1F93420`,

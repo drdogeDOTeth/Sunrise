@@ -1,0 +1,154 @@
+# World population
+
+Upstream PR #58 fills a destination with combatants from the client. The client binary carries the
+whole combat loop, so a spawned enemy tracks the player, shoots back, takes damage, deals damage and
+drops ammo with nothing else wired up — confirmed in game 2026-08-23.
+
+The populator has two modes:
+
+| mode | where entities appear |
+|---|---|
+| roaming ring | in a band around the player, wherever they go |
+| **map** (`use_map`) | at the destination's own authored positions, from a saved map file |
+
+Map mode is the one worth having, and it needs a map file per destination. This document covers how
+those get made — including the offline route, which is faster, covers more destinations and needs no
+launch.
+
+---
+
+## Configuration
+
+`C:\Sunrise\bin\x64\Sunrise\population.json`. Written by the Spawn page, and hand-editable; the
+reader layers the file over the built-in defaults, so a missing or malformed key keeps its default
+rather than stopping the module. Twelve keys, exactly as `population_settings_store.cpp` spells
+them:
+
+```json
+{
+  "enabled": true,
+  "auto_on_load": true,
+  "use_map": true,
+  "snap_to_ground": true,
+  "target": 12,
+  "interval_ms": 600,
+  "respawn_delay_ms": 45000,
+  "minimum_radius": 18.000,
+  "maximum_radius": 55.000,
+  "forget_radius": 140.000,
+  "lift": 0.500,
+  "scale": 1.000
+}
+```
+
+`auto_on_load` loads the arriving destination's map once per arrival and arms the populator from it.
+It arms `enabled` from whether that map had any points, so **a destination with no map file stays
+empty**: with `use_map` on and no maps written, nothing spawns anywhere. That is the whole trap in
+this feature, and it looks identical to the mod being broken.
+
+Write the file without a BOM. `Set-Content -Encoding UTF8` adds one, and the reader's key search
+then misses the first key.
+
+---
+
+## Where a map comes from
+
+A map file is `spawn_map_<destination>.txt` in the artifact directory, one point per line:
+
+```
+80BC8E3F 583.318 -336.875 -18.171
+```
+
+A tag and three floats — `%08X %.3f %.3f %.3f`, read back by `sscanf` as `%x %f %f %f`. Anything
+past 2048 lines (`kMapCapacity`) is dropped on read. Z is up: `place_from_map` grounds a point by
+`ground[2]` and applies `lift` to the same lane.
+
+The tag on a line is **not** the entity that was authored there. Both routes below discard the
+authored tags and round-robin the world's own combatants across the positions instead, because the
+point of the map is where a body can stand, not what stood there. `place_from_map` re-checks
+residency and re-grounds every point at placement time, so a tag this destination does not stream
+costs a retry rather than a bad spawn.
+
+### Route 1 — in game, from the authored placement chain
+
+Spawn page → **Extract every destination**. Walks each destination's scenario, slice sets,
+registries and placed handles out of the packages, keeps the transforms, fills them with combatants
+and saves. Needs the block keys, so it only runs in the process, and it is slow enough that it steps
+one destination per frame to keep the game's own session alive.
+
+Its two failure buckets are reported as bare counts:
+
+- `skippedNoPlacements` — the walk found nothing, or `extract` refused the destination
+- `skippedNoRoster` — no named entity passed the world's faction filter
+
+### Route 2 — offline, from the build cache
+
+`tools/pkg/spawn_maps_build.py`. The build cache already holds the game's **own** spawn sets: 8,892
+authored positions grouped by map stem, with the package rules that decide which destination may
+load each one. That is a different source from the placement chain — these are the positions the
+game itself spawns at, rather than where props and encounters were placed — and it is entirely on
+disk, so every destination can be written at once with no launch.
+
+```bash
+python tools/pkg/spawn_maps_build.py            # dry run
+python tools/pkg/spawn_maps_build.py --write    # write them
+python tools/pkg/spawn_maps_build.py --clean    # remove every map it wrote
+```
+
+Current install: **423 maps, 130,535 points.** Every free-roam destination is covered, the Moon
+(`luna_freeroam`, 731 points) among them. Spread is real rather than clustered — the Moon's points
+cover roughly 3 km × 4 km across 172 distinct 50 m cells.
+
+Social spaces, the Tower and cutscenes are skipped by default (`--all` includes them). Nothing in
+the Tower expects a combatant and it is the most fragile world in this install.
+
+The set-to-destination rule is the game's own, from
+`activity_destination_spawn_binding.cpp: loads_package`: a set in the map package belongs to every
+destination of that stem, otherwise the destination must name one of the activity packages that
+declares it.
+
+---
+
+## What the "175 of 466 fail" note actually means
+
+PR #58 ships an unexplained note that placement extraction fails on 175 of 466 destinations, the
+Moon among them. `tools/pkg/spawn_map_audit.py` answers half of that offline, and the answer changes
+where to look:
+
+```bash
+python tools/pkg/spawn_map_audit.py           # per-destination roster verdict
+python tools/pkg/spawn_map_audit.py --tokens  # failures grouped by the key they matched on
+python tools/pkg/spawn_map_audit.py --roster  # what the named roster holds, by faction
+```
+
+On this install: **466 of 466 destinations find a roster. `skippedNoRoster` cannot be the cause of
+any failure here.** Every failure is `skippedNoPlacements`, in the package walk.
+
+And most of that is correct behaviour rather than a bug. Of the 466 rows, 86 are `pvp_*` and 23 are
+`gambit_*` — Crucible and Gambit maps, which have no authored combatant placements — plus the
+`cine_*` cutscenes and the `mission_*` and `strike_*` spaces whose bubbles are all private, which
+the batch skips deliberately because it passes `publicOnly`. A number near 175 is what those add up
+to.
+
+The audit transcribes nothing by hand: it parses `kFactions`, `kWorldFactions`, `kChampionMarkers`,
+`kBossMarkers` and `kVehicleMarkers` out of `spawn_panel.cpp`, so it fails loudly if those tables
+move rather than quietly disagreeing with the game.
+
+One wart it exposes, in the game's filter rather than in the audit: the faction markers are plain
+substring tests, so `ai_pvp_vendor_progression` is classed as Hive because "pr**ogre**ssion"
+contains "ogre". It costs one junk tag out of 191 and a skipped placement attempt.
+
+---
+
+## Reference
+
+| file | what |
+|---|---|
+| `src/client/hooks/spawn/spawn_runtime.cpp` | the populator, `service_auto_load`, `place_from_map` |
+| `src/client/spawn/population_settings_store.cpp` | `population.json` reader and writer |
+| `src/client/spawn/spawn_keybind_store.cpp` | the map file format, `save_map` / `load_map` |
+| `src/client/content/placements/placement_extract.cpp` | the in-game placement walk |
+| `src/server/ui/spawn/spawn_panel.cpp` | the Spawn page, the roster, `step_batch` |
+| `src/state/activity/destination/activity_destination_spawn_binding.cpp` | the spawn-set rule |
+| `tools/pkg/spawn_maps_build.py` | offline map writer |
+| `tools/pkg/spawn_map_audit.py` | offline roster audit |
