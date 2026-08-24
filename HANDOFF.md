@@ -89,53 +89,50 @@ spare chest material instead of raising when a source material is unmapped (so a
 mistake is now a warning, not a stop), and `parse_models.py` no longer raises when the dump
 directory is empty — downstream tools get an empty `models` list instead of a clear error.
 
-### Emotes: they were never broken. Only one key has anything to play. (branch `activities`)
+### Emotes: SOLVED upstream. Merged PR #48. (branch `activities` @ 33ff217, installed)
 
-**Launched and user-confirmed 2026-08-23. The up arrow plays `0x7979AE7D` "Blowing a Kiss" — which
-is the emote the *equipment* slot has always held, and is not one of the four I socketed into an
-Emote Collection.** So emotes had most likely worked all along and nobody had pressed the key. The
-first version of this section claimed the equipped emote "resolves, publishes, and does nothing".
-It does the only thing that works.
+**Search the upstream PR list before building anything.** Two evenings of this were spent
+rediscovering, badly, what `stanuwu/Sunrise#48` had already solved and tested. Fetch a PR by its
+ref, no fork remote needed - the author's fork was already gone:
 
-What the extracted data does say, and this part held up:
+```powershell
+git fetch upstream refs/pull/48/head:pr48
+```
 
-| item | bucket | equipment slot | ordinary sockets |
-|---|---|---|---|
-| every one of the 307 emotes, incl. `0x7979AE7D` | 41 | 14 | **0** |
-| **Emote Collection** `0xBDBB7999` and `0xEC10C60D`, both named "Emotes" | 12 | **absent (−1)** | **4** |
+**The collection is equipped, not carried.** It goes in the emote slot in place of the individually
+worn emote, and the stock client then opens its own wheel-configuration screen for it. Authoring
+one into inventory - what I did - resolves, publishes and does nothing.
 
-Each collection lane accepts all 307 emotes (`build_cache.py --plugs 0xBDBB7999`). But light.gg on
-the collection reads *"Allows for the configuration of equipped emotes from your entire emote
-collection"* — it is the **configurator**, not the source of the quick slots. Authoring one into
-inventory with four plugs changed nothing: the client ignored it, the in-game picker was empty, and
-only the equipped emote played.
+**Why my version built and ran and still did nothing:** the "item must have an equipment slot"
+assumption lives in **four** independent places - the loadout resolver, the light calculation, the
+socket appearance-refresh push, the snapshot preparer - and each only fails once the item is
+actually *equipped* rather than merely owned. I found one of the four and made it carry-only.
+`resolve_native_equipment_slot()` replaces that: the collection falls back to the emote slot's own
+native number, every other item keeps its declared one.
 
-**The live theory is ownership.** The account owns no emotes. An item you hold is owned, and the
-equipped one is the only emote held — which would explain the empty picker and the three dead keys
-with one cause. `state.cosmetics.ignore_plug_ownership` is already on, but it only covers the
-socket-*insert* transaction; it does not make the client's picker show anything.
+**Ownership, from `Sunrise/docs/emote-unlocks.md` (read it before touching unlock flags):**
 
-**Next test, settings only, no DLL:** nine emote items are now granted into each character's
-inventory (bucket 41 has ten rows and the equipped emote takes the tenth). If the picker fills up,
-ownership-by-possession is the answer and the collection can then be socketed from the UI — the
-server will accept it, `unrestrictedPlugs` and `ignorePlugOwnership` see to that. If the picker is
-still empty, the answer is collectible unlock flags in the account bank instead.
+- gated by the emote's **own unlock expression at item-definition offset 720**, not by a
+  collectible - only 94 of 307 emotes have a collectible row at all
+- `account_flag_runs` holds **row numbers in the mapping table at investment root slot 111**, not
+  flag slot numbers. The two are unrelated number spaces; writing slots as indices sets unrelated
+  flags
+- **never blanket-fill the bank** - it "works" for emotes and also sets every entitlement flag,
+  which leaves the account unable to open the Director, the map, or orbit
+- 16 emotes carry no expression and are always owned. That is why Cheer, Yes and Nope were there
 
-**Ruled out, do not re-derive:** the socket entry list is not the cap — 15,415 of 15,424 items
-report list index 0 with **zero** entries, which is simply the norm; only the 9 subclasses use a
-real list. Bucket 49, with its four slots and its own equipment slot 18, is the **Seasonal
-Artifact** (Gate Lord's Eye, Lantern of Osiris), not emote quick slots.
+The live `settings.json` needed its `account_flag_runs` spliced across by hand (332 runs / 4,931
+flags -> 314 / 5,052); the repo default came with the merge.
 
-**Still worth keeping:** `loadout_item_resolver.cpp` used to require `*itemDetail.equipmentSlot >= 0`,
-so an item with no equipment slot could not be carried at all. That is lifted, with
-`loadout::kNoEquipmentSlot` (`0xFF`) marking a carried-only row, and it is what any collection-style
-item will need whether or not this one turns out to matter.
+**Ruled out, do not re-derive:** possession is not the gate — Spicy Ramen, Awkward Greeting and
+Camping were already in inventory while the picker was empty. The socket entry list is not a cap
+(15,415 of 15,424 items report list index 0 with zero entries). Bucket 49 is the Seasonal Artifact.
 
 **Do not re-derive:** `lookup_item.py` is dead — it hardcoded a record layout, upstream moved the
-cache to format 44, and it then answered "not in this install" **for the weapon and helmet the
-character is visibly wearing**. Use `build_cache.py`, which derives the layout from `format.h` and
-validates it against the file size. Control before concluding: the helmet reports 11 sockets and
-the kinetic 12, which is what proves the emotes' 0 is real data and not a broken reader.
+cache to format 44, and it then answered "not in this install" for the weapon and helmet the
+character is visibly wearing. Use `build_cache.py`. And run `check_authored_state.py` before every
+launch that touches authored state: nine emote items into a bucket with six rows free failed the
+whole snapshot, and the client reported it as **"could not connect to the Destiny 2 servers"**.
 
 ### The twisted hand: SHIPPED as `037c_33` / `037d_31` / `0698_29`, awaiting one launch
 
