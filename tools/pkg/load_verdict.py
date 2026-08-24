@@ -78,6 +78,12 @@ class Window:
         if landed:
             detail.append(f"{len(self.completed)} tasks done")
             return self.destination, "PASS", ", ".join(detail)
+        # A log that simply ends mid-load is the player closing the game, not the load failing.
+        # Without a stalled job, a lost host or a failed prerequisite there is no evidence either
+        # way, and calling it a failure invents one.
+        if not self.next_state and not (self.stalls or self.host_lost or self.prereq):
+            detail.append("log ends mid-load, no stall recorded - game was closed")
+            return self.destination, "CUT", ", ".join(detail)
         if self.stalls:
             worst = max(set(self.stalls), key=self.stalls.count)
             detail.append(f"job '{worst}' stalled ({len(self.stalls)} asserts)")
