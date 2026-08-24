@@ -42,6 +42,8 @@ IN_WORLD = f"Entering state '{IN_WORLD_STATE}'"
 TELEPORT = re.compile(r"Starting a new transition of type 'transitioning:teleportation' to '([^']+)'")
 SUICIDE = "_connection_failure_suicide"
 COMPLETED = re.compile(r"Completed task 'ENUM\((\d+)\)' after '(\d+)ms'")
+STARTED = re.compile(r"Started\s+task 'ENUM\((\d+)\)'")
+TIME = re.compile(r"(?:^|\s)t=(\d+)")
 DESTINATION = re.compile(r"dest=([a-z_0-9]+)")
 
 # Why a load was abandoned, most specific first. The prerequisite is the state machine's own
@@ -54,6 +56,10 @@ DURATION = re.compile(r"Total time spent: \[(\d+)\] ms in world controller state
 # milliseconds is a teardown that is not draining, which strands the client after a failed load.
 CLEANUP = re.compile(r"state:cleanup: After (\d+)ms, status: '(\d+)', tasks active: '(0x[0-9a-f]+)'")
 CLEANUP_STALL_MS = 15000
+# The client's own watchdog needs about twenty seconds to call a job stalled, and the activity
+# host times out at 20.5s. So a load that has run past this without settling has already had
+# time to produce evidence: if none appeared, that absence is itself the finding, not a gap.
+STALL_VISIBLE_MS = 25000
 # States that settle a load. Reaching the world is the only success; falling into cleanup is
 # the failure. Everything between the two is still the load running.
 TERMINAL = {IN_WORLD_STATE, "cleanup"}
@@ -66,10 +72,20 @@ class Window:
         self.destination = destination
         self.next_state = ""
         self.completed: dict[str, str] = {}
+        self.started: set[str] = set()
         self.stalls: list[str] = []
         self.host_lost = 0
         self.prereq: tuple[str, str] | None = None
         self.duration_ms: int | None = None
+        self.first_t: int | None = None
+        self.last_t: int | None = None
+
+    @property
+    def elapsed_ms(self) -> int:
+        """@return Milliseconds spanned by the log lines inside this window."""
+        if self.first_t is None or self.last_t is None:
+            return 0
+        return self.last_t - self.first_t
 
     def verdict(self, landed: bool) -> tuple[str, str, str]:
         detail = []
@@ -82,8 +98,17 @@ class Window:
         # Without a stalled job, a lost host or a failed prerequisite there is no evidence either
         # way, and calling it a failure invents one.
         if not self.next_state and not (self.stalls or self.host_lost or self.prereq):
-            detail.append("log ends mid-load, no stall recorded - game was closed")
-            return self.destination, "CUT", ", ".join(detail)
+            waited = self.elapsed_ms
+            if waited < STALL_VISIBLE_MS:
+                detail.append(f"log ends {waited / 1000:.1f}s in, before a stall could show - "
+                              "game was closed, no evidence either way")
+                return self.destination, "CUT", ", ".join(detail)
+            missing = sorted(set(self.started) - set(self.completed), key=int)
+            detail.append(f"sat {waited / 1000:.0f}s in the load without reaching the world, "
+                          "and no job ever stalled")
+            if missing:
+                detail.append("never completed " + ", ".join(f"ENUM({m})" for m in missing))
+            return self.destination, "FAIL", ", ".join(detail)
         if self.stalls:
             worst = max(set(self.stalls), key=self.stalls.count)
             detail.append(f"job '{worst}' stalled ({len(self.stalls)} asserts)")
@@ -126,6 +151,14 @@ def verdicts(text: str) -> list[tuple[str, str, str]]:
 
         if window is None:
             continue
+        stamp = TIME.search(line)
+        if stamp:
+            moment = int(stamp.group(1))
+            window.first_t = window.first_t if window.first_t is not None else moment
+            window.last_t = moment
+        begun = STARTED.search(line)
+        if begun:
+            window.started.add(begun.group(1))
         done = COMPLETED.search(line)
         if done:
             window.completed[done.group(1)] = done.group(2)
