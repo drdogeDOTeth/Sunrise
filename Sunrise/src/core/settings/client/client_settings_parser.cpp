@@ -15,6 +15,7 @@ bool Parser::client_settings(client::Settings& output) noexcept {
     bool hasRegionPrivate = false;
     bool hasPinReplicatedRecord = false;
     bool hasHoldSpawn = false;
+    bool hasModelTrace = false;
     bool hasSpawnHoldMs = false;
     if (consume('}')) {
         return true;
@@ -54,6 +55,11 @@ bool Parser::client_settings(client::Settings& output) noexcept {
                 return false;
             }
             hasPinReplicatedRecord = true;
+        } else if (key == "model_trace") {
+            if (hasModelTrace || !boolean(candidate.modelTrace)) {
+                return false;
+            }
+            hasModelTrace = true;
         } else if (key == "hold_spawn") {
             if (hasHoldSpawn || !boolean(candidate.holdSpawn)) {
                 return false;

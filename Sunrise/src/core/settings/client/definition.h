@@ -49,6 +49,16 @@ struct Settings {
     bool holdSpawn{true};
     /** How long the spawn waits for a load. `hold_spawn` decides whether it waits at all. */
     std::uint64_t spawnHoldMs{kDefaultSpawnHoldMs};
+    /**
+     * Installs the SEntityModel class-lookup trace, which captures from start rather than from an
+     * F8 window.
+     *
+     * Off by default, because it is not free: it detours the model lookup path and writes a line
+     * per lookup, and a world load performs thousands. One measured session logged 42,000 of them,
+     * 78% of the whole file, all of it during loading. It answered the custom-character work and
+     * has no place in normal play - turn it on for a capture, then turn it off.
+     */
+    bool modelTrace{false};
 };
 
 } // namespace sunrise::core::settings::client

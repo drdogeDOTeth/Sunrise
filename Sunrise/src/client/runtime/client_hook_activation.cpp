@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "../../core/logging/log.h"
+#include "../../core/settings/settings.h"
 #include "../../core/ui/busy/busy.h"
 #include "../../core/ui/notice/ui_notice_overlay.h"
 #include "../content/bootstrap/bootstrap_token_publish.h"
@@ -174,7 +175,11 @@ void clear_game_targets() noexcept {
     (void)hooks::package_trace::install();
     // The body is commonly cached before inspect opens, so file I/O alone misses it. Pair the
     // same F8 window with the reflected SEntityModel lookup and keep this optional as well.
-    (void)hooks::model_trace::install();
+    // Unlike the package trace this one captures from start, so it costs a detour and a log line
+    // on every model lookup - thousands per world load. Off unless a capture is being taken.
+    if (core::settings::get().client.modelTrace) {
+        (void)hooks::model_trace::install();
+    }
     // Boot-step fixes scan for their own single-site targets; each reports its own outcome.
     (void)hooks::bootflow::install();
     // The teleport hooks attach whether or not the feature is on, so the interface can enable it
