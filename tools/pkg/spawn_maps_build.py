@@ -26,7 +26,7 @@ Usage:
     python spawn_maps_build.py                     # dry run: what would be written, and why not
     python spawn_maps_build.py --write             # write them into the artifact directory
     python spawn_maps_build.py --write --only luna # just the destinations whose name matches
-    python spawn_maps_build.py --write --spacing 0 # keep every point, clusters and all
+    python spawn_maps_build.py --write --spacing 0 # keep every set, overlaps and all
     python spawn_maps_build.py --clean             # remove every map this tool wrote
 """
 from __future__ import annotations
@@ -48,9 +48,15 @@ MAP_CAPACITY = 2048
 # nothing in it expects a combatant.
 SOCIAL_MARKERS = ("social", "city_tower", "cine_")
 
-# Minimum distance between kept points, in world units. See `thin`. Six leaves the distinct
-# locations intact while collapsing the squad clusters that otherwise spawn as a heap.
-DEFAULT_SPACING = 6.0
+# Minimum distance between the centres of two kept spawn sets, in world units. See `space_squads`.
+# Fifteen drops only the sets that stand on top of each other: the median set is 34-47 units from
+# its nearest neighbour, so almost every squad survives and the population stays full.
+DEFAULT_SPACING = 15.0
+
+# Minimum distance between two points inside one squad, in world units. Squads sit about two units
+# apart, so this only removes literal overlaps - a handful of exact duplicates per destination, plus
+# the pairs close enough that two bodies would occupy the same ground.
+BODY_CLEARANCE = 1.5
 
 
 def cache_tables():
@@ -116,32 +122,61 @@ def cache_tables():
     return stems, hashes, points, destinations
 
 
-def thin(positions: list, separation: float) -> list:
-    """Drops points that sit on top of a point already kept.
+def centroid(positions: list) -> tuple[float, float, float]:
+    """@return The middle of one spawn set, which is where that squad stands."""
+    count = float(len(positions))
+    return tuple(sum(point[lane] for point in positions) / count for lane in range(3))
 
-    The game's spawn sets are squad positions: three or four bodies within a couple of metres, meant
-    to be used one set at a time. The populator fills every free point in its band at once, so a
-    whole cluster becomes a heap. Measured on Nessus, 651 points collapse to 191 at eight metres and
-    176 at twelve - so roughly seven in ten points are a duplicate of a neighbour, and the distinct
-    locations survive almost untouched.
 
-    @param positions Points in map order.
-    @param separation Minimum distance between kept points, in world units. Zero keeps everything.
+def declutter(positions: list) -> list:
+    """Drops points inside one squad that are close enough for two bodies to intersect.
+
+    Not the same job as `space_squads`: the squad's own shape is wanted - its bodies stand about two
+    units apart and survive this - and only the pairs that would occupy the same ground go. Some of
+    those pairs come from two *different* squads sharing a coordinate, so this runs over a
+    destination's whole point list rather than set by set.
     """
-    if separation <= 0.0:
-        return positions
-    limit = separation * separation
+    limit = BODY_CLEARANCE * BODY_CLEARANCE
     kept: list = []
     for point in positions:
+        if all(((point[0] - held[0]) ** 2 + (point[1] - held[1]) ** 2
+                + (point[2] - held[2]) ** 2) >= limit for held in kept):
+            kept.append(point)
+    return kept
+
+
+def space_squads(sets: list, separation: float) -> list:
+    """Drops whole spawn sets that stand on top of a set already kept.
+
+    A set is a **squad**: three or four bodies a couple of metres apart, and that grouping is the
+    thing worth keeping - the game authored it, and a squad reads as a squad in play. What does not
+    read is two squads occupying the same ground, and the data has plenty: across Nessus, the EDZ
+    and Io the median set stands 34-47 units from its nearest neighbour, but the closest tenth are
+    within one or two.
+
+    So the unit of thinning is the set, not the point. Nessus keeps 112 of 131 sets and 576 of 651
+    points at fifteen units - the overlaps go, the population stays.
+
+    @param sets Spawn sets, each a list of points, in map order.
+    @param separation Minimum distance between kept set centres, in world units. Zero keeps all.
+    """
+    if separation <= 0.0:
+        return sets
+    limit = separation * separation
+    kept: list = []
+    centres: list = []
+    for group in sets:
+        centre = centroid(group)
         close = False
-        for held in kept:
-            delta = ((point[0] - held[0]) ** 2 + (point[1] - held[1]) ** 2
-                     + (point[2] - held[2]) ** 2)
+        for held in centres:
+            delta = ((centre[0] - held[0]) ** 2 + (centre[1] - held[1]) ** 2
+                     + (centre[2] - held[2]) ** 2)
             if delta < limit:
                 close = True
                 break
         if not close:
-            kept.append(point)
+            centres.append(centre)
+            kept.append(group)
     return kept
 
 
@@ -200,20 +235,22 @@ def main() -> None:
             continue
         stem_index = stems[stem]
 
-        placed: list[tuple[float, float, float]] = []
-        sets = 0
+        found: list = []
         for row in hashes:
             if row["stem"] != stem_index or not loads_package(destination, row):
                 continue
             held = points.get((stem_index, row["value"]))
-            if not held:
-                continue
-            sets += 1
-            placed.extend(held)
-        if not placed:
+            if held:
+                found.append(held)
+        if not found:
             no_sets.append(name)
             continue
-        placed = thin(placed, separation)
+        found = space_squads(found, separation)
+        sets = len(found)
+        # Decluttered after flattening, not per set: two different squads can carry a point at the
+        # same coordinate, and a per-set pass cannot see that.
+        placed: list[tuple[float, float, float]] = declutter(
+            [point for group in found for point in group])
 
         token = audit.leading_word(stem or name)
         fill = [tag for tag, entity in combatants if audit.world_faction(entity, token)]
@@ -236,7 +273,7 @@ def main() -> None:
         report.append((name, sets, len(placed)))
 
     verb = "wrote" if write else "would write"
-    print(f"{verb} {written} maps, {total_points:,} points, {separation:g}-unit spacing"
+    print(f"{verb} {written} maps, {total_points:,} points, {separation:g}-unit squad spacing"
           f"{'' if write else '  (dry run - pass --write)'}")
     print(f"skipped: {len(social)} social spaces and cutscenes (pass --all to include), "
           f"{len(no_stem)} with no map stem, {len(no_sets)} whose stem offers them no set, "

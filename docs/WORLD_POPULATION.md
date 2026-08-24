@@ -127,15 +127,22 @@ python tools/pkg/spawn_maps_build.py --write    # write them
 python tools/pkg/spawn_maps_build.py --clean    # remove every map it wrote
 ```
 
-Current install: **423 maps, 40,195 points at 6-unit spacing.** Every free-roam destination is
+Current install: **423 maps, 105,382 points at 15-unit squad spacing.** Every free-roam destination is
 covered, the Moon (`luna_freeroam`) among them.
 
-**Spacing matters more than it sounds.** The game's spawn sets are squad positions - three or four
-bodies within a couple of metres, meant to be used one set at a time - and the populator fills every
-free point in its band at once, so a raw cluster spawns as a heap. Nessus collapses from 651 points
-to 191 at eight units and 176 at twelve, so roughly seven in ten points are a duplicate of a
-neighbour and the distinct locations survive almost untouched. Six is the default; `--spacing 0`
-keeps everything.
+**Thin by set, never by point.** A spawn set is a squad — three or four bodies a couple of metres
+apart, authored that way, and it reads as a squad in play. Thinning points breaks that up and costs
+most of the population to fix a problem that was never about the bodies inside a squad; it is about
+two squads standing on the same ground. Across Nessus, the EDZ and Io the median set is 34–47 units
+from its nearest neighbour, but the closest tenth are within one or two. So a whole set is kept or
+dropped on the distance between set centres: `--spacing`, default 15 units, `0` to keep every set.
+Nessus keeps 112 of its 131 sets.
+
+Underneath that, at a different scale, any point within `BODY_CLEARANCE` (1.5 units) of one already
+kept is dropped, because two bodies there occupy the same ground. Squads sit about two units apart
+and survive untouched. It runs across the whole destination rather than set by set, since some of
+those duplicates are two *different* squads sharing a coordinate. Every free-roam map measures a
+closest pair of exactly 1.50 and a median nearest neighbour of 2.0.
 
 Spread is real rather than clustered — before thinning, the Moon's points cover roughly 3 km × 4 km
 across 172 distinct 50 m cells, and thinning removes duplicates rather than area.
