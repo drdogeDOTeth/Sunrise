@@ -1,6 +1,6 @@
 # Handoff — custom character into Sunrise / Shadowkeep
 
-**Updated:** 2026-08-23 (**emotes shipped on branch `activities`, not yet pressed** — an emote is a plug in the Emote Collection, never equipment; needs the newly built DLL). Cosmetics: **left-hand roll −25° confirmed in game**. Earlier that day (**left-hand roll −25° shipped, not yet seen** — `037c_34` / `037d_32` / `0698_30`). The v24 hand refit under it is **user-confirmed better** in game. FP arms on gauntlets `(0, 16326)` confirmed in-world. Host Intake tool is live. Race-glove blank still unconfirmed. `--fingers` CLOSED on the chest.
+**Updated:** 2026-08-24 (**#66 Playbook merged, built, not installed; map mode on with 423 offline maps, not launched**). Earlier: 2026-08-23 (**emotes shipped on branch `activities`, not yet pressed** — an emote is a plug in the Emote Collection, never equipment; needs the newly built DLL). Cosmetics: **left-hand roll −25° confirmed in game**. Earlier that day (**left-hand roll −25° shipped, not yet seen** — `037c_34` / `037d_32` / `0698_30`). The v24 hand refit under it is **user-confirmed better** in game. FP arms on gauntlets `(0, 16326)` confirmed in-world. Host Intake tool is live. Race-glove blank still unconfirmed. `--fingers` CLOSED on the chest.
 
 **Live / restore:** newest is the **v25 left-hand roll** over the **v24 refit** (`037c_33` / `037d_31` / `0698_29`, confirmed good), both on top of `20260823-141400.json` (100 layers — FP arms + race-glove blanks, v23 hands). Roll too strong or the wrong way? Change `HAND_ROLL` and re-run; the refit underneath is sound. Older floors: `20260822-235602` (92 layers, hands-on-gauntlets confirmed), `20260822-225414` (v23 wrists-only). Tiled `0698_25` stays in `packages\_reverted_uv_tiles\`. Do **not** `--restore` `150046`. **Durable status:** `docs/CUSTOM_CHARACTER.md`. Destiny must be closed to write packages or overwrite the DLL.
 
@@ -58,9 +58,29 @@ and 23 `gambit_*` rows have no authored combatant placements at all, and the bat
 Debugging the walk is no longer on the critical path; the offline route already covers every
 free-roam destination including the Moon.
 
-**Next, in order:** launch and confirm worlds fill on arrival, then `#66` Playbook — objectives, map
-markers, shareable JSON missions, **not merged**. It carries its own older copy of
-`spawn_runtime.cpp` and would have to be reconciled against #58's.
+### `#66` Playbook is merged, builds clean, and is NOT installed
+
+`stanuwu/Sunrise#66` — 64-step missions with four gates (reach a place, wait a delay, press
+interact, clear the area), objective HUD text, route waypoints, shareable JSON. Also brings a string
+table, camera projection and activity-location diagnostics.
+
+Two conflicts, both trivial. **The dangerous file was the one that merged cleanly:** both sides
+rewrote `spawn_panel.cpp` and the auto-merge kept #58's call to `skipped_family` while taking #66's
+deletion of its definition. A sweep of every definition on either parent found `kAmmoType`,
+`kLootType` and `kProjectileType` gone the same way — those three are legitimately superseded by
+#66's named `ObjectType` enum. If you merge another PR that touches this file, sweep it again;
+a clean merge here is not evidence of a correct one.
+
+**`clearArea` was broken as shipped and is now fixed.** It waited on
+`server::live_actor_count()` — the physics actor store, gated off, so it read zero and every such
+step fired on arrival. `playbook::live_gate_actor_count()` prefers the client populator's count and
+falls back to the actor store; the gate and its overlay both read it.
+
+**Still missing in #66:** nothing plays a step's audio (the tag is carried, the emit path does not
+exist), and the interact key is hardcoded to E rather than read from the player's binding.
+
+**To install:** `.\install.ps1` with Destiny closed. Consider testing map mode on the DLL already
+installed first, so a world that does not fill has only one possible cause.
 
 **Carried caveats:** an entity cannot be despawned (the game offers no removal call the module can
 make) so placements persist until the location unloads; one hardcoded RVA survives at `0x1F93420`,
