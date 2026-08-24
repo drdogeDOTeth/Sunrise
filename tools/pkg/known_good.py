@@ -52,13 +52,61 @@ def ours(directory: Path) -> list[Path]:
                   if datetime.fromtimestamp(p.stat().st_mtime) > INSTALLED_BEFORE)
 
 
-def all_known(packages: Path) -> dict[str, Path]:
-    """@return Every layer of ours anywhere under `packages`, by file name."""
-    found: dict[str, Path] = {}
+def unique_in(directory: Path, name: str) -> Path:
+    """
+    @param directory Destination directory.
+    @param name Preferred file name.
+    @return A free path in `directory`, suffixed only if the name is already taken.
+
+    Two different builds of one layer can both need parking - the attic already holds a copy under
+    that name and the live file is a different one. Overwriting would destroy the only copy of
+    whichever it hit, and this tool never deletes.
+    """
+    target = directory / name
+    if not target.exists():
+        return target
+    stem = target.stem
+    for index in range(1, 1000):
+        candidate = directory / f"{stem}.{index}{target.suffix}"
+        if not candidate.exists():
+            return candidate
+    raise SystemExit(f"cannot find a free name for {name} in {directory}")
+
+
+def all_known(packages: Path) -> dict[str, list[Path]]:
+    """@return Every copy of every layer of ours anywhere under `packages`, by file name.
+
+    A name is not unique. Thirteen of v25's layers exist in two or more attics with *different*
+    contents, because a reverted experiment keeps the name it reverted. Returning only the first
+    copy found made a restore depend on directory order: `_vanilla_test` sorts last, so once every
+    layer had been moved there, a stale copy in `_reverted*` won and the restore silently rebuilt
+    the wrong set. Callers pick by recorded size instead - see `resolve`.
+    """
+    found: dict[str, list[Path]] = {}
     for directory in [packages, *(d for d in packages.iterdir() if d.is_dir())]:
         for path in ours(directory):
-            found.setdefault(path.name, path)
+            found.setdefault(path.name, []).append(path)
     return found
+
+
+def resolve(entry: dict, candidates: list[Path], packages: Path) -> Path | None:
+    """
+    Picks the copy of one layer that the snapshot actually recorded.
+    @param entry Snapshot entry, carrying the recorded byte size.
+    @param candidates Every copy of that name on disk.
+    @param packages Live package directory.
+    @return The matching copy, preferring one already live, or None when none matches.
+    """
+    exact = [p for p in candidates if p.stat().st_size == entry["size"]]
+    if not exact:
+        return None
+    # A copy already in place is the one to keep: moving an identical file achieves nothing and
+    # only risks a collision. Otherwise the canonical attic wins over the reverted experiments.
+    for preferred in (packages, packages / ATTIC):
+        for path in exact:
+            if path.parent == preferred:
+                return path
+    return exact[0]
 
 
 def save(note: str, packages: Path) -> Path:
@@ -109,25 +157,37 @@ def check(packages: Path, snapshot: Path) -> bool:
 def restore(packages: Path, snapshot: Path) -> None:
     if game_running():
         raise SystemExit("destiny2 is running; close it before moving package files")
-    want = {e["name"] for e in json.loads(snapshot.read_text())["live"]}
+    want = {e["name"]: e for e in json.loads(snapshot.read_text())["live"]}
     known = all_known(packages)
-    unknown = sorted(want - set(known))
-    if unknown:
+    # Resolve the whole set before moving anything, so a snapshot that cannot be rebuilt exactly
+    # leaves the install untouched rather than half-converted.
+    chosen: dict[str, Path] = {}
+    unresolved: list[str] = []
+    for name, entry in want.items():
+        match = resolve(entry, known.get(name, []), packages)
+        if match is None:
+            unresolved.append(f"{name} ({len(known.get(name, []))} copies, none {entry['size']:,}B)")
+        else:
+            chosen[name] = match
+    if unresolved:
         raise SystemExit(
-            f"{len(unknown)} layer(s) in the snapshot are nowhere on disk: {unknown[:5]}. "
-            "Refusing to restore a partial set.")
+            f"{len(unresolved)} layer(s) cannot be resolved to the recorded content:\n  "
+            + "\n  ".join(unresolved[:8])
+            + "\nRefusing to restore a partial set.")
     attic = packages / ATTIC
     attic.mkdir(exist_ok=True)
     out_count = in_count = 0
     # Out first: a layer moving to the attic frees its name, which matters when a stack was rebuilt.
+    # A live file whose content is not the recorded one has to go too, or it holds the name against
+    # the copy that should take it.
     for path in ours(packages):
-        if path.name not in want:
-            shutil.move(str(path), str(attic / path.name))
-            out_count += 1
-    for name in sorted(want):
-        current = all_known(packages).get(name)
-        if current and current.parent != packages:
-            shutil.move(str(current), str(packages / name))
+        if chosen.get(path.name) == path:
+            continue
+        shutil.move(str(path), str(unique_in(attic, path.name)))
+        out_count += 1
+    for name, source in sorted(chosen.items()):
+        if source.parent != packages:
+            shutil.move(str(source), str(packages / name))
             in_count += 1
     print(f"moved {out_count} out, {in_count} in")
     check(packages, snapshot)
