@@ -88,7 +88,28 @@ The panel reports the outcome directly:
 Bodies: 47 of the map's 115 entities stream in this world
 ```
 
-**A zero there is why a world stays empty.** If it happens, `Fill positions with filtered
+Measured in game, 2026-08-24, with the faction-matched pools that shipped first:
+
+| world | destination | pool | streams |
+|---|---|---|---|
+| Dreaming City | `dreaming_city_freeroam` | 82 | 23 |
+| Nessus | `planet_x_freeroam` | 115 | 23 |
+| EDZ | `edz_freeroam` | 73 | 20 |
+| Tangled Shore | `tangled_shore_freeroam` | 44 | 16 |
+| Mercury | `mercury_freeroam` | 42 | 5 |
+| **Mars** | `polaris_freeroam` | 51 | **0** |
+
+Mars is why the faction guess had to go, and why **every map now carries the full 191-combatant
+pool**: faction-matched tags still take most of the points, so a correct guess still shapes how a
+world feels, and every tag it excluded is spread through the remainder as a wildcard. A tag the
+world cannot produce costs nothing; one the guess omitted was the difference between a populated
+world and an empty one.
+
+**The stems are codenames and cannot be audited from the source.** `planet_x` is Nessus and
+`polaris` is Mars — both established only by a player standing in them and reading the panel, and
+`kWorldFactions` was wrong about both.
+
+**A zero in that line is why a world stays empty.** If it happens, `Fill positions with filtered
 combatants` then `Save map` re-tags that destination from what the game has streamed in — it
 prefers the world's factions and falls back to every resident combatant, so it cannot come back
 empty in a world that has enemies in it.

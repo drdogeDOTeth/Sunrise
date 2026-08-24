@@ -257,13 +257,26 @@ def main() -> None:
         if not fill:
             no_roster.append(name)
             continue
+        # Everything the faction guess excluded, kept as wildcards. `kWorldFactions` is a guess and
+        # has been wrong twice on this install - Nessus was handed Hive, Mars was handed Vex and
+        # Taken and streamed none of them, which is what a `Bodies: 0 of 51` line looks like. The
+        # runtime filters the pool by residency anyway, so a tag this world cannot produce costs
+        # nothing, while one the guess omitted is the difference between a populated world and an
+        # empty one.
+        wildcards = [tag for tag, _entity in combatants if tag not in set(fill)]
 
         placed = placed[:MAP_CAPACITY]
         lines = []
+        stride = max(2, len(placed) // len(wildcards)) if wildcards else 0
         for index, position in enumerate(placed):
-            # The batch's own round robin, kept so an offline map has the same character as one
-            # the game would have written.
-            tag = fill[(index * 7 + index // len(fill)) % len(fill)]
+            if wildcards and index % stride == stride - 1:
+                # Spread so every wildcard reaches the file, and so they are scattered through the
+                # world rather than banked at one end of it.
+                tag = wildcards[(index // stride) % len(wildcards)]
+            else:
+                # The batch's own round robin, kept so an offline map has the same character as one
+                # the game would have written.
+                tag = fill[(index * 7 + index // len(fill)) % len(fill)]
             lines.append(f"{tag:08X} {position[0]:.3f} {position[1]:.3f} {position[2]:.3f}")
         if write:
             (ARTIFACTS / f"spawn_map_{safe_name(name)}.txt").write_text(
