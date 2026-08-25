@@ -54,13 +54,23 @@ using DrawIndexedInstanced =
 using CreatePixelShaderFn = HRESULT(STDMETHODCALLTYPE*)(
     ID3D11Device*, const void*, SIZE_T, ID3D11ClassLinkage*, ID3D11PixelShader**);
 
+/** Longest texture path a part can name: `\characters\<profile>\<file>.png`. */
+constexpr std::size_t kPathCapacity = 160;
+
 struct Part {
     UINT start{};
     UINT count{};
     char name[32]{};
-    wchar_t file[80]{};
-    wchar_t material[80]{};
+    wchar_t file[kPathCapacity]{};
+    wchar_t material[kPathCapacity]{};
     bool hasMaterial{};
+    /**
+     * Skipped at draw rather than painted. A part table names `hide` where a texture would go to
+     * drop geometry the injected mesh replaces - stock gloves over custom hands, the race head
+     * under a custom one, or another character's ranges while this one is drawn. It is the only
+     * blank that works: the same edit as a package patch, at the one place nothing caches it.
+     */
+    bool hidden{};
 };
 
 struct PartSpec {
@@ -85,6 +95,27 @@ std::array<Part, kMaxParts> g_parts{};
 UINT g_partCount{};
 
 constexpr UINT kMeshIndices = 122304;
+
+/** Directory under the artifact root that holds one subdirectory per character. */
+constexpr std::wstring_view kProfileRoot = L"\\characters";
+/** Part table every profile directory must carry. */
+constexpr std::wstring_view kProfileTable = L"\\parts.txt";
+/** Remembers the switcher's choice across launches, beside the profiles it names. */
+constexpr std::wstring_view kActiveFile = L"\\characters\\active.txt";
+/** Longest profile directory name kept. */
+constexpr std::size_t kProfileNameCapacity = 48;
+
+struct Profile {
+    /** Directory name, which is what the panel lists and `active.txt` records. */
+    char name[kProfileNameCapacity]{};
+};
+
+std::array<Profile, kMaxProfiles> g_profiles{};
+std::size_t g_profileCount{};
+/** Slot being drawn. Equal to `g_profileCount` while the shipped defaults are in use. */
+std::size_t g_activeProfile{};
+/** Held from attach so a profile swap can upload textures without reinstalling the detours. */
+ID3D11Device* g_device{};
 
 struct GpuImage {
     ID3D11Texture2D* texture{};
@@ -539,23 +570,59 @@ void seed_defaults() noexcept {
     }
 }
 
-void to_wide_suffix(const char* name, wchar_t* dest, std::size_t destCount) noexcept {
+/** Appends one narrow string to a wide buffer already `at` characters long. */
+[[nodiscard]] std::size_t append_narrow(const char* text,
+                                        wchar_t* dest,
+                                        std::size_t at,
+                                        std::size_t destCount) noexcept {
+    for (; text != nullptr && text[0] != '\0' && at + 1 < destCount; ++text, ++at) {
+        dest[at] = static_cast<wchar_t>(static_cast<unsigned char>(text[0]));
+    }
+    dest[at] = L'\0';
+    return at;
+}
+
+/**
+ * Builds the artifact-relative suffix `load_png` wants.
+ * A profile's textures sit beside its part table, so naming the profile is what keeps two
+ * characters' files from colliding on one name like `skin.png`.
+ * @param name Texture file named by the part table.
+ * @param profile Profile directory, or nullptr for the flat pre-profile layout.
+ */
+void to_wide_suffix(const char* name,
+                    const char* profile,
+                    wchar_t* dest,
+                    std::size_t destCount) noexcept {
     dest[0] = L'\\';
     dest[1] = L'\0';
     if (name == nullptr || destCount < 3) {
         return;
     }
     std::size_t at = 1;
-    for (; name[0] != '\0' && at + 1 < destCount; ++name, ++at) {
-        dest[at] = static_cast<wchar_t>(static_cast<unsigned char>(name[0]));
+    if (profile != nullptr && profile[0] != '\0') {
+        at = append_narrow("characters\\", dest, at, destCount);
+        at = append_narrow(profile, dest, at, destCount);
+        at = append_narrow("\\", dest, at, destCount);
     }
-    dest[at] = L'\0';
+    (void)append_narrow(name, dest, at, destCount);
 }
 
-void load_parts_file() noexcept {
+/**
+ * Reads one part table into the live table.
+ * @param profile Profile directory to read, or nullptr for the flat `custom_parts.txt`.
+ */
+void load_parts_file(const char* profile) noexcept {
     core::path::Buffer directory{};
-    if (!core::path::artifact_directory(owning_module(), directory)
-        || !core::path::append(directory, L"\\custom_parts.txt")) {
+    if (!core::path::artifact_directory(owning_module(), directory)) {
+        return;
+    }
+    if (profile != nullptr && profile[0] != '\0') {
+        wchar_t suffix[kPathCapacity]{};
+        to_wide_suffix("parts.txt", profile, suffix, kPathCapacity);
+        if (!core::path::append(directory, suffix)) {
+            return;
+        }
+    } else if (!core::path::append(directory, L"\\custom_parts.txt")) {
         return;
     }
     const HANDLE file = CreateFileW(directory.chars.data(),
@@ -607,18 +674,24 @@ void load_parts_file() noexcept {
         if (fields < 4 || count == 0 || name[0] == '\0' || albedo[0] == '\0') {
             continue;
         }
-        wchar_t fileWide[80]{};
-        wchar_t materialWide[80]{};
-        to_wide_suffix(albedo, fileWide, 80);
-        if (fields >= 5 && material[0] != '\0' && std::strcmp(material, "-") != 0) {
-            to_wide_suffix(material, materialWide, 80);
+        // `hide` where a texture belongs drops the range instead of painting it, so a part table
+        // can remove stock geometry the injected mesh replaces without touching a package.
+        const bool hidden = std::strcmp(albedo, "hide") == 0;
+        wchar_t fileWide[kPathCapacity]{};
+        wchar_t materialWide[kPathCapacity]{};
+        if (!hidden) {
+            to_wide_suffix(albedo, profile, fileWide, kPathCapacity);
+            if (fields >= 5 && material[0] != '\0' && std::strcmp(material, "-") != 0) {
+                to_wide_suffix(material, profile, materialWide, kPathCapacity);
+            }
         }
         seed_part(loaded,
                   start,
                   count,
                   name,
-                  fileWide,
+                  hidden ? nullptr : fileWide,
                   materialWide[0] != L'\0' ? materialWide : nullptr);
+        g_parts[loaded].hidden = hidden;
         ++loaded;
     }
     if (loaded == 0) {
@@ -637,6 +710,111 @@ void load_parts_file() noexcept {
     }
 }
 
+/** Releases the textures the previous profile uploaded, so a swap cannot leak them. */
+void release_images() noexcept {
+    for (GpuImage& image : g_images) {
+        release_com(image.view);
+        release_com(image.texture);
+    }
+    for (GpuImage& image : g_materials) {
+        release_com(image.view);
+        release_com(image.texture);
+    }
+}
+
+/**
+ * Fills `g_profiles` from the subdirectories of `characters\`.
+ * A directory counts only when it holds a `parts.txt`, so a stray folder of loose textures is
+ * not offered as a character the switcher cannot draw.
+ */
+void scan_profiles() noexcept {
+    g_profileCount = 0;
+    core::path::Buffer directory{};
+    if (!core::path::artifact_directory(owning_module(), directory)
+        || !core::path::append(directory, L"\\characters\\*")) {
+        return;
+    }
+    WIN32_FIND_DATAW found{};
+    const HANDLE search = FindFirstFileW(directory.chars.data(), &found);
+    if (search == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    do {
+        if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0
+            || found.cFileName[0] == L'.') {
+            continue;
+        }
+        core::path::Buffer table{};
+        if (!core::path::artifact_directory(owning_module(), table)
+            || !core::path::append(table, kProfileRoot) || !core::path::append(table, L"\\")
+            || !core::path::append(table, found.cFileName)
+            || !core::path::append(table, kProfileTable)
+            || GetFileAttributesW(table.chars.data()) == INVALID_FILE_ATTRIBUTES) {
+            continue;
+        }
+        Profile& profile = g_profiles[g_profileCount];
+        profile = {};
+        std::size_t at = 0;
+        for (; found.cFileName[at] != L'\0' && at + 1 < kProfileNameCapacity; ++at) {
+            const wchar_t wide = found.cFileName[at];
+            profile.name[at] = wide < 128 ? static_cast<char>(wide) : '_';
+        }
+        profile.name[at] = '\0';
+        ++g_profileCount;
+    } while (g_profileCount < kMaxProfiles && FindNextFileW(search, &found) != FALSE);
+    FindClose(search);
+}
+
+/** @return Slot of the profile `active.txt` names, or `g_profileCount` when it names none. */
+[[nodiscard]] std::size_t remembered_profile() noexcept {
+    core::path::Buffer path{};
+    if (!core::path::artifact_directory(owning_module(), path)
+        || !core::path::append(path, kActiveFile)) {
+        return g_profileCount;
+    }
+    const HANDLE file = CreateFileW(
+        path.chars.data(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return g_profileCount;
+    }
+    std::array<char, kProfileNameCapacity> text{};
+    DWORD read = 0;
+    const BOOL ok = ReadFile(file, text.data(), static_cast<DWORD>(text.size() - 1), &read, nullptr);
+    CloseHandle(file);
+    if (ok == FALSE || read == 0) {
+        return g_profileCount;
+    }
+    for (char& value : text) {
+        if (value == '\r' || value == '\n') {
+            value = '\0';
+        }
+    }
+    for (std::size_t index = 0; index < g_profileCount; ++index) {
+        if (std::strcmp(g_profiles[index].name, text.data()) == 0) {
+            return index;
+        }
+    }
+    return g_profileCount;
+}
+
+/** Records the switcher's choice so the next launch draws the same character. */
+void remember_profile(std::size_t index) noexcept {
+    core::path::Buffer path{};
+    if (!core::path::artifact_directory(owning_module(), path)
+        || !core::path::append(path, kActiveFile)) {
+        return;
+    }
+    const HANDLE file = CreateFileW(
+        path.chars.data(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    const char* name = index < g_profileCount ? g_profiles[index].name : "";
+    DWORD written = 0;
+    (void)WriteFile(file, name, static_cast<DWORD>(std::strlen(name)), &written, nullptr);
+    CloseHandle(file);
+}
+
 [[nodiscard]] bool create_images(ID3D11Device* device) noexcept {
     for (std::size_t index = 0; index < g_partCount && index < kMaxParts; ++index) {
         std::vector<std::uint32_t> pixels;
@@ -644,6 +822,10 @@ void load_parts_file() noexcept {
         UINT height = 0;
         UINT albedoWidth = 0;
         UINT albedoHeight = 0;
+        // A hidden range is never drawn, so it needs no texture and a missing file is not an error.
+        if (g_parts[index].hidden) {
+            continue;
+        }
         if (!load_png(g_parts[index].file, pixels, albedoWidth, albedoHeight)
             || !upload_image(device,
                              pixels,
@@ -760,10 +942,6 @@ void draw_replaced(ID3D11DeviceContext* context,
                    UINT start,
                    UINT count,
                    Draw&& draw) noexcept {
-    if (g_shader == nullptr) {
-        draw();
-        return;
-    }
     const BoundTargets targets = inspect_targets(context);
     note_targets(targets);
     if (targets.bound == 0 || !is_character_gbuffer(targets)) {
@@ -772,6 +950,17 @@ void draw_replaced(ID3D11DeviceContext* context,
         return;
     }
     note_first(part, start, count, targets);
+    if (part.hidden) {
+        // Dropping the call is the whole blank: no colour, no depth, no G-buffer write for this
+        // range. It is gated on the character G-buffer like painting is, because an exact
+        // (start, count) collision with a UI quad would otherwise blank the interface - the same
+        // trap v13 fell into by subset-matching.
+        return;
+    }
+    if (g_shader == nullptr) {
+        draw();
+        return;
+    }
     const std::size_t index = static_cast<std::size_t>(&part - g_parts.data());
     ID3D11ShaderResourceView* views[2]{g_images[index].view, g_materials[index].view};
     SavedPs saved{};
@@ -881,20 +1070,135 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device,
 
 } // namespace
 
+namespace {
+
+/**
+ * Reads one profile's part table and uploads its textures over whatever was drawn before.
+ * @param index Profile slot, or `g_profileCount` for the flat pre-profile layout.
+ * @return True when the table was read and every visible part has a texture.
+ */
+[[nodiscard]] bool apply_profile(std::size_t index) noexcept {
+    if (g_device == nullptr) {
+        return false;
+    }
+    const char* profile = index < g_profileCount ? g_profiles[index].name : nullptr;
+    // Seeded first so a table that names fewer parts than the defaults cannot leave stale rows,
+    // and so a profile whose file is unreadable still draws the shipped character.
+    seed_defaults();
+    load_parts_file(profile);
+    release_images();
+    if (!create_images(g_device)) {
+        // A half-applied profile would draw the new ranges with released textures, so a profile
+        // whose textures will not load puts the shipped character back rather than a broken one.
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::error,
+                         "ev=custom_albedo stage=profile result=fail action=revert_defaults");
+        seed_defaults();
+        load_parts_file(nullptr);
+        release_images();
+        g_activeProfile = g_profileCount;
+        (void)create_images(g_device);
+        return false;
+    }
+    g_activeProfile = index;
+    std::array<char, 128> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=custom_albedo stage=profile name=%s parts=%u",
+                                      profile != nullptr ? profile : "(defaults)",
+                                      g_partCount);
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         std::string_view(line.data(), static_cast<std::size_t>(written)));
+    }
+    return true;
+}
+
+} // namespace
+
 void attach(ID3D11Device* device, ID3D11DeviceContext* context) noexcept {
     detach();
     if (device == nullptr || context == nullptr) {
         return;
     }
+    g_device = device;
+    scan_profiles();
+    const std::size_t remembered = remembered_profile();
     seed_defaults();
-    load_parts_file();
+    load_parts_file(remembered < g_profileCount ? g_profiles[remembered].name : nullptr);
+    g_activeProfile = remembered;
     if (!compile_shader(device) || !create_images(device) || !install_hooks(device, context)) {
         detach();
         return;
     }
-    core::log::write(core::log::Channel::client,
-                     core::log::Level::info,
-                     "ev=custom_albedo stage=attach result=ok mode=ours");
+    std::array<char, 128> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=custom_albedo stage=attach result=ok mode=ours "
+                                      "profiles=%zu active=%s",
+                                      g_profileCount,
+                                      remembered < g_profileCount ? g_profiles[remembered].name
+                                                                  : "(defaults)");
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         std::string_view(line.data(), static_cast<std::size_t>(written)));
+    }
+}
+
+std::size_t profile_count() noexcept {
+    return g_profileCount;
+}
+
+std::string_view profile_name(std::size_t index) noexcept {
+    return index < g_profileCount ? std::string_view(g_profiles[index].name) : std::string_view{};
+}
+
+std::size_t active_profile() noexcept {
+    return g_activeProfile;
+}
+
+void rescan_profiles() noexcept {
+    // The active slot is an index into the old listing, so it is re-resolved by name rather than
+    // carried over - a profile added or removed on disk would otherwise shift what is drawn.
+    const char* active = g_activeProfile < g_profileCount ? g_profiles[g_activeProfile].name
+                                                          : nullptr;
+    std::array<char, kProfileNameCapacity> held{};
+    if (active != nullptr) {
+        (void)std::snprintf(held.data(), held.size(), "%s", active);
+    }
+    scan_profiles();
+    g_activeProfile = g_profileCount;
+    for (std::size_t index = 0; index < g_profileCount; ++index) {
+        if (held[0] != '\0' && std::strcmp(g_profiles[index].name, held.data()) == 0) {
+            g_activeProfile = index;
+            break;
+        }
+    }
+}
+
+bool select_profile(std::size_t index) noexcept {
+    // Called from the overlay, which draws on the render thread inside Present - the same thread
+    // that services DrawIndexed - so the part table and its textures are never swapped underneath
+    // a draw that is reading them.
+    if (index > g_profileCount || !apply_profile(index)) {
+        return false;
+    }
+    remember_profile(index);
+    return true;
+}
+
+std::size_t part_count() noexcept {
+    return g_partCount;
+}
+
+PartView part_at(std::size_t index) noexcept {
+    if (index >= g_partCount || index >= kMaxParts) {
+        return {};
+    }
+    const Part& part = g_parts[index];
+    return PartView{std::string_view(part.name), part.start, part.count, part.hidden};
 }
 
 void detach() noexcept {
@@ -908,14 +1212,9 @@ void detach() noexcept {
     release_com(g_shader);
     release_com(g_sampler);
     release_com(g_blend);
-    for (GpuImage& image : g_images) {
-        release_com(image.view);
-        release_com(image.texture);
-    }
-    for (GpuImage& image : g_materials) {
-        release_com(image.view);
-        release_com(image.texture);
-    }
+    release_images();
+    // Borrowed from attach, never addrefed, so it is dropped rather than released.
+    g_device = nullptr;
     AcquireSRWLockExclusive(&g_psLock);
     g_pixelShaders.clear();
     ReleaseSRWLockExclusive(&g_psLock);

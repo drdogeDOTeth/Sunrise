@@ -235,6 +235,74 @@ inject still refuses it on the chest. Hands go on the gauntlet draw with the che
 
 ---
 
+## The character switcher (Character page)
+
+A custom character is three separable things, and only one of them needs a relaunch:
+
+| layer | where it lives | swaps live? |
+|---|---|---|
+| paint | PNGs named by the part table | **yes** |
+| part table | `parts.txt` - exact `(StartIndex, IndexCount)` to PNG, or `hide` | **yes** |
+| geometry | injected Tiger package layers | **no** - packages are read at load and cannot be written while the game runs |
+
+So the Character page swaps **paint and visibility** instantly, and a different *silhouette* still
+needs `tools/pkg` with Destiny closed. The page says so rather than implying a restart is not
+coming.
+
+### Layout
+
+```
+bin\x64\Sunrise\characters\
+  active.txt          the profile drawn, remembered across launches
+  <name>\
+    parts.txt         name start count albedo material
+    *.png             the textures parts.txt names, resolved beside it
+```
+
+A directory counts as a profile only when it holds a `parts.txt`, so a folder of loose textures is
+never offered as a character that cannot be drawn. **The shipped defaults are always listed too**,
+so a profile that draws badly is one click from a known-good character rather than a file edit and
+a relaunch. If a profile's textures fail to load, the defaults are put back automatically and the
+log carries `ev=custom_albedo stage=profile result=fail`.
+
+Nothing about the pre-profile layout was removed: with no `characters\` directory the hook reads
+`custom_parts.txt` and the flat `custom_*.png` exactly as before.
+
+### `hide` — the draw-time blank
+
+Where a part table names a texture, it may instead name `hide`:
+
+```
+race_head 12345 6789 hide
+```
+
+That range is then **skipped at draw**: no colour, no depth, no G-buffer write. It is the same
+blank a package patch would make, at the one place nothing caches it — which matters, because
+`w64_globals_06dc` hangs a world load whenever it carries a layer of ours
+(`docs/PACKAGES.md`), and the `SEntityModel` constructor detour never sees the tag.
+
+Two rules it inherits from the paint path:
+
+- **Exact `(start, count)` pairs only.** v13 subset-matched and treated start=0 UI quads as the
+  tank, which smashed character select.
+- **Gated on the character G-buffer**, like painting. An exact collision with a UI quad would
+  otherwise blank the interface. The cost is that shadows may still show hidden geometry; revisit
+  when a second character's ranges actually need hiding.
+
+This is the mechanism for the two long-open items — stock gloves over custom hands, and the bald
+race head under a custom one — and for drawing one character out of a mesh that holds several.
+
+### Bringing a second character
+
+`bring_guardian.py` already does the intake (retarget, part assignment, inject). What the switcher
+adds is that its output can live in its own profile directory instead of overwriting the first
+character's files. Geometry is still one injected mesh at a time; drawing two from one buffer means
+injecting both at disjoint index ranges and `hide`-ing the inactive one, which the vertex count
+does not forbid — `GEOMETRY.md` is explicit that the count is not a hard limit, only the safe first
+step, since a new buffer means updating the vertex header, index buffer and part ranges together.
+
+---
+
 ## Still open
 
 1. **First-person / inspect arms:** upper arm, forearm and palm now ride the gauntlet
