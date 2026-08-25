@@ -73,6 +73,13 @@ FIT_HANDS = "--no-fit-hands" not in _ARGS
 FIT_PROPORTIONS = "--fit-proportions" in _ARGS
 _BLEND_OPT = _take_opt(_ARGS, "--proportion-blend")
 PROPORTION_BLEND = float(_BLEND_OPT) if _BLEND_OPT else 1.0
+# Per-chain overrides, e.g. `--chain-blend legs=0,arms=1`. Chains named in FIT_CHAINS.
+CHAIN_BLEND = {}
+_CHAIN_OPT = _take_opt(_ARGS, "--chain-blend")
+if _CHAIN_OPT:
+    for _item in _CHAIN_OPT.split(","):
+        _name, _, _value = _item.partition("=")
+        CHAIN_BLEND[_name.strip()] = float(_value)
 HAND_TARGETS = os.path.join(HERE, "objs", "skeleton", "hand_targets.json")
 
 # Artistic roll, applied after the fit: degrees about the forearm axis (pronation - the palm-up to
@@ -199,12 +206,15 @@ ARM_CHAINS = [
 # legs are far shorter than the frame below those hips.
 # "Chest" is deliberately absent - it is the one group split across two joints by height, so it
 # has no single joint to seat.
+# Named so one chain can be fitted harder than another: a source whose arms nearly match the rig
+# but whose legs are half its length has no single blend that suits both.
+# `--chain-blend legs=0,arms=1` overrides per chain.
 FIT_CHAINS = [
-    ["Hips", "Spine", "Neck", "Head"],
-    ["Left shoulder", "Left arm", "Left elbow", "Left wrist"],
-    ["Right shoulder", "Right arm", "Right elbow", "Right wrist"],
-    ["Left leg", "Left knee", "Left ankle", "Left toe"],
-    ["Right leg", "Right knee", "Right ankle", "Right toe"],
+    ("spine", ["Hips", "Spine", "Neck", "Head"]),
+    ("arms", ["Left shoulder", "Left arm", "Left elbow", "Left wrist"]),
+    ("arms", ["Right shoulder", "Right arm", "Right elbow", "Right wrist"]),
+    ("legs", ["Left leg", "Left knee", "Left ankle", "Left toe"]),
+    ("legs", ["Right leg", "Right knee", "Right ankle", "Right toe"]),
 ]
 MAX_INFLUENCES = 4
 
@@ -335,16 +345,16 @@ def fit_segments(armature, rig, blend=1.0):
     fitted = 0
     world = armature.matrix_world
 
-    def place(canonical, joint):
-        """Move one bone's head onto its rig joint. Rigid: its children come with it."""
+    def place(canonical, joint, amount):
+        """Move one bone's head toward its rig joint. Rigid: its children come with it."""
         bone = armature.pose.bones.get(armature_bone(canonical))
         if bone is None or joint not in rig:
             return None
         matrix = world @ bone.matrix
         before = matrix.translation.copy()
         wanted = to_blender(rig[joint])
-        if blend < 1.0:
-            wanted = before.lerp(wanted, blend)
+        if amount < 1.0:
+            wanted = before.lerp(wanted, amount)
         matrix.translation = wanted
         bone.matrix = world.inverted() @ matrix
         bpy.context.view_layer.update()
@@ -360,10 +370,10 @@ def fit_segments(armature, rig, blend=1.0):
     # 89 deg off the arm (measured 2026-08-25: the child moved 0.1946 -> 0.1946, not at all).
     # Placement is indifferent to both. The existing aim still sets how the limb is oriented about
     # its own axis; only position is taken over here.
-    for chain in FIT_CHAINS:
+    for group, chain in FIT_CHAINS:
         for canonical in chain:
             joint = BONE_MAP.get(canonical)
-            moved = place(canonical, joint)
+            moved = place(canonical, joint, CHAIN_BLEND.get(group, blend))
             if moved is None:
                 print(f"  {canonical:>15}  no bone or no rig joint {joint}; skipped")
                 continue
@@ -371,7 +381,7 @@ def fit_segments(armature, rig, blend=1.0):
             print(f"  {canonical:>15} -> rig joint {joint:<3} moved {moved * 100:6.2f} cm")
 
     # Report the thing that actually matters, measured rather than inferred from the factors.
-    for canonical in ("Left wrist", "Right wrist"):
+    for canonical in ("Left wrist", "Right wrist", "Left ankle", "Right ankle"):
         bone = armature.pose.bones.get(armature_bone(canonical))
         joint = BONE_MAP.get(canonical)
         if bone is None or joint not in rig:

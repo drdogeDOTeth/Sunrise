@@ -612,6 +612,8 @@ def run_retarget(glb: Path, dest: Path, blender: Path, material_map: Path,
         command.append("--fit-proportions")
         if option("--proportion-blend"):
             command.extend(["--proportion-blend", option("--proportion-blend")])
+        if option("--chain-blend"):
+            command.extend(["--chain-blend", option("--chain-blend")])
     log("retarget: " + " ".join(command))
     subprocess.run(command, check=True, cwd=str(HERE))
     if not out.is_file():
@@ -636,9 +638,21 @@ def run_cut(body: Path) -> tuple[Path, Path]:
     return chest, hands
 
 
-def parts_from_groups(chest: Path, hands: Path, atlases: dict[str, tuple[str, str]]) -> list[str]:
+def parts_from_groups(body: Path, chest: Path, hands: Path,
+                     atlases: dict[str, tuple[str, str]]) -> list[str]:
+    """Pair each carrier with the atlas of the material actually sitting in it.
+
+    **The carrier's name does not say which material it holds.** The cut renumbers slot names into
+    the canonical carrier order (tank, mask, necklace, skin, twirl) while leaving group *order*
+    alone, so group i still holds whatever the pre-cut table named at i. Measured 2026-08-25 on
+    SchizoAxe: the body moved from `GLSLShader13` (skin) to `GLSLShader85` (tank) and the hair from
+    twirl to necklace, so looking the albedo up by carrier painted the body with the previous
+    character's tank atlas and the eyes with the body atlas - three of four parts wrong.
+    """
+    source = json.loads(body.with_name(body.stem + "_groups.json").read_text(encoding="utf-8"))
     groups = json.loads(chest.with_name(chest.stem + "_groups.json").read_text(encoding="utf-8"))
     names = [CANON.get(name, name) for name in groups["slots"]]
+    held = [CANON.get(name, name) for name in source["slots"]]
     face = groups["face_material"]
     lines = ["# name start count albedo material   (written by bring_guardian.py)"]
     at = 0
@@ -648,7 +662,9 @@ def parts_from_groups(chest: Path, hands: Path, atlases: dict[str, tuple[str, st
         if not count:
             continue
         slot = GLSL_TO_SLOT.get(name, "skin")
-        albedo, material = atlases.get(slot, SLOT_ALBEDO[slot])
+        # The carrier is `slot`; the paint comes from whatever material group `index` really holds.
+        painted = GLSL_TO_SLOT.get(held[index], slot) if index < len(held) else slot
+        albedo, material = atlases.get(painted, SLOT_ALBEDO[painted])
         lines.append(f"{slot} {at * 3} {count * 3} {albedo} {material}")
         at += count
     hand_groups = json.loads(hands.with_name(hands.stem + "_groups.json").read_text(encoding="utf-8"))
@@ -712,7 +728,7 @@ def run_pipeline(glb: Path, *, inject: bool, dry_run: bool,
     body = run_retarget(glb, dest, blender, material_map,
                         bone_map or write_bone_map(info, dest))
     chest, hands = run_cut(body)
-    lines = parts_from_groups(chest, hands, atlases)
+    lines = parts_from_groups(body, chest, hands, atlases)
     write_parts(lines, dest, game_art)
     if inject or dry_run:
         if inject and not dry_run:
