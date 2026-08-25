@@ -8,6 +8,48 @@
 
 ---
 
+## WORLD LOADS: three files broke three worlds, and the cause is the package (2026-08-24)
+
+**The Moon, Titan and the Tower hang on load because of our own patch layers — and it is not what
+any layer contains.** `tools/pkg/noop_patch_probe.py` writes an entry back byte-identical to stock,
+a real patch file the registrar must resolve, changing nothing. Titan failed on it exactly as it
+failed on the real edit, in a configuration that had just passed at 6.0s.
+
+So **some packages cannot carry a layer of ours at all.** That retires every content theory this
+repo has carried since the Tower — malformed records, resized entries, corrupt paints. Each of
+these files verified clean and `blank_model` is size-preserving. It is not depth either:
+`w64_sandbox_037c` carries 28 of our layers and every world loads.
+
+| file | world | proof |
+|---|---|---|
+| `w64_sandbox_0699_6` | Moon | 80 layers PASS 6.0s → 81 FAIL 33.5s |
+| `w64_sandbox_020c_8` | Titan | `020c` depth-3 FAIL → depth-2 PASS |
+| `w64_globals_06dc_7` | Titan | 102 PASS → 103 FAIL; **its no-op twin fails identically** |
+| `w64_sandbox_0699_7` | Tower | found earlier, same pattern |
+
+**Two configurations, one command apart. Live now is v25.**
+
+```
+known_good.py --restore --snapshot=20260824-200131.json   # 103: worlds load, no glove/head blank
+known_good.py --restore --snapshot=20260823-152042.json   # 106: v25 character, Moon+Titan hang
+```
+
+**The open question** is what separates a package that accepts layers from one that rejects them.
+The probe for it exists: write a no-op to a package known good and one known bad, and diff.
+
+**The race-glove/head blank cannot be a package patch** — it needs `0x815B9521` in
+`w64_globals_06dc`. Moving it to the `SEntityModel` resource constructor (`blank_race_body`) is
+committed but **does not fire**: the module installs and `ev=race_blank` never appears, so that tag
+never reaches that constructor. The edit is not in question, the hook point is. Find where that
+model is actually built. Shipped off.
+
+**Tools.** `load_verdict.py` reads PASS/FAIL from the log and nothing else — a frozen window is
+what a healthy load looks like, and the signal only appears ~20s in; it self-tests against a known
+pass and a known fail, which caught four wrong verdicts. `bisect_layers.py` cuts by package stack
+(layers truncate only, so a stack is the safe unit) with `--depth`, `--truncate` and `--from`.
+
+---
+
 ## NEXT AGENT — start here
 
 ### Enemies FIGHT. Confirmed in game. (branch `activities` @ 085ddba, installed)
