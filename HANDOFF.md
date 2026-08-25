@@ -50,6 +50,41 @@ pass and a known fail, which caught four wrong verdicts. `bisect_layers.py` cuts
 
 ---
 
+## TOWER NPCs: vendors work, placement is hand-authored (2026-08-25)
+
+**The vendor stack is not missing.** Spawning `ai_zavala` opens the real screen - reputation,
+currencies, seven bounties, quests, an acquirable Legendary in Special Orders - and he talks. Ikora
+and Rahool likewise. Nothing needed writing. See `docs/WORLD_POPULATION.md`.
+
+**The packages do not say where the vendors stand.** `Extract authored placements` with
+`Public areas only` **off** reads the Tower's real placement chain - 1762 records, `kept=1762`,
+`private=0`. (With it on: `placements=0 private=6`. Every Tower slice state is private, so that
+flag removes the whole destination - a social space has no public bubble.) But of the 28 `ai_*`
+cast tags `EntityNames.json` knows, **zero appear in those 1762 records**. Only 9 of 205 distinct
+tags are entities at all; the rest are unnamed props. The scenario chain dresses the set, it does
+not stand the cast on it. No filter over that table can help.
+
+**So author it with the recorder.** `Record point here` stamps the main spawner's selected entity
+at the player's feet and republishes at once, so the body appears as the point is recorded.
+Confirmed 2026-08-25: `ai_tess_everis` recorded at the Eververse kiosk stood exactly there. Clear
+map first, and pick the `ai_*` actor rather than the bare model (`80B9EDBA zavala` is geometry and
+does nothing).
+
+Three open defects, all placement:
+
+1. **One point produced three Zavalas.** The populator re-places a point instead of marking it
+   used. Roaming radii are widened to 1/400/800 in `population.json` (backup
+   `population.json.bak-roaming`); a social space wants a static mode that places each point once
+   and never forgets.
+2. **`ai_gunsmith` and `ai_cryptarch` recorded but never appeared** - the "entity not streamed in"
+   outcome. Not every named actor is in the Tower's resident set.
+3. **A-pose, no idle animation.** Unexplained; interaction works anyway.
+
+**`Save map` was not pressed after that recording session, so those points are gone.** The map file
+holds the 1762-row extract, banked identically as `spawn_map_city_tower_social_d2.txt.bak-full`.
+`tools/pkg/filter_placement_map.py` reports every distinct tag in a saved map with its count and
+name - keep it for learning what a world authors, not for building a cast.
+
 ## NEXT AGENT — start here
 
 ### Enemies FIGHT. Confirmed in game. (branch `activities` @ 085ddba, installed)

@@ -218,6 +218,55 @@ contains "ogre". It costs one junk tag out of 191 and a skipped placement attemp
 
 ---
 
+## Standing a social space's own cast up
+
+The Tower is the case the roaming populator was never built for. Two findings settle how to do it.
+
+**The authored placements are there, and `Public areas only` was hiding all of them.** For
+`city_tower_social_d2`:
+
+| filter | result |
+|---|---|
+| `Public areas only` **on** | `placements=0 kept=0 absent=0 private=6` |
+| `Public areas only` **off** | `placements=1762 kept=1762 absent=66 private=0` |
+
+Every one of the Tower's six slice states is private. That is not a mission-versus-free-roam split
+here - a social space has no public bubble at all - so the flag that protects a strike's map from
+being read as free roam removes the entire Tower. Turn it off for social spaces.
+
+**But the Tower's authored placements do not include its vendors.** Measured on the full 1762-row
+extract: of the 28 `ai_*` cast tags `EntityNames.json` knows, **zero appear in it**. Only 9 of the
+205 distinct tags are entities at all - `combat_snowball_dispenser`, `lantern_cloud`,
+`fotc_stationary_sweeping`, `pot_frame_waving_batons` - and the other 196 are unnamed props and
+geometry. The scenario placement chain dresses the set; something else stands the cast on it.
+
+So the placement walk is the wrong table for a social space, and no filter over it can help. It is
+still worth running once per destination, because the report says what a world authors:
+
+```bash
+python tools/pkg/filter_placement_map.py            # report every distinct tag, named
+python tools/pkg/filter_placement_map.py --write    # narrow to the names that match --keep
+python tools/pkg/filter_placement_map.py --restore  # put the full extract back
+```
+
+### Authoring a social space by hand
+
+Since nothing in the packages says where Zavala stands, the recorder is the instrument. **Record
+point here** stamps the entity selected in the main spawner at the player's feet and republishes
+immediately, so a vendor appears the moment its point is recorded - the map is authored and
+verified in the same walk.
+
+1. **Clear map** first, or the props stay in it and eat the live budget.
+2. Pick the actor in the main spawner - `ai_zavala`, not the bare `zavala` model. The `ai_*` tag
+   opens the vendor screen; the model just stands there.
+3. Walk to where that character belongs and press **Record point here**.
+4. Repeat for the rest of the cast, then **Save map**.
+
+`Populate this destination` and `Extract every destination` both write map files, so neither is
+safe to press while a hand-made map is being kept.
+
+---
+
 ## Reference
 
 | file | what |
@@ -230,3 +279,5 @@ contains "ogre". It costs one junk tag out of 191 and a skipped placement attemp
 | `src/state/activity/destination/activity_destination_spawn_binding.cpp` | the spawn-set rule |
 | `tools/pkg/spawn_maps_build.py` | offline map writer |
 | `tools/pkg/spawn_map_audit.py` | offline roster audit |
+| `tools/pkg/filter_placement_map.py` | narrow a saved map to named entities |
+| `tools/pkg/tower_npc_map.py` | the Tower cast probe map |
