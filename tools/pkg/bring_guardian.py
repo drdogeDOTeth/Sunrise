@@ -108,6 +108,14 @@ BONE_ALIASES = {
     "rightfoot": "Right ankle", "rightankle": "Right ankle",
     "lefttoebase": "Left toe", "lefttoe": "Left toe",
     "righttoebase": "Right toe", "righttoe": "Right toe",
+    # VRM's own humanoid names. Every one of these was missing, so a VRM read through its
+    # humanoid table still lost both forearms and the entire leg chain — knees, thighs and toes —
+    # while the shoulder, upper arm and foot around them mapped, which is what makes the failure
+    # look like bad weights rather than a missing alias.
+    "leftlowerarm": "Left elbow", "rightlowerarm": "Right elbow",
+    "leftupperleg": "Left leg", "rightupperleg": "Right leg",
+    "leftlowerleg": "Left knee", "rightlowerleg": "Right knee",
+    "lefttoes": "Left toe", "righttoes": "Right toe",
     "leftthumbproximal": "Thumb0_L", "leftthumbintermediate": "Thumb1_L",
     "leftthumbdistal": "Thumb2_L",
     "rightthumbproximal": "Thumb0_R", "rightthumbintermediate": "Thumb1_R",
@@ -204,7 +212,7 @@ def preflight(*, glb: Path | None, inject: bool) -> None:
                     f"{len(info['materials'])} materials — Destiny only has five chest carriers. "
                     "Park extras on tank/mask/necklace/skin/twirl or they share an atlas."
                 )
-            unmapped = [name for name in info["joints"] if guess_bone(name) is None]
+            unmapped = [joint["name"] for joint in info["joints"] if joint_bone(joint) is None]
             if unmapped:
                 shown = ", ".join(unmapped[:8])
                 extra = "…" if len(unmapped) > 8 else ""
@@ -268,14 +276,53 @@ def guess_bone(group: str) -> str | None:
     return BONE_ALIASES.get(_norm(group))
 
 
+def joint_bone(joint: dict) -> str | None:
+    """@return Canonical rig bone for one joint, preferring the file's own humanoid role."""
+    if joint.get("role"):
+        hit = guess_bone(joint["role"])
+        if hit is not None:
+            return hit
+    return guess_bone(joint["name"])
+
+
+def vrm_humanoid_roles(document: dict) -> dict[int, str]:
+    """Canonical humanoid role per node, from the VRM extension.
+
+    A VRM carries its own humanoid table, so an exporter is free to name the nodes whatever it
+    likes - `upper_arm.R` out of Blender rather than `rightUpperArm`. Guessing from node names
+    therefore reports a rig as unmapped when the file states the mapping outright. Both spec
+    versions are read: 0.x keeps a list under `VRM`, 1.0 a dict under `VRMC_vrm`.
+    @return Role by node index, empty when the file is a plain GLB.
+    """
+    extensions = document.get("extensions", {})
+    roles: dict[int, str] = {}
+    one = extensions.get("VRMC_vrm", {}).get("humanoid", {}).get("humanBones", {})
+    if isinstance(one, dict):
+        for role, entry in one.items():
+            node = (entry or {}).get("node")
+            if isinstance(node, int):
+                roles[node] = role
+    zero = extensions.get("VRM", {}).get("humanoid", {}).get("humanBones", [])
+    if isinstance(zero, list):
+        for entry in zero:
+            node = (entry or {}).get("node")
+            role = (entry or {}).get("bone")
+            if isinstance(node, int) and isinstance(role, str):
+                roles.setdefault(node, role)
+    return roles
+
+
 def inspect_glb(path: Path) -> dict:
     document, binary = read_glb(path)
     nodes = document.get("nodes", [])
+    roles = vrm_humanoid_roles(document)
+    # Each joint carries the node name the retarget will see as a vertex group, and the canonical
+    # role when the file declares one. The role is what resolves; the name is what it resolves for.
     joints = []
     for skin in document.get("skins", []):
         for index in skin.get("joints", []):
             name = nodes[index].get("name", f"joint{index}")
-            joints.append(name)
+            joints.append({"name": name, "role": roles.get(index)})
     materials = []
     images = document.get("images", [])
     views = document.get("bufferViews", [])
@@ -326,10 +373,9 @@ def print_inspect(info: dict) -> None:
     log(f"meshes  {', '.join(info['meshes']) or '(none)'}")
     log(f"joints  {len(info['joints'])}")
     unmapped = []
-    for name in info["joints"]:
-        hit = guess_bone(name)
-        if hit is None:
-            unmapped.append(name)
+    for joint in info["joints"]:
+        if joint_bone(joint) is None:
+            unmapped.append(joint["name"])
     if unmapped:
         log("unmapped joints (will be ignored unless you pass --bone-map):")
         for name in unmapped:
@@ -414,6 +460,83 @@ def install_textures(glb: Path, info: dict, dest: Path, game_art: Path) -> dict[
         used[slot] = (albedo_name, mr_name)
         log(f"  atlas {slot}: {albedo_name} / {mr_name}")
     return used
+
+
+def retarget_tables() -> tuple[dict[str, int], int, int]:
+    """Reads `retarget_mesh.py`'s own bone tables rather than keeping a second copy of them.
+
+    Parsed with `ast` so a renamed or moved table fails loudly here instead of quietly
+    disagreeing with the retarget that actually runs.
+    @return BONE_MAP, SPINE_UPPER, CHEST_BONE.
+    """
+    import ast
+
+    tree = ast.parse((HERE / "retarget_mesh.py").read_text(encoding="utf-8"))
+    found: dict[str, object] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if isinstance(target, ast.Name) and target.id in {
+            "BONE_MAP", "SPINE_UPPER", "CHEST_BONE"
+        }:
+            found[target.id] = ast.literal_eval(node.value)
+    missing = {"BONE_MAP", "SPINE_UPPER", "CHEST_BONE"} - found.keys()
+    if missing:
+        raise SystemExit(f"retarget_mesh.py no longer defines {', '.join(sorted(missing))}")
+    return found["BONE_MAP"], found["SPINE_UPPER"], found["CHEST_BONE"]
+
+
+def write_bone_map(info: dict, dest: Path) -> Path | None:
+    """Turns the file's humanoid table into the group -> joint map the retarget consumes.
+
+    Resolving the role is not enough on its own: the retarget matches Blender **vertex groups**,
+    which carry the exporter's node names (`upper_leg.L`), not the canonical roles. So the roles
+    are used here to write the mapping out against the names the retarget will actually see.
+
+    @return Path to the written map, or None for a plain GLB that declares no humanoid.
+    """
+    if not any(joint.get("role") for joint in info["joints"]):
+        return None
+    bones, spine_upper, chest_bone = retarget_tables()
+    by_role = {joint["role"]: joint["name"] for joint in info["joints"] if joint.get("role")}
+    groups: dict[str, int] = {}
+    payload: dict[str, object] = {}
+
+    for joint in info["joints"]:
+        role = joint.get("role")
+        if not role:
+            continue
+        canonical = guess_bone(role)
+        if canonical is None or canonical == "Chest":
+            continue
+        if canonical in bones:
+            groups[joint["name"]] = bones[canonical]
+        elif canonical.endswith(("_L", "_R")):
+            # Fingers fold onto the wrist. The retarget's own finger indices sit above the body
+            # ceiling and the chest draw has never posed them without needles, so the documented
+            # safe default is what gets written.
+            groups[joint["name"]] = 21 if canonical.endswith("_L") else 22
+
+    # The retarget splits one chest group between two joints by height, which exists to fake an
+    # UpperChest the source does not have. A VRM that declares both needs no split at all.
+    chest = by_role.get("chest")
+    upper = by_role.get("upperChest")
+    if chest and upper:
+        groups[chest] = spine_upper
+        groups[upper] = chest_bone
+    elif chest or upper:
+        payload["chest_group"] = chest or upper
+
+    payload["groups"] = groups
+    out = dest / "bone_map.json"
+    out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    log(f"bone map: {len(groups)} groups from the file's humanoid table -> {out.name}")
+    if "chest_group" in payload:
+        log(f"  chest group {payload['chest_group']!r} splits {spine_upper}/{chest_bone} by height")
+    elif chest and upper:
+        log(f"  chest {chest!r} -> {spine_upper}, upperChest {upper!r} -> {chest_bone}")
+    return out
 
 
 def run_retarget(glb: Path, dest: Path, blender: Path, material_map: Path,
@@ -522,7 +645,10 @@ def run_pipeline(glb: Path, *, inject: bool, dry_run: bool,
     atlases = install_textures(glb, info, dest, game_art)
     blender = find_blender()
     log(f"blender: {blender}")
-    body = run_retarget(glb, dest, blender, material_map, bone_map)
+    # A hand-written map always wins; otherwise the file's own humanoid table is used, which is
+    # the difference between a VRM keeping its legs and forearms and losing them.
+    body = run_retarget(glb, dest, blender, material_map,
+                        bone_map or write_bone_map(info, dest))
     chest, hands = run_cut(body)
     lines = parts_from_groups(chest, hands, atlases)
     write_parts(lines, dest, game_art)
