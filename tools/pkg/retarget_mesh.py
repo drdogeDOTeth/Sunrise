@@ -127,6 +127,12 @@ FINGER_MAP = {
     "LittleFinger1_R": 49, "LittleFinger2_R": 59, "LittleFinger3_R": 59,
 }
 WRIST_FOLD = {name: (21 if name.endswith("_L") else 22) for name in FINGER_MAP}
+# Canonical pose-bone name -> the name this armature actually uses, supplied by the bone map.
+# `BONE_MAP` above is keyed by *vertex group*; the pose step below indexes the **armature**, which
+# is a different namespace, and a VRM out of Blender satisfies neither by accident - its bones are
+# `upper_arm.L`, not "Left arm". Empty for a rig that already uses the canonical names.
+BONE_RENAME = {}
+
 
 
 def _load_json_map(path):
@@ -141,6 +147,10 @@ def _load_json_map(path):
         if chest:
             global CHEST_GROUP
             CHEST_GROUP = chest
+        bones = data.get("bones")
+        if bones:
+            global BONE_RENAME
+            BONE_RENAME = dict(bones)
         return groups, fingers
     return dict(data), {}
 
@@ -169,6 +179,7 @@ ARM_CHAINS = [
 ]
 MAX_INFLUENCES = 4
 
+
 # The hand fit. `ARM_CHAINS` aims each bone from the *rig's* joint, but the GLB's upper arm hangs
 # from its own shoulder — ~4.8 cm inboard of rig joint 27 — so the error is inherited all the way
 # down and the wrist lands 4.9 cm from the joint that drives it. The game rotates our hand about
@@ -191,6 +202,17 @@ HAND_FIT = [
      {"index": "IndexFinger1_R", "middle": "MiddleFinger1_R",
       "little": "LittleFinger1_R", "thumb": "Thumb0_R"}),
 ]
+
+if BONE_RENAME:
+    # Applied to the tables once, so every lookup below already holds a real armature bone name.
+    ARM_CHAINS = [(BONE_RENAME.get(name, name), head, tail) for name, head, tail in ARM_CHAINS]
+    HAND_FIT = [(side,
+                 BONE_RENAME.get(forearm, forearm),
+                 BONE_RENAME.get(wrist, wrist),
+                 {key: BONE_RENAME.get(bone, bone) for key, bone in knuckles.items()})
+                for side, forearm, wrist, knuckles in HAND_FIT]
+    print(f"bone rename: {len(BONE_RENAME)} canonical names mapped onto this armature")
+
 
 
 def to_destiny(p):

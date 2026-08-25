@@ -576,6 +576,14 @@ def write_bone_map(info: dict, dest: Path) -> Path | None:
     if inherited:
         log(f"  {inherited} unnamed joints inherit their nearest mapped ancestor")
 
+    # The pose step is a second, separate namespace: it looks bones up in the *armature* by
+    # canonical name ("Left arm"), while `groups` is keyed by vertex group. An exporter that names
+    # its bones `upper_arm.L` satisfies neither by accident, so the translation is written out too.
+    payload["bones"] = {
+        canonical: joint["name"]
+        for joint in info["joints"]
+        if joint.get("role") and (canonical := guess_bone(joint["role"])) and canonical != "Chest"
+    }
     payload["groups"] = groups
     out = dest / "bone_map.json"
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
