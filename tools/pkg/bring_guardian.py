@@ -316,13 +316,27 @@ def inspect_glb(path: Path) -> dict:
     document, binary = read_glb(path)
     nodes = document.get("nodes", [])
     roles = vrm_humanoid_roles(document)
+    # Parent per node, so a joint the humanoid table does not name can inherit from the nearest
+    # ancestor it does. Hair and skirt chains are the reason: a VRM rigs them as spring bones,
+    # Destiny has no such thing, and an ignored group leaves those vertices with no weight at all.
+    parents: dict[int, int] = {}
+    for index, node in enumerate(nodes):
+        for child in node.get("children", []) or []:
+            parents[child] = index
     # Each joint carries the node name the retarget will see as a vertex group, and the canonical
     # role when the file declares one. The role is what resolves; the name is what it resolves for.
+    # Deduplicated by node: a model with several skins lists the shared joints in each of them,
+    # and counting those repeats reports a rig several times larger than it is.
     joints = []
+    seen: set[int] = set()
     for skin in document.get("skins", []):
         for index in skin.get("joints", []):
+            if index in seen:
+                continue
+            seen.add(index)
             name = nodes[index].get("name", f"joint{index}")
-            joints.append({"name": name, "role": roles.get(index)})
+            joints.append({"name": name, "role": roles.get(index),
+                           "node": index, "parent": parents.get(index)})
     materials = []
     images = document.get("images", [])
     views = document.get("bufferViews", [])
@@ -377,7 +391,15 @@ def print_inspect(info: dict) -> None:
         if joint_bone(joint) is None:
             unmapped.append(joint["name"])
     if unmapped:
-        log("unmapped joints (will be ignored unless you pass --bone-map):")
+        humanoid = any(joint.get("role") for joint in info["joints"])
+        if humanoid:
+            # These still reach the rig: the generated bone map walks each one up to the nearest
+            # ancestor the humanoid table does name, so a hair chain rides the head rather than
+            # losing its weights. Saying "ignored" here sent the last intake looking for a fault.
+            log(f"{len(unmapped)} joints the humanoid table does not name; each inherits its "
+                "nearest mapped ancestor:")
+        else:
+            log("unmapped joints (will be ignored unless you pass --bone-map):")
         for name in unmapped:
             log(f"  {name}")
     log("materials -> Destiny carrier slots (edit with --material-map):")
@@ -520,6 +542,7 @@ def write_bone_map(info: dict, dest: Path) -> Path | None:
 
     # The retarget splits one chest group between two joints by height, which exists to fake an
     # UpperChest the source does not have. A VRM that declares both needs no split at all.
+    # Settled before inheritance runs, so a chain hanging off the chest can descend from it.
     chest = by_role.get("chest")
     upper = by_role.get("upperChest")
     if chest and upper:
@@ -527,6 +550,31 @@ def write_bone_map(info: dict, dest: Path) -> Path | None:
         groups[upper] = chest_bone
     elif chest or upper:
         payload["chest_group"] = chest or upper
+
+    # Everything the humanoid table does not name - hair, skirts, extra finger bases - inherits
+    # the nearest ancestor that is mapped. A spring chain hanging off the head then rides the head
+    # rigidly, which is the most Destiny's skeleton can do; an ignored group would instead leave
+    # those vertices with no weight at all. The chest-split group is deliberately not a source,
+    # because it has no single joint index to inherit.
+    by_node = {joint["node"]: joint for joint in info["joints"] if joint.get("node") is not None}
+    resolved = {node: groups[joint["name"]]
+                for node, joint in by_node.items() if joint["name"] in groups}
+    inherited = 0
+    for joint in info["joints"]:
+        if joint["name"] in groups or joint.get("node") is None:
+            continue
+        walk = joint.get("parent")
+        # Bounded by the joint count, so a malformed hierarchy cannot loop.
+        for _ in range(len(by_node) + 1):
+            if walk is None:
+                break
+            if walk in resolved:
+                groups[joint["name"]] = resolved[walk]
+                inherited += 1
+                break
+            walk = by_node[walk]["parent"] if walk in by_node else None
+    if inherited:
+        log(f"  {inherited} unnamed joints inherit their nearest mapped ancestor")
 
     payload["groups"] = groups
     out = dest / "bone_map.json"
