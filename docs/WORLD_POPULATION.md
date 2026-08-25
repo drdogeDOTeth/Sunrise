@@ -131,6 +131,13 @@ one destination per frame to keep the game's own session alive.
 > `Populate this destination` overwrites one the same way. Recover with
 > `python tools/pkg/spawn_maps_build.py --clean` followed by `--write`.
 
+**`Public areas only` throws away every social space.** Measured in the Tower 2026-08-24:
+`ev=placement_extract placements=0 kept=0 absent=0 private=6` — all six of its slice sets are
+private, so the filter rejected the destination before reading one placement record, and publishing
+the empty result wiped the live map (the saved file survives; `Load map` restores it). A social
+space needs that checkbox **off**, and `Combatants only` off as well if the point is to reach its
+NPCs. This is also a large part of the "175 of 466 fail" count below.
+
 Its two failure buckets are reported as bare counts:
 
 - `skippedNoPlacements` — the walk found nothing, or `extract` refused the destination
