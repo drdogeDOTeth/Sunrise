@@ -680,7 +680,7 @@ nothing. The only things that distinguish it: it is **3–10x larger** (533 bloc
 Do not invent one; five theories died already.
 
 **We do not need the mechanism, because we do not need the file.** `0699_7` and `0699_8` are both
-flat-colour paint sweeps. `0699_6` (the `10:12` group) is mixed mesh work and must stay. Per-package
+flat-colour paint sweeps. `0699_6` (the `10:12` group) is mixed mesh work and must stay. **WRONG - corrected 2026-08-24.** That was decided when only the Tower had been tested. `0699_6` is Tower-safe and **Moon-fatal**: 80 layers load the Moon in 6.0s, adding only `0699_6` takes it to 33.5s and a failed load. It is also not needed - the character looked correct without it. It is dropped in `20260824-200131.json`. Per-package
 truncation is legal — block tables never cross packages.
 
 **The focus confound is dead.** Two failures (`no2103`, `64layers`) happened with the window focused

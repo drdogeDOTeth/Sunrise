@@ -1,6 +1,6 @@
 {
-  "saved": "1970-01-02T00:00:00",
-  "note": "bisect: --live-except w64_globals_06dc,w64_sandbox_0699, w64_sandbox_020c capped at 2",
+  "saved": "2026-08-24T20:01:31",
+  "note": "103 layers: WORLDS FIXED, final. v25 minus exactly three files - 0699_6 (Moon), 020c_8 (Titan), globals_06dc_7 (Titan). All 80 mesh layers intact. Moon+Titan+Tower load in ~6s. Character is v25 except the race-glove/head blank, which cannot be done as a package patch: a NO-OP patch on globals_06dc hangs Titan too, so the package cannot carry a layer at all. Move that blank to a runtime draw hook.",
   "count": 103,
   "live": [
     {
