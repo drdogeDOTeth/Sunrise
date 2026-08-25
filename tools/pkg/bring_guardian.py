@@ -606,6 +606,12 @@ def run_retarget(glb: Path, dest: Path, blender: Path, material_map: Path,
     ]
     if bone_map and bone_map.is_file():
         command.extend(["--bone-map", str(bone_map)])
+    # Opt-in, so a GLB already authored against rig.json keeps the exact path that produced the
+    # working body. Pass it for a model authored at its own scale.
+    if flag("--fit-proportions"):
+        command.append("--fit-proportions")
+        if option("--proportion-blend"):
+            command.extend(["--proportion-blend", option("--proportion-blend")])
     log("retarget: " + " ".join(command))
     subprocess.run(command, check=True, cwd=str(HERE))
     if not out.is_file():

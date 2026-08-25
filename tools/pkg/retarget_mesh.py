@@ -66,6 +66,13 @@ RETARGET = "--no-retarget" not in _ARGS
 KEEP_SEAMS = "--keep-seams" in _ARGS
 FINGERS = "--fingers" in _ARGS
 FIT_HANDS = "--no-fit-hands" not in _ARGS
+# Scale the source onto the rig before posing it. Off by default: a GLB already authored against
+# `rig.json` (the v25 body) measures ~1.0 on every segment and must not be disturbed. A model
+# authored at its own scale needs it, and without it the mesh is weighted to a skeleton it does
+# not overlap - SchizoAxe's hips sat 0.57 m below rig joint 1.
+FIT_PROPORTIONS = "--fit-proportions" in _ARGS
+_BLEND_OPT = _take_opt(_ARGS, "--proportion-blend")
+PROPORTION_BLEND = float(_BLEND_OPT) if _BLEND_OPT else 1.0
 HAND_TARGETS = os.path.join(HERE, "objs", "skeleton", "hand_targets.json")
 
 # Artistic roll, applied after the fit: degrees about the forearm axis (pronation - the palm-up to
@@ -177,6 +184,28 @@ ARM_CHAINS = [
     ("Left arm", 27, 19), ("Left elbow", 19, 21),
     ("Right arm", 28, 20), ("Right elbow", 20, 22),
 ]
+# Consecutive bone pairs down each arm. A *length* is measured across a pair, which ARM_CHAINS
+# cannot express: it names the bone and the joints it points between, not the bone below it that
+# terminates the segment. The rig joints come from BONE_MAP rather than a second hand-written
+# table - measured 2026-08-25, a copied table had the upper arm spanning 27->19 (0.228 m) when
+# BONE_MAP puts that bone on joint 15, making the real segment 15->19 (0.081 m).
+# Every limb top-down, walked parent before child so a bone is seated before its own child is.
+# The rig joint per bone comes from BONE_MAP rather than a second hand-written table - measured
+# 2026-08-25, a copied table had the upper arm spanning 27->19 (0.228 m) when BONE_MAP puts that
+# bone on joint 15, making the real segment 15->19 (0.081 m).
+#
+# The legs and spine are here for the same reason the arms are: fitting arms alone left the feet
+# floating 42.5 cm over the rig's toe joint, because `fit_scale` seats the hips and a chibi's
+# legs are far shorter than the frame below those hips.
+# "Chest" is deliberately absent - it is the one group split across two joints by height, so it
+# has no single joint to seat.
+FIT_CHAINS = [
+    ["Hips", "Spine", "Neck", "Head"],
+    ["Left shoulder", "Left arm", "Left elbow", "Left wrist"],
+    ["Right shoulder", "Right arm", "Right elbow", "Right wrist"],
+    ["Left leg", "Left knee", "Left ankle", "Left toe"],
+    ["Right leg", "Right knee", "Right ankle", "Right toe"],
+]
 MAX_INFLUENCES = 4
 
 
@@ -229,6 +258,127 @@ def load_rig():
     with open(RIG) as fh:
         data = json.load(fh)
     return {joint["bone"]: Vector(joint["position"]) for joint in data["joints"]}
+
+
+def armature_bone(canonical):
+    """@return The name this armature uses for a canonical bone."""
+    return BONE_RENAME.get(canonical, canonical)
+
+
+def fit_scale(armature, meshes, rig):
+    """Uniformly scale the source onto the rig, then seat its hips on rig joint 1.
+
+    Ported from the RDR2 pipeline's `align_scale_and_origin`. **Hips->head rise is the yardstick**
+    rather than overall height, because it is the measurement least affected by the difference
+    between the source's T-pose and Destiny's A-pose - both are vertical either way - and because
+    total height is dominated by whatever the character has on its head.
+
+    Without this the mesh keeps its authored scale while the weights address a rig it does not
+    overlap. Nothing needed it until now: the v25 body was modelled against `rig.json`.
+    @return The scale applied.
+    """
+    hips, head = armature_bone("Hips"), armature_bone("Head")
+    bones = armature.data.bones
+    if hips not in bones or head not in bones:
+        print(f"  no '{hips}'/'{head}' bone; scale left alone")
+        return 1.0
+    source_hips = bones[hips].head_local.copy()
+    source_rise = bones[head].head_local.z - source_hips.z
+    rig_hips = to_blender(rig[1])
+    rig_rise = to_blender(rig[18]).z - rig_hips.z
+    if abs(source_rise) < 1e-6:
+        return 1.0
+    scale = rig_rise / source_rise
+    offset = rig_hips - (source_hips * scale)
+    print(f"  hips->head rise: source {source_rise:.3f} rig {rig_rise:.3f} -> scale x{scale:.4f}")
+    print(f"  hips seated at rig joint 1: offset ({offset.x:+.3f}, {offset.y:+.3f}, {offset.z:+.3f})")
+
+    # glTF parents the skinned meshes to the armature, so a transform set on both would apply
+    # twice. Detach first, keeping the world transform.
+    if meshes:
+        bpy.ops.object.select_all(action='DESELECT')
+        for mesh in meshes:
+            mesh.select_set(True)
+        bpy.context.view_layer.objects.active = meshes[0]
+        bpy.ops.object.parent_clear(type='CLEAR_KEEP_TRANSFORM')
+
+    transform = Matrix.Translation(offset) @ Matrix.Scale(scale, 4)
+    for obj in [armature, *meshes]:
+        obj.matrix_world = transform @ obj.matrix_world
+    bpy.context.view_layer.update()
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in [armature, *meshes]:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = armature
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    # Re-parent so the pose still drives the meshes when it is baked further down.
+    bpy.ops.object.select_all(action='DESELECT')
+    for mesh in meshes:
+        mesh.select_set(True)
+    armature.select_set(True)
+    bpy.context.view_layer.objects.active = armature
+    bpy.ops.object.parent_set(type='ARMATURE_NAME')
+    return scale
+
+
+def fit_segments(armature, rig, blend=1.0):
+    """Scale each arm segment to the rig's own length for it, parent before child.
+
+    Ported from the RDR2 pipeline's per-segment fit. The factor is geometric
+    (`(target / current) ** blend`) so the blend is symmetric between a segment that must grow and
+    one that must shrink, and 0 is exactly 1.0 everywhere.
+
+    This is what `fit_hands` was doing single-handed: with no upper-arm fit and no uniform scale,
+    the whole error landed on the forearm as one x4.9 stretch that still left the wrist 55 cm out.
+    @return Segments fitted.
+    """
+    fitted = 0
+    world = armature.matrix_world
+
+    def place(canonical, joint):
+        """Move one bone's head onto its rig joint. Rigid: its children come with it."""
+        bone = armature.pose.bones.get(armature_bone(canonical))
+        if bone is None or joint not in rig:
+            return None
+        matrix = world @ bone.matrix
+        before = matrix.translation.copy()
+        wanted = to_blender(rig[joint])
+        if blend < 1.0:
+            wanted = before.lerp(wanted, blend)
+        matrix.translation = wanted
+        bone.matrix = world.inverted() @ matrix
+        bpy.context.view_layer.update()
+        return (wanted - before).length
+
+    # Every joint is placed on the rig's own joint, root first, so each is exact rather than
+    # accumulated from a direction and a length. Destiny's rig carries all four arm joints
+    # (27 shoulder, 15 upper arm, 19 elbow, 21 wrist), so there is nothing left to infer.
+    #
+    # Aiming and scaling cannot get here on this source. ARM_CHAINS aims the upper arm along
+    # 27->19 while BONE_MAP binds that bone to joint 15, so the aim and the segment disagree; and
+    # glTF stores no bone tails, so `parent.scale.y` stretches along a synthesised +Z axis sitting
+    # 89 deg off the arm (measured 2026-08-25: the child moved 0.1946 -> 0.1946, not at all).
+    # Placement is indifferent to both. The existing aim still sets how the limb is oriented about
+    # its own axis; only position is taken over here.
+    for chain in FIT_CHAINS:
+        for canonical in chain:
+            joint = BONE_MAP.get(canonical)
+            moved = place(canonical, joint)
+            if moved is None:
+                print(f"  {canonical:>15}  no bone or no rig joint {joint}; skipped")
+                continue
+            fitted += 1
+            print(f"  {canonical:>15} -> rig joint {joint:<3} moved {moved * 100:6.2f} cm")
+
+    # Report the thing that actually matters, measured rather than inferred from the factors.
+    for canonical in ("Left wrist", "Right wrist"):
+        bone = armature.pose.bones.get(armature_bone(canonical))
+        joint = BONE_MAP.get(canonical)
+        if bone is None or joint not in rig:
+            continue
+        error = ((world @ bone.matrix).translation - to_blender(rig[joint])).length
+        print(f"  {canonical} landed {error * 100:.2f} cm from rig joint {joint}")
+    return fitted
 
 
 def align(armature, name, direction_world):
@@ -504,6 +654,10 @@ def main():
     if RETARGET:
         rig = load_rig()
         bpy.context.view_layer.objects.active = armature
+        if FIT_PROPORTIONS:
+            print("proportion fit:")
+            fit_scale(armature, meshes, rig)
+            meshes = [o for o in bpy.data.objects if o.type == 'MESH']
         bpy.ops.object.mode_set(mode='POSE')
         for name, head_bone, tail_bone in ARM_CHAINS:
             if head_bone not in rig or tail_bone not in rig:
@@ -513,6 +667,10 @@ def main():
             was, now = align(armature, name, target)
             angle = was.angle(now)
             print(f"  {name:>14}: rig {head_bone}->{tail_bone}, turned {angle * 57.2958:5.1f} deg")
+        if FIT_PROPORTIONS:
+            # After the aim, so a segment is scaled along the direction it will actually point.
+            print("segment fit:")
+            fit_segments(armature, rig, PROPORTION_BLEND)
         if FIT_HANDS:
             print("hand fit:")
             fit_hands(armature)
