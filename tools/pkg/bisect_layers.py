@@ -23,6 +23,11 @@ Usage:
     python bisect_layers.py --live-all
     python bisect_layers.py --live w64_sandbox_037d,w64_globals_0211
     python bisect_layers.py --live-except w64_sandbox_037c,w64_sandbox_0698
+    python bisect_layers.py --live w64_sandbox_020c --depth 2   # keep patches 6 and 7 only
+    python bisect_layers.py --from=20260823-152042.json --live-except w64_sandbox_0699
+
+`--from` matters once a reduced set has been saved as the known-good: the newest snapshot no
+longer holds the layers a recovery needs to put back, so name the fuller one.
 
 Then:
     python known_good.py --restore --snapshot=19700102-bisect.json
@@ -112,7 +117,15 @@ def main() -> None:
     args = sys.argv[1:]
     if not args:
         raise SystemExit(__doc__)
+    # The source is normally the newest real snapshot, but once a reduced set has been saved as
+    # known-good that snapshot no longer contains the layers a recovery needs to put back. Naming
+    # the fuller snapshot is how you re-add something the current known-good dropped.
     source = newest_real()
+    for arg in args:
+        if arg.startswith("--from="):
+            source = STORE / arg.split("=", 1)[1]
+            if not source.exists():
+                raise SystemExit(f"no such snapshot: {source}")
     grouped = stacks(layers(source))
     touched = read_during_load()
 
@@ -128,11 +141,43 @@ def main() -> None:
             print(f"  {mark}  {key:<22} {len(items):>2} layer(s)  [patch {patches}]")
         return
 
+    # Within a stack the only safe cut is from the top: keeping patch 6 and 8 while dropping 7
+    # dangles 8, which spins the game at character select. So a depth keeps the bottom N.
+    depth = None
+    if "--depth" in args:
+        index = args.index("--depth")
+        if index + 1 >= len(args):
+            raise SystemExit("--depth needs a layer count")
+        depth = int(args[index + 1])
+        if depth < 0:
+            raise SystemExit("--depth cannot be negative")
+
+    # Per-stack caps, for the shape a confirmed result needs: keep everything except one whole
+    # stack, and cut one other stack down to its safe bottom. A single --depth cannot say that.
+    caps: dict[str, int] = {}
+    if "--truncate" in args:
+        index = args.index("--truncate")
+        if index + 1 >= len(args):
+            raise SystemExit("--truncate needs stack=N[,stack=N...]")
+        for pair in args[index + 1].split(","):
+            if "=" not in pair:
+                raise SystemExit(f"--truncate wants stack=N, got {pair!r}")
+            name, _sep, count = pair.strip().partition("=")
+            caps[name.strip()] = int(count)
+
     def pick(keys: set[str], note: str) -> None:
-        unknown = keys - set(grouped)
+        unknown = (keys | set(caps)) - set(grouped)
         if unknown:
             raise SystemExit(f"unknown stack(s): {sorted(unknown)}")
-        write({k: v for k, v in grouped.items() if k in keys}, note)
+        chosen = {k: v for k, v in grouped.items() if k in keys}
+        if depth is not None:
+            chosen = {k: v[:depth] for k, v in chosen.items()}
+            note = f"{note}, bottom {depth} of each stack"
+        for name, count in caps.items():
+            if name in chosen:
+                chosen[name] = chosen[name][:count]
+                note = f"{note}, {name} capped at {count}"
+        write({k: v for k, v in chosen.items() if v}, note)
 
     if "--live-all" in args:
         pick(set(grouped), f"bisect: all {len(grouped)} stacks live (equals {source.name})")
