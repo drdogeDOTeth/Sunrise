@@ -14,6 +14,7 @@
 #include <string_view>
 
 #include "../../../core/logging/log.h"
+#include "../../../core/settings/settings.h"
 #include "../../diagnostics/module_range.h"
 #include "../../hooking/detour.h"
 #include "../../patterns/image_scan.h"
@@ -86,7 +87,7 @@ std::atomic_bool g_limitReported{};
  *
  * F8 still bounds the read trace, which is noisy and physical; this one is bounded by kEventLimit.
  */
-std::atomic_bool g_captureFromStart{true};
+std::atomic_bool g_captureFromStart{false};
 
 /** @return True while SEntityModel construction should be recorded. */
 [[nodiscard]] bool capture_active() noexcept {
@@ -95,6 +96,155 @@ std::atomic_bool g_captureFromStart{true};
 diagnostics::ModuleRange g_gameRange{};
 thread_local bool g_expectEntityModelConstructor{};
 thread_local ULONGLONG g_entityModelExpectationDeadline{};
+
+/**
+ * The replicated player-body mesh, head through hands, in two globals copies.
+ *
+ * `0x815B9521` (globals_06dc) is the one the game reads; `0x80FDBE41` (globals_03ed) is a second
+ * copy that measurably does nothing when patched alone. Both are edited here because doing so is
+ * free - a tag that never materializes costs one comparison. The UI copy `0x80EFC649` in ui_037e
+ * is deliberately left alone: wrapping it spun the character-select cards.
+ */
+constexpr std::array<std::uint32_t, 2> kRaceBodyTags{0x815B9521U, 0x80FDBE41U};
+
+// Serialized entity-model layout. Kept in step with `tools/pkg/parse_models.py`, which is where it
+// was worked out and where the offline injector still reads it.
+constexpr std::size_t kMeshArrayAt = 0x10;
+constexpr std::size_t kMeshStride = 0x88;
+constexpr std::size_t kPartArrayAt = 0x18;
+constexpr std::size_t kPartStride = 0x20;
+constexpr std::size_t kPartIndexCountAt = 0x0C;
+constexpr std::size_t kArrayHeaderBytes = 0x10;
+/** A model blob declares its own byte length first. Anything outside this is not one. */
+constexpr std::int64_t kMinModelBytes = 0x20;
+constexpr std::int64_t kMaxModelBytes = 16 * 1024 * 1024;
+/** The measured body is 3 meshes and 90 parts; this only has to exclude a garbage count. */
+constexpr std::int64_t kMaxArrayCount = 4096;
+
+/** @return True when this tag is one of the race-body copies. */
+[[nodiscard]] bool is_race_body(std::uint32_t tag) noexcept {
+    return std::find(kRaceBodyTags.begin(), kRaceBodyTags.end(), tag) != kRaceBodyTags.end();
+}
+
+/**
+ * Reads from the game's own memory without faulting on an unmapped or freed payload.
+ * @return True when Windows copied the whole span.
+ */
+[[nodiscard]] bool read_at(const void* address, void* output, std::size_t size) noexcept {
+    SIZE_T read = 0;
+    return ReadProcessMemory(GetCurrentProcess(), address, output, size, &read) != FALSE
+           && read == size;
+}
+
+/**
+ * Writes one index count back. `WriteProcessMemory` is used rather than a store because the
+ * deserialization buffer's protection is not ours to assume.
+ * @return True when Windows copied it.
+ */
+[[nodiscard]] bool write_u32(void* address, std::uint32_t value) noexcept {
+    SIZE_T written = 0;
+    return WriteProcessMemory(GetCurrentProcess(), address, &value, sizeof value, &written) != FALSE
+           && written == sizeof value;
+}
+
+/**
+ * Resolves one of the blob's relative array headers.
+ * @param base Start of the serialized model.
+ * @param length Declared length of the model, which bounds every offset.
+ * @param at Offset of the array's count field.
+ * @param count Receives the element count.
+ * @param start Receives the offset of the first element.
+ * @return True when the header is present and lands inside the blob.
+ */
+[[nodiscard]] bool array_at(const std::byte* base,
+                            std::int64_t length,
+                            std::int64_t at,
+                            std::int64_t& count,
+                            std::int64_t& start) noexcept {
+    if (at < 0 || at + 16 > length) {
+        return false;
+    }
+    std::int64_t header[2]{};
+    if (!read_at(base + at, header, sizeof header)) {
+        return false;
+    }
+    const std::int64_t begin = at + 8 + header[1] + static_cast<std::int64_t>(kArrayHeaderBytes);
+    if (header[0] <= 0 || header[0] > kMaxArrayCount || begin <= 0 || begin > length) {
+        return false;
+    }
+    count = header[0];
+    start = begin;
+    return true;
+}
+
+/**
+ * Zeroes every part's index count in a serialized entity model, so it draws nothing.
+ *
+ * This is `blank_model` from `tools/pkg/inject_mesh.py`, in place and at construction time. Every
+ * offset is bounded by the blob's own declared length, and a blob that does not declare a sane one
+ * is left untouched - a wrong guess here would corrupt a live model rather than hide it.
+ *
+ * @param payload Serialized model the renderer is about to build from.
+ * @param tag Tag being materialized, for the report.
+ */
+void blank_serialized_model(void* payload, std::uint32_t tag) noexcept {
+    if (payload == nullptr) {
+        return;
+    }
+    auto* const base = static_cast<std::byte*>(payload);
+    std::int64_t length = 0;
+    if (!read_at(base, &length, sizeof length) || length < kMinModelBytes
+        || length > kMaxModelBytes) {
+        return;
+    }
+    std::int64_t meshCount = 0;
+    std::int64_t meshStart = 0;
+    if (!array_at(base, length, static_cast<std::int64_t>(kMeshArrayAt), meshCount, meshStart)) {
+        return;
+    }
+    std::size_t blanked = 0;
+    for (std::int64_t mesh = 0; mesh < meshCount; ++mesh) {
+        const std::int64_t record = meshStart + mesh * static_cast<std::int64_t>(kMeshStride);
+        if (record + static_cast<std::int64_t>(kMeshStride) > length) {
+            break;
+        }
+        std::int64_t partCount = 0;
+        std::int64_t partStart = 0;
+        if (!array_at(base,
+                      length,
+                      record + static_cast<std::int64_t>(kPartArrayAt),
+                      partCount,
+                      partStart)) {
+            continue;
+        }
+        for (std::int64_t part = 0; part < partCount; ++part) {
+            const std::int64_t at = partStart + part * static_cast<std::int64_t>(kPartStride);
+            if (at + static_cast<std::int64_t>(kPartStride) > length) {
+                break;
+            }
+            if (write_u32(base + at + kPartIndexCountAt, 0)) {
+                ++blanked;
+            }
+        }
+    }
+    std::array<char, 128> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=race_blank stage=model tag=0x%08X meshes=%lld "
+                                      "parts=%zu result=%s",
+                                      tag,
+                                      static_cast<long long>(meshCount),
+                                      blanked,
+                                      blanked != 0 ? "ok" : "none");
+    if (written <= 0) {
+        return;
+    }
+    core::log::write(core::log::Channel::client,
+                     blanked != 0 ? core::log::Level::info : core::log::Level::warn,
+                     std::string_view(line.data(),
+                                      (std::min)(static_cast<std::size_t>(written),
+                                                 line.size() - 1)));
+}
 
 /** @return Installed trampoline for one hook slot, or null during a detach transition. */
 template <typename Function> [[nodiscard]] Function original(HookSlot slot) noexcept {
@@ -411,6 +561,11 @@ __declspec(noinline) void* __fastcall resource_constructor(void* destination,
                                                             std::uint32_t mode,
                                                             std::uint32_t tag,
                                                             const void* payload) noexcept {
+    // Before construction, because this is the same edit the package layer used to make and the
+    // renderer must build from the edited bytes. See `blank_race_body`.
+    if (is_race_body(tag) && core::settings::get().client.blankRaceBody) {
+        blank_serialized_model(const_cast<void*>(payload), tag);
+    }
     const ResourceConstructor next =
         original<ResourceConstructor>(HookSlot::resourceConstructor);
     void* const result =
@@ -473,11 +628,17 @@ bool install() noexcept {
     }
     g_eventCount.store(0, std::memory_order_relaxed);
     g_limitReported.store(false, std::memory_order_relaxed);
+    // The blank needs this detour but not the recording, and the recording is expensive - a world
+    // load performs thousands of lookups. So capture follows its own setting rather than install.
+    const bool tracing = core::settings::get().client.modelTrace;
+    g_captureFromStart.store(tracing, std::memory_order_relaxed);
     g_installed.store(true, std::memory_order_release);
     core::log::write(core::log::Channel::client,
                      core::log::Level::info,
-                     "ev=model_class_trace stage=install result=ok class=0x808073A5 "
-                     "resource_tag=enabled capture=from_start");
+                     tracing ? "ev=model_class_trace stage=install result=ok class=0x808073A5 "
+                               "resource_tag=enabled capture=from_start"
+                             : "ev=model_class_trace stage=install result=ok class=0x808073A5 "
+                               "resource_tag=enabled capture=off");
     return true;
 }
 

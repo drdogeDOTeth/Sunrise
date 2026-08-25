@@ -16,6 +16,7 @@ bool Parser::client_settings(client::Settings& output) noexcept {
     bool hasPinReplicatedRecord = false;
     bool hasHoldSpawn = false;
     bool hasModelTrace = false;
+    bool hasBlankRaceBody = false;
     bool hasSpawnHoldMs = false;
     if (consume('}')) {
         return true;
@@ -60,6 +61,11 @@ bool Parser::client_settings(client::Settings& output) noexcept {
                 return false;
             }
             hasModelTrace = true;
+        } else if (key == "blank_race_body") {
+            if (hasBlankRaceBody || !boolean(candidate.blankRaceBody)) {
+                return false;
+            }
+            hasBlankRaceBody = true;
         } else if (key == "hold_spawn") {
             if (hasHoldSpawn || !boolean(candidate.holdSpawn)) {
                 return false;

@@ -175,9 +175,15 @@ void clear_game_targets() noexcept {
     (void)hooks::package_trace::install();
     // The body is commonly cached before inspect opens, so file I/O alone misses it. Pair the
     // same F8 window with the reflected SEntityModel lookup and keep this optional as well.
-    // Unlike the package trace this one captures from start, so it costs a detour and a log line
-    // on every model lookup - thousands per world load. Off unless a capture is being taken.
-    if (core::settings::get().client.modelTrace) {
+    // Unlike the package trace this one captures from start, so it costs a log line on every model
+    // lookup - thousands per world load. That recording stays off unless a capture is being taken.
+    //
+    // The module also owns the race-body blank, which is not diagnostic and is on by default: it
+    // replaces a package layer that could not stay, because `w64_globals_06dc` hangs a world load
+    // whenever it carries one. Both features need the same constructor detour, so either switch
+    // installs it and each decides its own behaviour from there.
+    const auto& client = core::settings::get().client;
+    if (client.modelTrace || client.blankRaceBody) {
         (void)hooks::model_trace::install();
     }
     // Boot-step fixes scan for their own single-site targets; each reports its own outcome.

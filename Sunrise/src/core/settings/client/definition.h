@@ -59,6 +59,19 @@ struct Settings {
      * has no place in normal play - turn it on for a capture, then turn it off.
      */
     bool modelTrace{false};
+    /**
+     * Hides the stock race body - the leftover gloves and the bald head - under the custom mesh.
+     *
+     * This used to be a patch layer on `w64_globals_06dc`, and it cannot be: **that package hangs
+     * a world load whenever it carries a layer of ours, whatever the layer contains.** Proven by
+     * writing the entry back byte-identical to stock, which failed Titan exactly as the real edit
+     * did. So the same edit is made here instead, to the serialized model on its way into the
+     * renderer, where no package is patched and no world load can notice.
+     *
+     * The edit itself is the cheap one it always was: zero every part's index count, and a part
+     * with no indices issues no draw.
+     */
+    bool blankRaceBody{true};
 };
 
 } // namespace sunrise::core::settings::client
