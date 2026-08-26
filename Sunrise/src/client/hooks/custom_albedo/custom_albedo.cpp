@@ -113,6 +113,8 @@ constexpr std::size_t kMaxSurveyed = 64;
 /** Probe list: `<width> <height> RRGGBB` per line, tinting a matching texture flat. */
 constexpr std::wstring_view kProbeFile = L"\\menu_probe.txt";
 constexpr std::size_t kMaxProbes = 8;
+/** Sizes to save to PNG once, so a menu texture can be edited and bound back. */
+constexpr std::wstring_view kDumpFile = L"\\menu_dump.txt";
 /** PS texture slots the probe inspects and restores. */
 constexpr UINT kProbeSlots = 4;
 /** Longest profile directory name kept. */
@@ -868,6 +870,106 @@ void survey_textures(ID3D11DeviceContext* context) noexcept {
     }
 }
 
+/**
+ * Save one bound texture to PNG beside the settings file.
+ *
+ * Needed because a menu texture can hold several things at once: the "DESTINY 2" lockup carries
+ * the wordmark *and* the glyph between its two halves in one 1050x114 image. Replacing only the
+ * glyph means compositing over the original, and the original exists only as a GPU resource -
+ * there is no file to open. This is how it becomes one.
+ *
+ * A staging copy is the only way to read it back: the bound texture has no CPU access. Only 32-bit
+ * formats are handled; a BC-compressed source maps as blocks, which is not worth decoding here
+ * when the textures we want to edit are all RGBA8.
+ */
+[[nodiscard]] bool save_texture_png(ID3D11Device* device,
+                                    ID3D11DeviceContext* context,
+                                    ID3D11Texture2D* source,
+                                    const D3D11_TEXTURE2D_DESC& desc) noexcept {
+    const DXGI_FORMAT format = desc.Format;
+    const bool is32 = format == DXGI_FORMAT_R8G8B8A8_TYPELESS
+                      || format == DXGI_FORMAT_R8G8B8A8_UNORM
+                      || format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+                      || format == DXGI_FORMAT_B8G8R8A8_UNORM
+                      || format == DXGI_FORMAT_B8G8R8X8_UNORM;
+    if (!is32) {
+        return false;
+    }
+    D3D11_TEXTURE2D_DESC staged = desc;
+    staged.Usage = D3D11_USAGE_STAGING;
+    staged.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    staged.BindFlags = 0;
+    staged.MiscFlags = 0;
+    staged.MipLevels = 1;
+    staged.ArraySize = 1;
+    ID3D11Texture2D* copy = nullptr;
+    if (FAILED(device->CreateTexture2D(&staged, nullptr, &copy)) || copy == nullptr) {
+        return false;
+    }
+    context->CopyResource(copy, source);
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(context->Map(copy, 0, D3D11_MAP_READ, 0, &mapped))) {
+        copy->Release();
+        return false;
+    }
+    std::vector<std::uint32_t> pixels(static_cast<std::size_t>(desc.Width) * desc.Height);
+    const bool swapRB = format == DXGI_FORMAT_B8G8R8A8_UNORM
+                        || format == DXGI_FORMAT_B8G8R8X8_UNORM;
+    for (UINT y = 0; y < desc.Height; ++y) {
+        const auto* row = reinterpret_cast<const std::uint32_t*>(
+            static_cast<const std::uint8_t*>(mapped.pData) + static_cast<std::size_t>(y)
+            * mapped.RowPitch);
+        for (UINT x = 0; x < desc.Width; ++x) {
+            std::uint32_t texel = row[x];
+            if (swapRB) {
+                texel = (texel & 0xFF00FF00u) | ((texel & 0xFFu) << 16) | ((texel >> 16) & 0xFFu);
+            }
+            pixels[static_cast<std::size_t>(y) * desc.Width + x] = texel;
+        }
+    }
+    context->Unmap(copy, 0);
+    copy->Release();
+
+    core::path::Buffer path{};
+    std::array<wchar_t, 64> leaf{};
+    std::swprintf(leaf.data(), leaf.size(), L"\\menudump_%ux%u.png", desc.Width, desc.Height);
+    if (!core::path::artifact_directory(owning_module(), path)
+        || !core::path::append(path, std::wstring_view(leaf.data()))) {
+        return false;
+    }
+    IWICImagingFactory* factory = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&factory)))) {
+        return false;
+    }
+    IWICStream* stream = nullptr;
+    IWICBitmapEncoder* encoder = nullptr;
+    IWICBitmapFrameEncode* frame = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(factory->CreateStream(&stream))
+        && SUCCEEDED(stream->InitializeFromFilename(path.chars.data(), GENERIC_WRITE))
+        && SUCCEEDED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder))
+        && SUCCEEDED(encoder->Initialize(stream, WICBitmapEncoderNoCache))
+        && SUCCEEDED(encoder->CreateNewFrame(&frame, nullptr))
+        && SUCCEEDED(frame->Initialize(nullptr))
+        && SUCCEEDED(frame->SetSize(desc.Width, desc.Height))) {
+        WICPixelFormatGUID wanted = GUID_WICPixelFormat32bppRGBA;
+        if (SUCCEEDED(frame->SetPixelFormat(&wanted))
+            && SUCCEEDED(frame->WritePixels(
+                desc.Height, desc.Width * 4,
+                static_cast<UINT>(pixels.size() * sizeof(std::uint32_t)),
+                reinterpret_cast<BYTE*>(pixels.data())))
+            && SUCCEEDED(frame->Commit()) && SUCCEEDED(encoder->Commit())) {
+            ok = true;
+        }
+    }
+    if (frame != nullptr) frame->Release();
+    if (encoder != nullptr) encoder->Release();
+    if (stream != nullptr) stream->Release();
+    factory->Release();
+    return ok;
+}
+
 /** One texture size to tint, and the colour to tint it. */
 struct Probe {
     UINT width;
@@ -1036,6 +1138,111 @@ void load_probes(ID3D11Device* device) noexcept {
         context->PSSetShaderResources(0, slots, replaced);
     }
     return swapped;
+}
+
+/** One texture size to save, and whether it has been saved this run. */
+struct DumpRequest {
+    UINT width;
+    UINT height;
+    bool done;
+};
+
+DumpRequest g_dumps[kMaxProbes]{};
+std::size_t g_dumpCount{};
+
+/** Read `menu_dump.txt`: one `<width> <height>` per line. */
+void load_dump_list() noexcept {
+    core::path::Buffer path{};
+    if (!core::path::artifact_directory(owning_module(), path)
+        || !core::path::append(path, kDumpFile)) {
+        return;
+    }
+    const HANDLE file = CreateFileW(
+        path.chars.data(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    std::array<char, 512> text{};
+    DWORD read = 0;
+    const BOOL ok = ReadFile(file, text.data(), static_cast<DWORD>(text.size() - 1), &read, nullptr);
+    CloseHandle(file);
+    if (ok == FALSE || read == 0) {
+        return;
+    }
+    const char* cursor = text.data();
+    while (*cursor != '\0' && g_dumpCount < kMaxProbes) {
+        while (*cursor == '\r' || *cursor == '\n' || *cursor == ' ' || *cursor == '\t') {
+            ++cursor;
+        }
+        if (*cursor == '#') {
+            while (*cursor != '\0' && *cursor != '\n') {
+                ++cursor;
+            }
+            continue;
+        }
+        unsigned width = 0;
+        unsigned height = 0;
+        int consumed = 0;
+        if (sscanf_s(cursor, "%u %u%n", &width, &height, &consumed) != 2) {
+            break;
+        }
+        cursor += consumed;
+        g_dumps[g_dumpCount] = {width, height, false};
+        ++g_dumpCount;
+    }
+}
+
+void dump_textures(ID3D11DeviceContext* context) noexcept {
+    if (g_dumpCount == 0 || g_device == nullptr) {
+        return;
+    }
+    bool pending = false;
+    for (std::size_t i = 0; i < g_dumpCount; ++i) {
+        pending = pending || !g_dumps[i].done;
+    }
+    if (!pending) {
+        return;
+    }
+    ID3D11ShaderResourceView* views[kProbeSlots]{};
+    context->PSGetShaderResources(0, kProbeSlots, views);
+    for (ID3D11ShaderResourceView* view : views) {
+        if (view == nullptr) {
+            continue;
+        }
+        ID3D11Resource* resource = nullptr;
+        view->GetResource(&resource);
+        if (resource != nullptr) {
+            ID3D11Texture2D* texture = nullptr;
+            if (SUCCEEDED(resource->QueryInterface(__uuidof(ID3D11Texture2D),
+                                                   reinterpret_cast<void**>(&texture)))
+                && texture != nullptr) {
+                D3D11_TEXTURE2D_DESC desc{};
+                texture->GetDesc(&desc);
+                for (std::size_t i = 0; i < g_dumpCount; ++i) {
+                    if (g_dumps[i].done || g_dumps[i].width != desc.Width
+                        || g_dumps[i].height != desc.Height) {
+                        continue;
+                    }
+                    const bool saved = save_texture_png(g_device, context, texture, desc);
+                    g_dumps[i].done = true;
+                    std::array<char, 160> line{};
+                    const int written = std::snprintf(
+                        line.data(), line.size(),
+                        "ev=custom_albedo stage=dump w=%u h=%u fmt=%u result=%s",
+                        desc.Width, desc.Height, static_cast<UINT>(desc.Format),
+                        saved ? "ok" : "fail");
+                    if (written > 0) {
+                        core::log::write(core::log::Channel::client, core::log::Level::info,
+                                         std::string_view(line.data(),
+                                                          static_cast<std::size_t>(written)));
+                    }
+                }
+                texture->Release();
+            }
+            resource->Release();
+        }
+        view->Release();
+    }
 }
 
 /** @return Slot of the profile `active.txt` names, or `g_profileCount` when it names none. */
@@ -1263,6 +1470,7 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context,
     }
     // Before the part match, because the screen this exists to identify has no part table at all.
     survey_textures(context);
+    dump_textures(context);
     const Part* part = match(startIndex, indexCount);
     if (part == nullptr) {
         note_miss(startIndex, indexCount);
@@ -1414,6 +1622,7 @@ void attach(ID3D11Device* device, ID3D11DeviceContext* context) noexcept {
     // Read once at attach, so the per-draw cost of an unwanted survey is a single bool test.
     g_survey = survey_requested();
     load_probes(device);
+    load_dump_list();
     if (g_survey) {
         core::log::write(core::log::Channel::client, core::log::Level::info,
                          "ev=custom_albedo stage=survey result=on "
