@@ -112,7 +112,7 @@ constexpr std::wstring_view kSurveyFile = L"\\menu_survey.txt";
 constexpr std::size_t kMaxSurveyed = 64;
 /** Probe list: `<width> <height> RRGGBB` per line, tinting a matching texture flat. */
 constexpr std::wstring_view kProbeFile = L"\\menu_probe.txt";
-constexpr std::size_t kMaxProbes = 8;
+constexpr std::size_t kMaxProbes = 16;
 /** Sizes to save to PNG once, so a menu texture can be edited and bound back. */
 constexpr std::wstring_view kDumpFile = L"\\menu_dump.txt";
 /** PS texture slots the probe inspects and restores. */
