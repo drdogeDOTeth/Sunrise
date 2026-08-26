@@ -8,18 +8,46 @@ Root `HANDOFF.md` is stale (`_18`); ignore it.
 looking like `tools/pkg/objs/textures/_glb_blender_preview.png` — green SkinTats graffiti, charcoal
 tank, black gas mask, twirl, teal necklace. Not a dye tint.
 
-**Live / restore:** newest is the **v24 hand refit** (`037c_33` / `037d_31` / `0698_29`, not yet
-seen in game) over snapshot `20260823-141400.json`. Snapshot `20260822-235602.json` is
-**hands-on-gauntlets confirmed** (no needles, sword grip). `--fingers` is closed on the chest.
-Prior wrists-only v23: `20260822-225414`. Hook has six exact parts (chest 122304 + hands 16326,
-arms on the gauntlets) — **the refit did not change either count**. Destiny must be closed to
-write packages or overwrite the DLL.
+**Live / restore:** newest is **SchizoAxe at its own proportions** (`037c_38` / `037d_36` /
+`0698_34`) under snapshot `20260826-103621.json` — 118 layers, facing-corrected, no proportion fit
+and no hand fit. Prior SchizoAxe stretched-to-rig: `20260826-093816`. The **v25 body**, the
+long-confirmed character, is `20260825-132926`; worlds-working baseline is `20260824-200131`.
+Snapshot `20260822-235602.json` is **hands-on-gauntlets confirmed** (no needles, sword grip).
+`--fingers` is closed on the chest. Destiny must be closed to write packages or overwrite the DLL.
+
+Paint and the part table are **not** in the snapshot — they live in
+`bin\x64\Sunrise\characters\<name>\` and swap live from the Character page. Only geometry needs a
+relaunch.
 
 **The hand is retargeted as of 2026-08-23.** `retarget_mesh.fit_hands()` puts each wrist on the
 joint that drives it (was 4.9 cm off, now 0.72) and turns the hand onto the donor's frame (palm
 normal was 29° out, now 0.1°). **User-confirmed better in game.** Verify offline, no launch, with
 `python audit_hand_bind.py --png objs/hand_overlay.png`. Full account and the two fitting traps:
 [`HANDOFF.md`](../HANDOFF.md).
+
+**Two ways to bring a source in, and the choice is a real tradeoff.** Both were measured on
+SchizoAxe (a 1.574 m chibi against a ~1.75 m rig):
+
+| | `--fit-proportions` (stretch to rig) | default (as authored) |
+|---|---|---|
+| joints | land **on** their rig joints (wrist 0.00 cm off, forearm ×1.000) | land wherever the model puts them (wrist **~75 cm** off, and `--no-fit-hands` leaves it there) |
+| shape | stilt legs — hips→feet needs ×2.35 where arms need ×1.33 | the model's own silhouette, unaltered |
+| standing | grounded, because the legs are fitted | grounded here (0.000 → 1.574 m) only because the VRM was authored feet-on-floor |
+| animation | bends correctly | bends about joints far from the geometry — hands swing on a long radius |
+
+`--no-fit-hands` exists because `fit_hands` is the one thing still reaching for the rig when the
+proportion fit is off; on a short-armed source it blows the forearm out (**×5.3**) while still
+leaving the wrist 60 cm short — the worst of both. Leave the proportion fit **off** for a source
+authored to the rig (the v25 body), and turn both off together for a source you want kept as-is.
+
+**Neither mode fixes a chibi.** No single scale serves arms (×1.33), torso (×1.22) and legs
+(×2.35), and the float cannot be dropped away: the game positions mesh relative to the **bind-pose**
+joints, so a foot 42.5 cm above its own ankle joint stays there forever. The proper fix is
+lengthening the model's legs in Blender.
+
+**Alpha-cut parts need the shader clip.** SchizoAxe's eye and mouth planes are 90.7% / 91.7%
+transparent pixels; without `clip(texel.a - 0.5)` in `kShaderSource` they render as opaque slabs
+over the face. The clip is in as of 2026-08-26.
 
 **`HAND_ROLL` is the taste knob** on top of that fit — degrees of pronation about the forearm
 axis, per hand. Left is **−25°** by user pick, right is 0. Its sign matches the panel labels from

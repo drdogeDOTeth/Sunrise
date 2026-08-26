@@ -18,6 +18,8 @@ Usage (from tools/pkg):
     python bring_guardian.py --glb path.glb --dry-run
     python bring_guardian.py --glb path.glb --inject
     python bring_guardian.py --glb path.glb --inject --snapshot
+    python bring_guardian.py --glb path.glb --inject --fit-proportions   # stretch onto the rig
+    python bring_guardian.py --glb path.glb --inject --no-fit-hands      # keep arms as authored
     python bring_guardian.py --ui
 
 Read docs/HOST_INTAKE.md before the first new host.
@@ -614,6 +616,11 @@ def run_retarget(glb: Path, dest: Path, blender: Path, material_map: Path,
             command.extend(["--proportion-blend", option("--proportion-blend")])
         if option("--chain-blend"):
             command.extend(["--chain-blend", option("--chain-blend")])
+    # Without the proportion fit the hand fit is the only thing still reaching for the rig, and on
+    # a source whose arms are far shorter it blows the forearm out (x5.3 on SchizoAxe) while
+    # leaving the wrist 60 cm short. Pass this to keep the arms exactly as authored.
+    if flag("--no-fit-hands"):
+        command.append("--no-fit-hands")
     log("retarget: " + " ".join(command))
     subprocess.run(command, check=True, cwd=str(HERE))
     if not out.is_file():

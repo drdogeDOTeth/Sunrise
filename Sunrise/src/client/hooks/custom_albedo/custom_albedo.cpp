@@ -146,7 +146,13 @@ struct Output {
 Output main(Input input)
 {
     Output output;
-    const float3 color = Atlas.SampleLevel(Samp, input.uv.xy, 0).rgb;
+    const float4 texel = Atlas.SampleLevel(Samp, input.uv.xy, 0);
+    // Cutout. A character's eye and mouth planes are sprite sheets that are ~91% transparent, so
+    // ignoring alpha drew the whole quad as an opaque black slab across the face. Discarding also
+    // suppresses the depth write, which is what a cutout needs. A texture with no alpha channel
+    // decodes to a=1 and is never clipped, so opaque parts are unaffected.
+    clip(texel.a - 0.5);
+    const float3 color = texel.rgb;
     output.albedo = float4(color, 0.2);
     const float3 worldN = normalize(input.tangent.xyz);
     output.encodedNormal = float4(saturate(worldN * 0.375 + 0.5), 0.0);
