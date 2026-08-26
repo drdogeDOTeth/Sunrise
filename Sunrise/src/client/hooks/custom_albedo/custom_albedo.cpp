@@ -102,6 +102,14 @@ constexpr std::wstring_view kProfileRoot = L"\\characters";
 constexpr std::wstring_view kProfileTable = L"\\parts.txt";
 /** Remembers the switcher's choice across launches, beside the profiles it names. */
 constexpr std::wstring_view kActiveFile = L"\\characters\\active.txt";
+/**
+ * Presence of this file turns on the texture survey. A file rather than a settings key so it can
+ * be switched on for one launch and off again without a rebuild, and so it costs one existence
+ * check at init rather than anything per draw.
+ */
+constexpr std::wstring_view kSurveyFile = L"\\menu_survey.txt";
+/** Distinct textures the survey will name before it stops looking. */
+constexpr std::size_t kMaxSurveyed = 64;
 /** Longest profile directory name kept. */
 constexpr std::size_t kProfileNameCapacity = 48;
 
@@ -771,6 +779,90 @@ void scan_profiles() noexcept {
     FindClose(search);
 }
 
+/** One texture the survey has already named, so a per-frame redraw logs once. */
+struct Surveyed {
+    UINT width;
+    UINT height;
+    UINT format;
+};
+
+Surveyed g_surveyed[kMaxSurveyed]{};
+std::size_t g_surveyedCount{};
+bool g_survey{};
+
+/** @return True when `menu_survey.txt` exists beside the settings file. */
+[[nodiscard]] bool survey_requested() noexcept {
+    core::path::Buffer path{};
+    if (!core::path::artifact_directory(owning_module(), path)
+        || !core::path::append(path, kSurveyFile)) {
+        return false;
+    }
+    return GetFileAttributesW(path.chars.data()) != INVALID_FILE_ATTRIBUTES;
+}
+
+/**
+ * Name every distinct texture bound while drawing, so a screen can be identified by what it draws.
+ *
+ * The title screen has no model and no part table, so nothing else here can see it. Its lockup art
+ * is a wide quad with a distinctive aspect ratio, which is what makes a dimensions listing enough
+ * to pick it out. Dedupe is by (width, height, format): a UI texture is redrawn every frame, and
+ * logging per draw would fill the log in under a second.
+ *
+ * Off unless `menu_survey.txt` exists, and stops after kMaxSurveyed regardless — this runs inside
+ * DrawIndexed, which is called thousands of times per frame.
+ */
+void survey_textures(ID3D11DeviceContext* context) noexcept {
+    if (!g_survey || g_surveyedCount >= kMaxSurveyed) {
+        return;
+    }
+    ID3D11ShaderResourceView* views[4]{};
+    context->PSGetShaderResources(0, 4, views);
+    for (ID3D11ShaderResourceView* view : views) {
+        if (view == nullptr) {
+            continue;
+        }
+        ID3D11Resource* resource = nullptr;
+        view->GetResource(&resource);
+        if (resource != nullptr) {
+            ID3D11Texture2D* texture = nullptr;
+            if (SUCCEEDED(resource->QueryInterface(__uuidof(ID3D11Texture2D),
+                                                   reinterpret_cast<void**>(&texture)))
+                && texture != nullptr) {
+                D3D11_TEXTURE2D_DESC desc{};
+                texture->GetDesc(&desc);
+                bool seen = false;
+                for (std::size_t i = 0; i < g_surveyedCount; ++i) {
+                    if (g_surveyed[i].width == desc.Width && g_surveyed[i].height == desc.Height
+                        && g_surveyed[i].format == static_cast<UINT>(desc.Format)) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (!seen && g_surveyedCount < kMaxSurveyed) {
+                    g_surveyed[g_surveyedCount] = {desc.Width, desc.Height,
+                                                   static_cast<UINT>(desc.Format)};
+                    ++g_surveyedCount;
+                    std::array<char, 192> line{};
+                    const int written = std::snprintf(
+                        line.data(), line.size(),
+                        "ev=custom_albedo stage=survey n=%zu w=%u h=%u fmt=%u mips=%u aspect=%.3f",
+                        g_surveyedCount, desc.Width, desc.Height,
+                        static_cast<UINT>(desc.Format), desc.MipLevels,
+                        desc.Height != 0 ? static_cast<double>(desc.Width) / desc.Height : 0.0);
+                    if (written > 0) {
+                        core::log::write(core::log::Channel::client, core::log::Level::info,
+                                         std::string_view(line.data(),
+                                                          static_cast<std::size_t>(written)));
+                    }
+                }
+                texture->Release();
+            }
+            resource->Release();
+        }
+        view->Release();
+    }
+}
+
 /** @return Slot of the profile `active.txt` names, or `g_profileCount` when it names none. */
 [[nodiscard]] std::size_t remembered_profile() noexcept {
     core::path::Buffer path{};
@@ -994,6 +1086,8 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context,
     if (next == nullptr) {
         return;
     }
+    // Before the part match, because the screen this exists to identify has no part table at all.
+    survey_textures(context);
     const Part* part = match(startIndex, indexCount);
     if (part == nullptr) {
         note_miss(startIndex, indexCount);
@@ -1129,6 +1223,13 @@ void attach(ID3D11Device* device, ID3D11DeviceContext* context) noexcept {
         return;
     }
     g_device = device;
+    // Read once at attach, so the per-draw cost of an unwanted survey is a single bool test.
+    g_survey = survey_requested();
+    if (g_survey) {
+        core::log::write(core::log::Channel::client, core::log::Level::info,
+                         "ev=custom_albedo stage=survey result=on "
+                         "(menu_survey.txt present; delete it to stop)");
+    }
     scan_profiles();
     const std::size_t remembered = remembered_profile();
     seed_defaults();
