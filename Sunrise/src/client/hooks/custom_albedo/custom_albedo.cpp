@@ -110,6 +110,11 @@ constexpr std::wstring_view kActiveFile = L"\\characters\\active.txt";
 constexpr std::wstring_view kSurveyFile = L"\\menu_survey.txt";
 /** Distinct textures the survey will name before it stops looking. */
 constexpr std::size_t kMaxSurveyed = 64;
+/** Probe list: `<width> <height> RRGGBB` per line, tinting a matching texture flat. */
+constexpr std::wstring_view kProbeFile = L"\\menu_probe.txt";
+constexpr std::size_t kMaxProbes = 8;
+/** PS texture slots the probe inspects and restores. */
+constexpr UINT kProbeSlots = 4;
 /** Longest profile directory name kept. */
 constexpr std::size_t kProfileNameCapacity = 48;
 
@@ -863,6 +868,147 @@ void survey_textures(ID3D11DeviceContext* context) noexcept {
     }
 }
 
+/** One texture size to tint, and the colour to tint it. */
+struct Probe {
+    UINT width;
+    UINT height;
+    ID3D11ShaderResourceView* view;
+};
+
+Probe g_probes[kMaxProbes]{};
+std::size_t g_probeCount{};
+
+/**
+ * Read `menu_probe.txt` and build one solid-colour texture per line: `<width> <height> RRGGBB`.
+ *
+ * The survey names the textures a screen draws but cannot say *which* is which — several wide
+ * quads on the title screen are plausible lockups. Tinting each a different colour answers all of
+ * them in a single launch and a single screenshot, rather than one guess per launch.
+ *
+ * Sizes, not pointers: a UI texture is recreated between frames, so its address is not stable
+ * while its dimensions are.
+ */
+void load_probes(ID3D11Device* device) noexcept {
+    core::path::Buffer path{};
+    if (!core::path::artifact_directory(owning_module(), path)
+        || !core::path::append(path, kProbeFile)) {
+        return;
+    }
+    const HANDLE file = CreateFileW(
+        path.chars.data(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    std::array<char, 1024> text{};
+    DWORD read = 0;
+    const BOOL ok = ReadFile(file, text.data(), static_cast<DWORD>(text.size() - 1), &read, nullptr);
+    CloseHandle(file);
+    if (ok == FALSE || read == 0) {
+        return;
+    }
+    const char* cursor = text.data();
+    while (*cursor != '\0' && g_probeCount < kMaxProbes) {
+        while (*cursor == '\r' || *cursor == '\n' || *cursor == ' ' || *cursor == '\t') {
+            ++cursor;
+        }
+        if (*cursor == '#') {
+            while (*cursor != '\0' && *cursor != '\n') {
+                ++cursor;
+            }
+            continue;
+        }
+        unsigned width = 0;
+        unsigned height = 0;
+        unsigned colour = 0;
+        int consumed = 0;
+        if (sscanf_s(cursor, "%u %u %x%n", &width, &height, &colour, &consumed) != 3) {
+            break;
+        }
+        cursor += consumed;
+        const std::uint32_t texel = 0xFF000000u | ((colour & 0xFFu) << 16)
+                                    | (colour & 0xFF00u) | ((colour >> 16) & 0xFFu);
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = 1;
+        desc.Height = 1;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_IMMUTABLE;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA seed{};
+        seed.pSysMem = &texel;
+        seed.SysMemPitch = sizeof(texel);
+        ID3D11Texture2D* texture = nullptr;
+        if (FAILED(device->CreateTexture2D(&desc, &seed, &texture)) || texture == nullptr) {
+            continue;
+        }
+        ID3D11ShaderResourceView* view = nullptr;
+        const HRESULT made = device->CreateShaderResourceView(texture, nullptr, &view);
+        texture->Release();
+        if (FAILED(made) || view == nullptr) {
+            continue;
+        }
+        g_probes[g_probeCount] = {width, height, view};
+        ++g_probeCount;
+        std::array<char, 160> line{};
+        const int written = std::snprintf(line.data(), line.size(),
+                                          "ev=custom_albedo stage=probe n=%zu w=%u h=%u rgb=%06X",
+                                          g_probeCount, width, height, colour);
+        if (written > 0) {
+            core::log::write(core::log::Channel::client, core::log::Level::info,
+                             std::string_view(line.data(), static_cast<std::size_t>(written)));
+        }
+    }
+}
+
+/**
+ * Swap any bound texture whose size matches a probe for that probe's flat colour.
+ *
+ * @return True when something was swapped, in which case the caller must restore afterwards.
+ */
+[[nodiscard]] bool apply_probes(ID3D11DeviceContext* context,
+                                ID3D11ShaderResourceView** saved,
+                                UINT slots) noexcept {
+    if (g_probeCount == 0) {
+        return false;
+    }
+    context->PSGetShaderResources(0, slots, saved);
+    bool swapped = false;
+    ID3D11ShaderResourceView* replaced[kProbeSlots]{};
+    for (UINT slot = 0; slot < slots; ++slot) {
+        replaced[slot] = saved[slot];
+        if (saved[slot] == nullptr) {
+            continue;
+        }
+        ID3D11Resource* resource = nullptr;
+        saved[slot]->GetResource(&resource);
+        if (resource == nullptr) {
+            continue;
+        }
+        ID3D11Texture2D* texture = nullptr;
+        if (SUCCEEDED(resource->QueryInterface(__uuidof(ID3D11Texture2D),
+                                               reinterpret_cast<void**>(&texture)))
+            && texture != nullptr) {
+            D3D11_TEXTURE2D_DESC desc{};
+            texture->GetDesc(&desc);
+            for (std::size_t i = 0; i < g_probeCount; ++i) {
+                if (g_probes[i].width == desc.Width && g_probes[i].height == desc.Height) {
+                    replaced[slot] = g_probes[i].view;
+                    swapped = true;
+                    break;
+                }
+            }
+            texture->Release();
+        }
+        resource->Release();
+    }
+    if (swapped) {
+        context->PSSetShaderResources(0, slots, replaced);
+    }
+    return swapped;
+}
+
 /** @return Slot of the profile `active.txt` names, or `g_profileCount` when it names none. */
 [[nodiscard]] std::size_t remembered_profile() noexcept {
     core::path::Buffer path{};
@@ -1091,6 +1237,19 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context,
     const Part* part = match(startIndex, indexCount);
     if (part == nullptr) {
         note_miss(startIndex, indexCount);
+        // Probing is confined to draws the character never claims, so an identification pass
+        // cannot disturb the body. Restore immediately: the game keeps drawing with these slots.
+        ID3D11ShaderResourceView* saved[kProbeSlots]{};
+        if (apply_probes(context, saved, kProbeSlots)) {
+            next(context, indexCount, startIndex, baseVertex);
+            context->PSSetShaderResources(0, kProbeSlots, saved);
+            for (ID3D11ShaderResourceView* view : saved) {
+                if (view != nullptr) {
+                    view->Release();
+                }
+            }
+            return;
+        }
         next(context, indexCount, startIndex, baseVertex);
         return;
     }
@@ -1225,6 +1384,7 @@ void attach(ID3D11Device* device, ID3D11DeviceContext* context) noexcept {
     g_device = device;
     // Read once at attach, so the per-draw cost of an unwanted survey is a single bool test.
     g_survey = survey_requested();
+    load_probes(device);
     if (g_survey) {
         core::log::write(core::log::Channel::client, core::log::Level::info,
                          "ev=custom_albedo stage=survey result=on "
