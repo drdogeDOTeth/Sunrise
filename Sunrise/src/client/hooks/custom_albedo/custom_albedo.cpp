@@ -919,42 +919,71 @@ void load_probes(ID3D11Device* device) noexcept {
         }
         unsigned width = 0;
         unsigned height = 0;
-        unsigned colour = 0;
+        std::array<char, 96> token{};
         int consumed = 0;
-        if (sscanf_s(cursor, "%u %u %x%n", &width, &height, &colour, &consumed) != 3) {
+        if (sscanf_s(cursor, "%u %u %95s%n", &width, &height, token.data(),
+                     static_cast<unsigned>(token.size()), &consumed)
+            != 3) {
             break;
         }
         cursor += consumed;
-        const std::uint32_t texel = 0xFF000000u | ((colour & 0xFFu) << 16)
-                                    | (colour & 0xFF00u) | ((colour >> 16) & 0xFFu);
-        D3D11_TEXTURE2D_DESC desc{};
-        desc.Width = 1;
-        desc.Height = 1;
-        desc.MipLevels = 1;
-        desc.ArraySize = 1;
-        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        desc.SampleDesc.Count = 1;
-        desc.Usage = D3D11_USAGE_IMMUTABLE;
-        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        D3D11_SUBRESOURCE_DATA seed{};
-        seed.pSysMem = &texel;
-        seed.SysMemPitch = sizeof(texel);
-        ID3D11Texture2D* texture = nullptr;
-        if (FAILED(device->CreateTexture2D(&desc, &seed, &texture)) || texture == nullptr) {
-            continue;
-        }
         ID3D11ShaderResourceView* view = nullptr;
-        const HRESULT made = device->CreateShaderResourceView(texture, nullptr, &view);
-        texture->Release();
-        if (FAILED(made) || view == nullptr) {
+        // A dot means a filename. WIC decodes jpg as readily as png, so the extension only has to
+        // be something WIC knows - the name is passed through untouched.
+        const bool isFile = std::strchr(token.data(), '.') != nullptr;
+        if (isFile) {
+            std::array<wchar_t, kPathCapacity> wide{};
+            wide[0] = L'\\';
+            std::size_t at = 1;
+            for (std::size_t i = 0; token[i] != '\0' && at + 1 < wide.size(); ++i, ++at) {
+                wide[at] = static_cast<wchar_t>(static_cast<unsigned char>(token[i]));
+            }
+            std::vector<std::uint32_t> pixels;
+            UINT imageWidth = 0;
+            UINT imageHeight = 0;
+            GpuImage image{};
+            if (load_png(std::wstring_view(wide.data(), at), pixels, imageWidth, imageHeight)
+                && upload_image(device, pixels, imageWidth, imageHeight,
+                                DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, image)) {
+                // The view keeps the resource alive, so the texture reference can go now.
+                if (image.texture != nullptr) {
+                    image.texture->Release();
+                }
+                view = image.view;
+            }
+        } else {
+            const unsigned colour = std::strtoul(token.data(), nullptr, 16);
+            const std::uint32_t texel = 0xFF000000u | ((colour & 0xFFu) << 16)
+                                        | (colour & 0xFF00u) | ((colour >> 16) & 0xFFu);
+            D3D11_TEXTURE2D_DESC desc{};
+            desc.Width = 1;
+            desc.Height = 1;
+            desc.MipLevels = 1;
+            desc.ArraySize = 1;
+            desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            desc.SampleDesc.Count = 1;
+            desc.Usage = D3D11_USAGE_IMMUTABLE;
+            desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            D3D11_SUBRESOURCE_DATA seed{};
+            seed.pSysMem = &texel;
+            seed.SysMemPitch = sizeof(texel);
+            ID3D11Texture2D* texture = nullptr;
+            if (SUCCEEDED(device->CreateTexture2D(&desc, &seed, &texture)) && texture != nullptr) {
+                if (FAILED(device->CreateShaderResourceView(texture, nullptr, &view))) {
+                    view = nullptr;
+                }
+                texture->Release();
+            }
+        }
+        if (view == nullptr) {
             continue;
         }
         g_probes[g_probeCount] = {width, height, view};
         ++g_probeCount;
-        std::array<char, 160> line{};
+        std::array<char, 192> line{};
         const int written = std::snprintf(line.data(), line.size(),
-                                          "ev=custom_albedo stage=probe n=%zu w=%u h=%u rgb=%06X",
-                                          g_probeCount, width, height, colour);
+                                          "ev=custom_albedo stage=probe n=%zu w=%u h=%u src=%s",
+                                          g_probeCount, width, height, token.data());
         if (written > 0) {
             core::log::write(core::log::Channel::client, core::log::Level::info,
                              std::string_view(line.data(), static_cast<std::size_t>(written)));
