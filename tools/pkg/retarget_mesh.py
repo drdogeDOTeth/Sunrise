@@ -275,6 +275,56 @@ def armature_bone(canonical):
     return BONE_RENAME.get(canonical, canonical)
 
 
+def orient_source(armature, meshes):
+    """Turn the source to face Destiny's forward if it is authored facing the other way.
+
+    **Measured, not assumed from the spec.** SchizoAxe is a VRM 0.x that faces -Z where the format
+    says +Z, and the retarget's axis convention (`to_destiny`) takes glTF +Z to Destiny +x. The
+    result was a character standing correctly with its face on the back of its head.
+
+    The test uses the toes: they sit ahead of the ankle on any humanoid, and both joints come from
+    the file's own humanoid table, so nothing has to guess which mesh is a face. Destiny forward is
+    Blender -y, so toes at a *greater* y than the ankle means the model is backwards.
+    @return True when a half turn was applied.
+    """
+    bones = armature.data.bones
+    offsets = []
+    for ankle, toe in (("Left ankle", "Left toe"), ("Right ankle", "Right toe")):
+        a, t = armature_bone(ankle), armature_bone(toe)
+        if a in bones and t in bones:
+            offsets.append(bones[t].head_local.y - bones[a].head_local.y)
+    if not offsets:
+        print("  no ankle/toe pair; facing left alone")
+        return False
+    forward = sum(offsets) / len(offsets)
+    if forward <= 0.0:
+        print(f"  facing ok (toes {-forward * 100:+.1f} cm ahead of the ankle)")
+        return False
+    print(f"  source faces backwards (toes {forward * 100:+.1f} cm behind the ankle); turning 180 deg")
+    if meshes:
+        bpy.ops.object.select_all(action='DESELECT')
+        for mesh in meshes:
+            mesh.select_set(True)
+        bpy.context.view_layer.objects.active = meshes[0]
+        bpy.ops.object.parent_clear(type='CLEAR_KEEP_TRANSFORM')
+    turn = Matrix.Rotation(math.pi, 4, 'Z')
+    for obj in [armature, *meshes]:
+        obj.matrix_world = turn @ obj.matrix_world
+    bpy.context.view_layer.update()
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in [armature, *meshes]:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = armature
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    bpy.ops.object.select_all(action='DESELECT')
+    for mesh in meshes:
+        mesh.select_set(True)
+    armature.select_set(True)
+    bpy.context.view_layer.objects.active = armature
+    bpy.ops.object.parent_set(type='ARMATURE_NAME')
+    return True
+
+
 def fit_scale(armature, meshes, rig):
     """Uniformly scale the source onto the rig, then seat its hips on rig joint 1.
 
@@ -664,6 +714,11 @@ def main():
     if RETARGET:
         rig = load_rig()
         bpy.context.view_layer.objects.active = armature
+        # Always checked, never flagged: it fires only on a source measured to be backwards, so a
+        # correctly authored one is untouched.
+        print("facing:")
+        if orient_source(armature, meshes):
+            meshes = [o for o in bpy.data.objects if o.type == 'MESH']
         if FIT_PROPORTIONS:
             print("proportion fit:")
             fit_scale(armature, meshes, rig)
