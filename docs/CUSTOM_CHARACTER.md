@@ -27,6 +27,28 @@ Paint and the part table are **not** in the snapshot — they live in
 `bin\x64\Sunrise\characters\<name>\` and swap live from the Character page. Only geometry needs a
 relaunch.
 
+**Keep the layer chain small — `--inject --rebuild`.** Every inject writes a *new* patch layer and
+nothing is ever removed, so an iterated character grows without bound. Measured 2026-08-26: v25 had
+reached **80 layers and 315.30 MB**, of which six failed paint sweeps from a single afternoon held
+232.6 MB. Rebuilding produced the **identical** character in **3 layers and 5.76 MB — a 98.2% cut**.
+
+Layers cannot be trimmed individually: they truncate only, so pulling one from the middle dangles
+everything above it and the game spins at character select. Going back to stock and injecting once
+is the only route down, and `--rebuild` does exactly that (moving layers to a timestamped attic,
+never deleting).
+
+It is safe because **the character's paint is not in the packages at all** — the hook binds PNGs at
+draw time, so a layer carries only mesh and one fresh layer is complete by construction.
+
+Two rules for using it. Back up first — `known_good.py` records names and moves files, so only
+[`backup_config.py`](../tools/pkg/backup_config.py) can actually restore bytes. And **verify with a
+dry run before atticing anything**: the regenerated `custom_parts.txt` must match the profile's
+`parts.txt` on every name/start/count. That match is what proved the v25 rebuild faithful before a
+single byte moved.
+
+Leave it off while iterating on a fit — each run would otherwise discard the layer you are
+comparing against. Turn it on for the run that lands.
+
 **The hand is retargeted as of 2026-08-23.** `retarget_mesh.fit_hands()` puts each wrist on the
 joint that drives it (was 4.9 cm off, now 0.72) and turns the hand onto the donor's frame (palm
 normal was 29° out, now 0.1°). **User-confirmed better in game.** Verify offline, no launch, with

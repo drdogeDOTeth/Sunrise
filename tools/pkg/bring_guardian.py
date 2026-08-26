@@ -18,6 +18,7 @@ Usage (from tools/pkg):
     python bring_guardian.py --glb path.glb --dry-run
     python bring_guardian.py --glb path.glb --inject
     python bring_guardian.py --glb path.glb --inject --snapshot
+    python bring_guardian.py --glb path.glb --inject --rebuild   # start from stock: 5.76 MB not 315
     python bring_guardian.py --glb path.glb --inject --fit-proportions   # stretch onto the rig
     python bring_guardian.py --glb path.glb --inject --no-fit-hands      # keep arms as authored
     python bring_guardian.py --ui
@@ -35,6 +36,13 @@ from pathlib import Path
 
 from glb import read_glb
 from glb_textures import chunks, dimensions
+
+# The highest STOCK patch in each package we inject into — everything above these is ours.
+# Established 2026-08-26 by date: the depot layers all carry 2026-08-16 20:24, ours start 08-19.
+# `--rebuild` attics everything above these before injecting, which is the difference between a
+# character costing 5.76 MB and one costing 315.30 MB. See rebuild_from_stock() for why that
+# matters and why layers cannot simply be deleted.
+STOCK_TOP = {"037c": 6, "037d": 5, "0698": 5}
 
 HERE = Path(__file__).resolve().parent
 GAME = Path(os.environ.get("SUNRISE_GAME", r"C:\Sunrise"))
@@ -139,6 +147,45 @@ BONE_ALIASES = {
     "rightlittleproximal": "LittleFinger1_R", "rightlittleintermediate": "LittleFinger2_R",
     "rightlittledistal": "LittleFinger3_R",
 }
+
+
+def rebuild_from_stock() -> int:
+    """Move every layer of ours out of the way so the next inject starts from the stock chain.
+
+    **Every inject writes a new patch layer and nothing is ever removed.** Left alone that grows
+    without bound: by 2026-08-26 the v25 character was 80 layers and 315.30 MB, of which six failed
+    paint sweeps from one afternoon held 232.6 MB. Rebuilding produced the identical character in
+    **3 layers and 5.76 MB** — a 98.2% cut.
+
+    Layers cannot be trimmed individually: they truncate only, so pulling one from the middle
+    dangles everything above it and the game spins at character select. Going back to stock and
+    injecting once is the only way down.
+
+    Safe because **the character's paint is not in the packages** — the hook binds PNGs at draw
+    time, so a layer carries only mesh and one fresh layer is complete by construction.
+
+    Files are moved, never deleted. Back up first anyway: `known_good.py` records names, not bytes,
+    so only `backup_config.py` can actually restore one.
+
+    @return Layers moved.
+    """
+    import re as _re
+    packages = GAME / "packages"
+    attic = packages / f"_prerebuild_{__import__('datetime').datetime.now():%Y%m%d-%H%M%S}"
+    attic.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    freed = 0
+    for pkg, top in STOCK_TOP.items():
+        for path in sorted(packages.glob(f"w64_sandbox_{pkg}_*.pkg")):
+            match = _re.match(rf"w64_sandbox_{pkg}_(\d+)\.pkg$", path.name)
+            if match and int(match.group(1)) > top:
+                freed += path.stat().st_size
+                shutil.move(str(path), str(attic / path.name))
+                moved += 1
+    log(f"rebuild: moved {moved} layers to {attic.name} ({freed / 1024 / 1024:.1f} MB freed)")
+    if moved:
+        log("  the next inject lands on the first free patch above stock")
+    return moved
 
 
 def log(message: str) -> None:
@@ -780,6 +827,16 @@ def main() -> None:
             "pass --glb path.glb  (or --ui). Intake does not ship a character — "
             "bring your own model. Optional: set SUNRISE_GLB."
         )
+    # Before the pipeline, so the inject that follows lands on the first free patch above stock.
+    # Opt-in: it moves live layers, and a caller iterating on a fit wants the chain left alone.
+    if flag("--rebuild"):
+        if not flag("--inject"):
+            raise SystemExit("--rebuild only makes sense with --inject")
+        from known_good import game_running
+        if game_running():
+            raise SystemExit("close Destiny first — it holds the package files open")
+        rebuild_from_stock()
+
     overrides_path = option("--material-map")
     overrides = json.loads(Path(overrides_path).read_text(encoding="utf-8")) if overrides_path else None
     bone = Path(option("--bone-map")) if option("--bone-map") else None
