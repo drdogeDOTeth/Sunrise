@@ -105,9 +105,37 @@ human rig, so a humanoid NPC's FK skeleton is very likely the one our character 
 2 requests seven of them (`ai_zavala` ×2, `ai_tess_everis`, `ai_ikora_rey`, `ai_amanda_holliday`,
 `ai_gunsmith`, `ai_soldier_assault_rifle`).
 
-If one of those carries `0x80808545`, the rig stops being an estimate — and
+### Pass 2 result, 2026-08-26: they do, and five of them share one rig
+
+| NPC | FK skeleton |
+|---|---|
+| `ai_zavala`, `ai_tess_everis`, `ai_ikora_rey`, `ai_amanda_holliday`, `ai_gunsmith` | **`80C2321D`** |
+| `ai_zavala` (v2) | `80F2F5C5` |
+| `ai_soldier_assault_rifle` | `80C224D1` |
+
+**Five different humanoid NPCs name the same skeleton.** That is the shared human rig, and almost
+certainly the one our character is skinned to. `find_guardian_skeleton.py` dead-ended in August
+because it only ever looked at *armour* entities — NPCs carry theirs inline exactly as enemies do.
+
+### The bind-pose format decodes
+
+Rows of **unit quaternion + position**. Verified on the thrall skeleton: the middle four floats of
+a row sum of squares to **1.0001**, and rows pair up as exact **mirrors** — left and right limbs:
+
+```
+ 2.0231  1.0000 | -0.1431 -0.8501 -0.4092  0.2991 |  0.4804  0.6041
+ 1.1564  1.0000 | -0.4092  0.2991  0.1431  0.8501 |  0.4804 -0.6041   <- mirror of the above
+```
+
+Skeleton size corroborates the shape: **shank 2,576 B** (limbless drone), thrall 5,888, Acolyte and
+knight 6,048, Legionary 8,016, **dreg 8,656** (four arms). Header is uniform — `+0x00` byte length,
+`+0x38` pointing 88 bytes before EOF.
+
+Pass 3 requests `80C2321D`, `80F2F5C5`, `80C224D1`. If it parses, `rig.json` stops being an
+estimate recovered from skin weights — and
 [`symmetrize_rig.py`](../tools/pkg/symmetrize_rig.py) and its remaining known error (a 12.20 cm
-humerus against a 26.44 cm forearm) become obsolete rather than a correction.
+humerus against a 26.44 cm forearm) become obsolete rather than a correction. That humerus is the
+sharpest test available: ground truth either confirms it or convicts the estimator.
 
 ---
 
