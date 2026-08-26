@@ -8,7 +8,15 @@ Root `HANDOFF.md` is stale (`_18`); ignore it.
 looking like `tools/pkg/objs/textures/_glb_blender_preview.png` — green SkinTats graffiti, charcoal
 tank, black gas mask, twirl, teal necklace. Not a dye tint.
 
-**Live / restore:** newest is **SchizoAxe at its own proportions** (`037c_38` / `037d_36` /
+**Live / restore:** newest is **v25 rebuilt from stock** (2026-08-26) — snapshot
+`20260826-150031.json`, 29 live layers, character geometry `037c_7` / `037d_6` / `0698_6` totalling
+**5.76 MB where it used to be 315.30 MB across 80 layers**. The regenerated part table matches the
+confirmed-good v25 on every name/start/count; the old layers are in `packages\_prerebuild_20260826\`
+and both configurations are backed up off-disk (`backup_config.py --list`). See
+[`../tools/pkg/backup_config.py`](../tools/pkg/backup_config.py) — `known_good.py` is a manifest,
+not a backup: it records names and moves files, and cannot recover a byte.
+
+Prior: **SchizoAxe at its own proportions** (`037c_38` / `037d_36` /
 `0698_34`) under snapshot `20260826-103621.json` — 118 layers, facing-corrected, no proportion fit
 and no hand fit. Prior SchizoAxe stretched-to-rig: `20260826-093816`. The **v25 body**, the
 long-confirmed character, is `20260825-132926`; worlds-working baseline is `20260824-200131`.
