@@ -137,6 +137,52 @@ estimate recovered from skin weights — and
 humerus against a 26.44 cm forearm) become obsolete rather than a correction. That humerus is the
 sharpest test available: ground truth either confirms it or convicts the estimator.
 
+### Pass 3 result: the bind pose is decoded, and the estimate is convicted
+
+`parse_bind_pose.py` reads it. **32-byte rows: `[scale] [quat x y z w] [pos x y z]`.** The unit
+quaternion is the row test and is what *locates* the table — scan every 4-byte alignment and keep
+the longest passing run. The header does not point at it: `+0x08`/`+0x10` are constant 96/112 on
+every skeleton and `+0x18` points elsewhere. (Dividing the region by 48 looked clean and produced
+NaNs. Alignment scanning is what works; the human rig starts at `0xA5C`.)
+
+| rig | bones | extent |
+|---|---|---|
+| human `80C2321D` | **64** | z 0.000 → 1.677 m, y ±0.427 |
+| thrall | 48 | — |
+| shank | **15** | z 0.000 → 0.939, y ±0.614 |
+
+**It is the right rig, and the control proves it.** Mean nearest-neighbour from our estimated
+`rig.json`:
+
+| vs | mean error |
+|---|---|
+| **human `80C2321D`** | **4.53 cm** |
+| thrall | 14.95 cm |
+| shank | 47.69 cm |
+
+3.3× better against the human rig than a thrall's, 10× than a drone's. (An earlier attempt to
+confirm this by searching the blob for our joint *coordinates* was discarded: random numbers scored
+80.8% against real coordinates' 84.6%. With 1,664 sane floats the value range is saturated and that
+test is worthless. The species control is the one that discriminates.)
+
+**The humerus called it.** `rig.json` read a 12.20 cm humerus against a 26.44 cm forearm, flagged
+here as backwards for a human but unprovable by symmetry. Ground truth:
+
+| | estimate | **truth** |
+|---|---|---|
+| humerus (R) | 15.47 cm | **27.17 cm** |
+| forearm (R) | 26.55 cm | **25.44 cm** |
+
+Humerus slightly longer than forearm — textbook. The estimator had it at half. Most joints are good
+(hands and toes **0.55 cm**, pelvis 3.03, feet 2.44, head 2.26); the bad ones are `spine_lower`
+13.14 cm and `upperarm` 8.73–11.63 cm — interior joints, where a dominant-weight centroid lands
+mid-shaft instead of on the pivot.
+
+**Still open: the index mapping.** Row order is **not** the global bone index that armour weights
+use — testing `row[i]` against `rig.json` bone `i` matches only the pelvis, and that is chance.
+Using the true rig needs the NodeHierarchy (class `0x80808A08`) or bone-name hashes. Until then
+`rig.json` stays as it is; `objs/skeleton/rig_true_human.json` holds the truth alongside it.
+
 ---
 
 ## Procedure
