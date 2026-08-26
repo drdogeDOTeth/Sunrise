@@ -621,6 +621,10 @@ def run_retarget(glb: Path, dest: Path, blender: Path, material_map: Path,
     # leaving the wrist 60 cm short. Pass this to keep the arms exactly as authored.
     if flag("--no-fit-hands"):
         command.append("--no-fit-hands")
+    if option("--limb-girth"):
+        command.extend(["--limb-girth", option("--limb-girth")])
+    if option("--head-scale"):
+        command.extend(["--head-scale", option("--head-scale")])
     log("retarget: " + " ".join(command))
     subprocess.run(command, check=True, cwd=str(HERE))
     if not out.is_file():

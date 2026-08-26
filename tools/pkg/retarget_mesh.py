@@ -80,6 +80,34 @@ if _CHAIN_OPT:
     for _item in _CHAIN_OPT.split(","):
         _name, _, _value = _item.partition("=")
         CHAIN_BLEND[_name.strip()] = float(_value)
+# How much of each segment's *lengthwise* stretch to repeat around the limb. The proportion fit
+# moves joints apart and the armature stretches the mesh between them, which lengthens a limb
+# without widening it - that is exactly what "stilt legs" are. 1.0 scales girth by the same factor
+# as length (a uniform limb, which is what the rig's armour is built for), 0.0 is the old
+# behaviour. Only meaningful with --fit-proportions; there is no stretch to answer otherwise.
+# Scale the head about its own joint, blended by each vertex's head weight so the neck does not
+# pop. 1.0 is off. This is the knob a chibi actually needs: measured on SchizoAxe, **64.7% of the
+# model is head-dominant** and it reaches 0.784 m above the head joint, so fitting the skeleton to
+# human height is what produced a 2.39 m character - the head, not the legs, is the whole of the
+# proportion mismatch. Independent of --fit-proportions; useful in both modes.
+_HEAD_OPT = _take_opt(_ARGS, "--head-scale")
+HEAD_SCALE = float(_HEAD_OPT) if _HEAD_OPT else 1.0
+_GIRTH_OPT = _take_opt(_ARGS, "--limb-girth")
+LIMB_GIRTH = float(_GIRTH_OPT) if _GIRTH_OPT else 1.0
+# Filled by fit_segments: deforming bone name -> how much its segment was stretched lengthwise.
+SEGMENT_STRETCH = {}
+# The only segments a radial scale is meaningful on: the four limb tubes, named by the joint at
+# their near end. A limb really is roughly a cylinder about its bone, so widening it with its
+# length is right. Everything else the fit touches is not, and measuring proved it: the foot
+# scored x2.251 (ankle->toe is not the foot's shape - the toes overhang it, so this is clown
+# feet), and hips/neck/spine are body, not tubes, where a radial scale pinches or barrels the
+# torso. Those segments still stretch lengthwise; they simply get no girth answer.
+GIRTH_SEGMENTS = {
+    "Left arm", "Right arm",       # upper arm: shoulder ball -> elbow
+    "Left elbow", "Right elbow",   # forearm:   elbow -> wrist
+    "Left leg", "Right leg",       # thigh:     hip -> knee
+    "Left knee", "Right knee",     # shin:      knee -> ankle
+}
 HAND_TARGETS = os.path.join(HERE, "objs", "skeleton", "hand_targets.json")
 
 # Artistic roll, applied after the fit: degrees about the forearm axis (pronation - the palm-up to
@@ -395,6 +423,18 @@ def fit_segments(armature, rig, blend=1.0):
     fitted = 0
     world = armature.matrix_world
 
+    def snapshot():
+        """World head of every bone this fit touches, so the stretch can be measured, not assumed."""
+        out = {}
+        for _, chain in FIT_CHAINS:
+            for canonical in chain:
+                bone = armature.pose.bones.get(armature_bone(canonical))
+                if bone is not None:
+                    out[canonical] = (world @ bone.matrix).translation.copy()
+        return out
+
+    before_fit = snapshot()
+
     def place(canonical, joint, amount):
         """Move one bone's head toward its rig joint. Rigid: its children come with it."""
         bone = armature.pose.bones.get(armature_bone(canonical))
@@ -430,6 +470,29 @@ def fit_segments(armature, rig, blend=1.0):
             fitted += 1
             print(f"  {canonical:>15} -> rig joint {joint:<3} moved {moved * 100:6.2f} cm")
 
+    # Record how far each segment was stretched lengthwise, so thicken_limbs can repeat it around
+    # the limb. Measured from the bones themselves before and after, not inferred from the rig:
+    # a blend below 1.0 means a segment lands short of its target and must not claim the full
+    # factor. Keyed by the bone that deforms the segment, which is the one at its near end.
+    after_fit = snapshot()
+    for _, chain in FIT_CHAINS:
+        # One factor for the whole limb, not one per segment. Per-segment girth amplifies the rig's
+        # least-trustworthy joint: the upper-arm estimate (37 and 47 samples, and a humerus reading
+        # 12.20 cm against a 26.44 cm forearm, which is backwards for a human) drove the upper arm
+        # to x0.627 while the forearm went to x1.748 - Popeye arms out of one bad joint. Summing the
+        # limb cancels an error in where its internal joints sit, and "a limb is a uniform tube" is
+        # a claim about the limb anyway, not about each bone in it.
+        limb = [(near, far) for near, far in zip(chain, chain[1:])
+                if near in GIRTH_SEGMENTS and near in before_fit and far in before_fit]
+        if not limb:
+            continue
+        source = sum((before_fit[far] - before_fit[near]).length for near, far in limb)
+        fitted = sum((after_fit[far] - after_fit[near]).length for near, far in limb)
+        if source <= 1e-6 or fitted <= 1e-6:
+            continue
+        for near, _ in limb:
+            SEGMENT_STRETCH[armature_bone(near)] = fitted / source
+
     # Report the thing that actually matters, measured rather than inferred from the factors.
     for canonical in ("Left wrist", "Right wrist", "Left ankle", "Right ankle"):
         bone = armature.pose.bones.get(armature_bone(canonical))
@@ -439,6 +502,116 @@ def fit_segments(armature, rig, blend=1.0):
         error = ((world @ bone.matrix).translation - to_blender(rig[joint])).length
         print(f"  {canonical} landed {error * 100:.2f} cm from rig joint {joint}")
     return fitted
+
+
+def scale_head(armature, meshes, factor):
+    """Scale head-weighted vertices about the head joint. Call after the bake.
+
+    A chibi is a chibi because of its head, and on this source that is not a figure of speech:
+    64.7% of the vertices are head-dominant and the mass reaches 0.784 m above the head joint.
+    Seating the skeleton on a human rig therefore produces a 2.39 m character, and no amount of
+    limb fitting touches it.
+
+    Each vertex moves by its own head weight, so the scale fades out through the neck instead of
+    tearing there. The pivot is the head joint itself, which is where the game will rotate the
+    head anyway - so shrinking about it leaves the animation pivot exactly where it was.
+
+    @return Vertices moved.
+    """
+    if abs(factor - 1.0) < 1e-6:
+        return 0
+    bone_name = armature_bone("Head")
+    bone = armature.pose.bones.get(bone_name)
+    if bone is None:
+        print(f"  no '{bone_name}' bone; head left alone")
+        return 0
+    pivot = (armature.matrix_world @ bone.matrix).translation.copy()
+    moved = 0
+    for o in meshes:
+        group = o.vertex_groups.get(bone_name)
+        if group is None:
+            continue
+        matrix = o.matrix_world
+        inverse = matrix.inverted()
+        for vertex in o.data.vertices:
+            weight = 0.0
+            for entry in vertex.groups:
+                if entry.group == group.index:
+                    weight = entry.weight
+                    break
+            if weight <= 0.0:
+                continue
+            scale = 1.0 + (factor - 1.0) * weight
+            point = matrix @ vertex.co
+            vertex.co = inverse @ (pivot + (point - pivot) * scale)
+            moved += 1
+        o.data.update()
+    print(f"  head x{factor:.3f} about joint z {pivot.z:.3f}, {moved:,} vertices")
+    return moved
+
+
+def thicken_limbs(armature, meshes, blend):
+    """Widen each limb by the same factor its segment was lengthened. Call after the bake.
+
+    The proportion fit moves joints apart and the armature stretches the mesh between them. That
+    is a purely lengthwise scale: a leg fitted x1.70 gets 70% longer and not one millimetre wider,
+    which is the whole of what "stilt legs" are. Real armour on this rig is built for a uniform
+    limb, so repeating the factor radially is the correction, not a stylistic choice.
+
+    Each vertex is scaled about the axis of its dominant bone, by the weighted mean of the factors
+    of every bone it is weighted to. The mean is what keeps a seam from opening where two segments
+    with different factors meet; the single axis is what keeps the shape from shearing.
+
+    @return Vertices moved.
+    """
+    if blend <= 0.0 or not SEGMENT_STRETCH:
+        return 0
+    world = armature.matrix_world
+    axes = {}
+    for name, stretch in SEGMENT_STRETCH.items():
+        bone = armature.pose.bones.get(name)
+        if bone is None:
+            continue
+        head = world @ bone.head
+        direction = (world @ bone.tail) - head
+        if direction.length < 1e-6:
+            continue
+        axes[name] = (head, direction.normalized(), 1.0 + (stretch - 1.0) * blend)
+
+    for name, (_, _, factor) in sorted(axes.items()):
+        print(f"  {name:>18} girth x{factor:.3f}")
+
+    moved = 0
+    for o in meshes:
+        names = {group.index: group.name for group in o.vertex_groups}
+        matrix = o.matrix_world
+        inverse = matrix.inverted()
+        for vertex in o.data.vertices:
+            total = 0.0
+            blended = 0.0
+            dominant, best = None, 0.0
+            for group in vertex.groups:
+                axis = axes.get(names.get(group.group))
+                if axis is None or group.weight <= 0.0:
+                    continue
+                total += group.weight
+                blended += group.weight * axis[2]
+                if group.weight > best:
+                    dominant, best = names[group.group], group.weight
+            if dominant is None or total <= 0.0:
+                continue
+            factor = blended / total
+            if abs(factor - 1.0) < 1e-4:
+                continue
+            head, direction, _ = axes[dominant]
+            point = matrix @ vertex.co
+            offset = point - head
+            along = offset.dot(direction)
+            radial = offset - direction * along
+            vertex.co = inverse @ (head + direction * along + radial * factor)
+            moved += 1
+        o.data.update()
+    return moved
 
 
 def align(armature, name, direction_world):
@@ -755,6 +928,16 @@ def main():
         for modifier in list(o.modifiers):
             if modifier.type == 'ARMATURE':
                 bpy.ops.object.modifier_apply(modifier=modifier.name)
+
+    # After the bake, so the lengthwise stretch is already in the vertices and the girth pass is
+    # answering what actually happened rather than what was asked for.
+    if RETARGET and FIT_PROPORTIONS and LIMB_GIRTH > 0.0:
+        print("limb girth:")
+        moved = thicken_limbs(armature, meshes, LIMB_GIRTH)
+        print(f"  widened {moved:,} vertices (--limb-girth {LIMB_GIRTH})")
+    if RETARGET and abs(HEAD_SCALE - 1.0) > 1e-6:
+        print("head scale:")
+        scale_head(armature, meshes, HEAD_SCALE)
 
     for o in bpy.data.objects:
         o.select_set(False)

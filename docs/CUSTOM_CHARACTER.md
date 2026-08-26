@@ -40,10 +40,38 @@ proportion fit is off; on a short-armed source it blows the forearm out (**×5.3
 leaving the wrist 60 cm short — the worst of both. Leave the proportion fit **off** for a source
 authored to the rig (the v25 body), and turn both off together for a source you want kept as-is.
 
-**Neither mode fixes a chibi.** No single scale serves arms (×1.33), torso (×1.22) and legs
-(×2.35), and the float cannot be dropped away: the game positions mesh relative to the **bind-pose**
-joints, so a foot 42.5 cm above its own ankle joint stays there forever. The proper fix is
-lengthening the model's legs in Blender.
+**What makes a chibi a chibi is the head, and that was measured wrong before.** Against the
+corrected rig the chains need **arms ×1.34, spine ×1.64, legs ×1.70** — closer together than the
+old note claimed (×1.33 / ×1.22 / ×2.35), because those were read off an asymmetric rig. The real
+mismatch is elsewhere: **64.7% of SchizoAxe's vertices are head-dominant**, and that mass reaches
+**0.784 m above the head joint**. So seating the skeleton at human height gives a **2.39 m**
+character — that is what "all stretched out" was. Lengthening the legs never addressed it.
+
+`--head-scale` is the knob, scaling head-weighted vertices about the head joint, faded by weight so
+the neck does not tear. Measured: **×1.00 → 2.36 m, ×0.55 → 2.01 m, ×0.30 → 1.81 m** (a Guardian is
+~1.80 m). Render the choice rather than guessing — `python render_obj.py sheet.png a.obj b.obj`.
+
+**The rig itself was asymmetric, and it is fixed.** `skeleton.py` estimates each joint
+independently, so thinly-sampled joints landed wherever their few vertices sat. The upper-arm joint
+(37 and 47 samples, the thinnest in the rig) was **7.65 cm** off its mirror, which made a perfectly
+symmetric source measure ×1.97 on one arm segment and ×0.55 on the other — and `fit_segments` was
+aiming at that. `python symmetrize_rig.py` mirror-averages every pair, weighted by sample count;
+worst error **7.65 cm → 0.00**, mean 1.72 → 0.00. Reversible with `--restore`.
+
+Still wrong, and symmetry cannot see it: the rig reads a **12.20 cm humerus against a 26.44 cm
+forearm**, which is backwards for a human. Mirroring only removes the *antisymmetric* half of an
+error, so a joint misplaced the same way on both sides survives it.
+
+**`--limb-girth` stops the stilts.** The fit moves joints apart and the armature stretches the mesh
+between them — lengthwise only, not one millimetre wider. Girth repeats the stretch radially about
+the bone axis. Two things it deliberately does not do, both because measuring said so: it uses the
+**whole-limb** factor rather than per-segment (per-segment drove the upper arm to ×0.627 against a
+×1.748 forearm — Popeye, straight out of that bad humerus), and it skips feet, hips, neck and spine
+(the foot scored ×2.251, since ankle→toe is not the foot's shape). Result on SchizoAxe: arms
+**×1.117**, legs **×1.286**, uniform per limb.
+
+The float still cannot be dropped away: the game positions mesh relative to the **bind-pose**
+joints, so a foot 42.5 cm above its own ankle joint stays there forever.
 
 **Alpha-cut parts need the shader clip.** SchizoAxe's eye and mouth planes are 90.7% / 91.7%
 transparent pixels; without `clip(texel.a - 0.5)` in `kShaderSource` they render as opaque slabs
