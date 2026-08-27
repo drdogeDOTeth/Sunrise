@@ -69,12 +69,12 @@ Whichever is patched, the actor that spawns and vendors gets it.
 
 Model scale 0.8955 on both models.
 
-| model | mesh | parts | positions | stride | **verts** | fits our 4,227? |
+| model | mesh | parts | positions | stride | **verts** | note |
 |---|---|---|---|---|---|---|
-| `80C714B2` | 0 | 39 | 98,352 B | 16 | 6,147 | yes |
-| `80C714B2` | 1 | 15 | 3,996 B | 12 | 333 | **no** |
-| `80C714B2` | 2 | 132 | 98,936 B | 8 | **12,367** | yes |
-| `80C714B3` | 0 | 8 | 10,560 B | 48 | 220 | **no** |
+| `80C714B2` | 0 | 39 | 98,352 B | 16 | 6,147 | **the body** |
+| `80C714B2` | 1 | 15 | 3,996 B | 12 | 333 | fragments |
+| `80C714B2` | 2 | 132 | 98,936 B | 8 | **12,367** | the armour |
+| `80C714B3` | 0 | 8 | 10,560 B | 48 | 220 | cloth/cape |
 
 **The parse self-checks.** Within every mesh the position and texcoord buffers divide to the *same*
 integer by different strides — mesh 0 gives 6,147 from stride 16 and from stride 20, mesh 2 gives
@@ -86,9 +86,17 @@ Mesh 2's **stride 8 is packed int16**, which is exactly the format `inject_mesh.
 `80C714B3` is the only model carrying a **weights** buffer (`80B9F66A`, 1,760 B, stride 8 → 220);
 all three meshes of `80C714B2` hold `0xFFFFFFFF` in that slot.
 
-**No decimate is needed** for meshes 0 or 2 — the injector may never *exceed* the target's count and
-ours is 4,227. Meshes 1 and `80C714B3`'s single mesh are both smaller than our character, so they
-are not swap targets.
+**On vertex counts — corrected.** An earlier note here said the character is 4,227 vertices and the
+injector may never exceed the target's count. Both halves were wrong. The merged GLB is **61,908**
+and the live injected mesh is **58,858** (position buffer 941,728 B at stride 16, replacing the
+4,100-vertex Scatterhorn chest). `has_room` caps the count only when the texcoord buffer is
+**inherited** — a longer vertex list then seeks past its end and hangs the Tower. Rewriting the UVs
+lifts the cap, and that is what the live inject does.
+
+So Zavala's mesh 0 at 6,147 does not constrain us, but the texcoord buffer must be rewritten too:
+122,940 B at stride 20 today, and 58,858 vertices would need 1,177,160 B. The real ceiling is
+**16-bit indices** — above 65,535 vertices the injector would need 32-bit, which it does not write.
+58,858 sits close to that line.
 
 ### Which mesh is which, settled by looking
 

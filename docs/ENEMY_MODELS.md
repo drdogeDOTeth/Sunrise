@@ -93,9 +93,18 @@ table and vertex counts are still unread.
 
 Fallen — `dreg`, `vandal`, `captain` — have **four arms**. They are not retarget targets.
 
-Two constraints bite before animation does: our character is **4,227 vertices** and the injector may
-never exceed the target's count; and the paint path is keyed to the Guardian draw, so
-`custom_albedo`'s exact `(start, count)` ranges and its G-buffer gate need redoing for an enemy.
+Two constraints bite before animation does. **Corrected 2026-08-27:** the character is not 4,227
+vertices - that figure was never sourced. The merged GLB is **61,908** and the live injected mesh
+is **58,858** (its position buffer is 941,728 B at stride 16, against the 4,100-vertex Scatterhorn
+chest it replaced). And the injector *may* exceed the target's count: `has_room` caps it only when
+the texcoord buffer is **inherited**, because a longer vertex list then seeks past the end of that
+buffer and hangs the Tower. Rewrite the UVs and the cap lifts, which is what the live inject does.
+
+The real ceiling is **16-bit indices**: above 65,535 vertices the injector would have to write
+32-bit ones, and it does not. At 58,858 the character is close to that line.
+
+The second constraint is the paint path, which is keyed to the Guardian draw — `custom_albedo`'s
+exact `(start, count)` ranges and its G-buffer gate need redoing for an enemy.
 
 And the honest risk: **some packages reject our layers** — still unsolved, and a rejected layer
 hangs the world load rather than failing gracefully. Enemy models live in packages we have never
