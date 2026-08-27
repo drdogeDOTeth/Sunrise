@@ -1,40 +1,51 @@
 """Fit an image to the title-screen backdrop quad, and stamp a logo on it.
 
 The backdrop is bound at draw time by size (`docs/MENU_SKIN.md`). The hook hands the game whatever
-file it finds, so **the file's pixel dimensions are irrelevant** — the quad maps UV 0..1 across
-whatever it is given. What matters is one number: **the quad's screen aspect**. Give it a 16:9
-photo and a wider quad pulls it sideways.
+file it finds, so the file's pixel dimensions are irrelevant on their own. What decides the result
+is that **the quad samples a window out of the middle of the texture** and maps that window to a
+screen rect wider than 16:9. Hand it a photo unprepared and the middle is cropped out and pulled
+sideways.
 
-That number was not guessed. A 16:9 source (3840x2160) on this quad read as *slightly* stretched,
-and only one geometry produces "slightly":
+## The window, measured
 
-    rect 2.157:1, full UV   ->  1.21x horizontal   <- matches
-    rect 16:9,    full UV   ->  none               <- would have looked perfect
-    middle-67% crop, either ->  1.50x .. 1.82x     <- would have looked wrecked
+Solved by locating two features in both the baked file and a screenshot of it in game - the bright
+ceiling light bar's ends horizontally, the bar and the lit ledge vertically:
 
-So the correction is a **cover crop to the quad's aspect**, never a resize: fill the screen, lose a
-little off the top and bottom, keep circles circular.
+    u  0.184 .. 0.807   (the middle 62% of the width)
+    v  0.006 .. 0.926   (nearly the full height)
+    screen rect 1920 x 883, sitting under the mirrored band that occupies the top 197 px
 
-Because the file's own aspect is what lands on screen, this writes the output *at the quad's
-aspect*. Nothing is pre-warped, so the PNG on disk looks exactly like the thing in game.
+Four things confirm it rather than one. A logo baked at u=0.021 did not appear; all four corner
+ticks did not appear; the crowd came back zoomed by exactly the predicted factor; and a circle
+baked at the texture centre rendered as a 914x615 ellipse, against arcs measured at x=515 and 1415
+versus 516 and 1431 predicted.
 
-## Confirming the aspect rather than trusting it
+An earlier guess put the window at full UV, on the reasoning that a 16:9 source read as only
+*slightly* stretched. That was wrong, and wrong in an instructive way: **"looks slightly off" is not
+a measurement.** The marks are.
 
-`--marks` overlays a faint circle and corner ticks at low opacity. One screenshot then settles it:
+## What this does
 
-* circle round -> the aspect is right
-* circle an ellipse -> its width:height **is** the remaining correction, feed it to `--aspect`
-* a corner tick missing -> the quad crops, and by how much
+Cover-crops the source to the *screen rect's* aspect - fill the screen, trim the overflow, keep
+circles circular - and lays it into the UV window, so the crop is what reaches the screen. Anything
+outside the window is never seen by this quad, and is filled with a blurred, darkened copy because
+the second layer samples out there.
+
+Logos and marks are positioned in **screen** coordinates and mapped back through the window, so
+"top-left corner" means the corner of the screen, not of the file.
+
+`--marks` overlays a faint circle and corner ticks. They are drawn pre-distorted, so a correct
+render shows a true circle and four ticks at the screen corners. Anything else is the residual
+error, and the ellipse's width:height is the size of it.
 
 Usage:
-    python make_menu_background.py menu_bg.jpg --out title_bg.png
-    python make_menu_background.py menu_bg.jpg --logo doge_white.png --marks
-    python make_menu_background.py sky.jpg --aspect 2.0 --logo-corner tr --logo-height 0.14
+    python make_menu_background.py menu_bg.jpg --logo doge_white.png --out title_bg.png
+    python make_menu_background.py sky.jpg --logo-corner tr --logo-height 0.14 --marks
+    python make_menu_background.py sky.jpg --window 0.19,0.81,0.0,0.93   # re-measured window
 
 Then in `C:\\Sunrise\\bin\\x64\\Sunrise\\menu_probe.txt`:
 
     3030 940  title_bg.png
-    1920 1200 title_bg.png
 """
 from __future__ import annotations
 
@@ -47,9 +58,10 @@ except ImportError:  # pragma: no cover - guidance beats a traceback
     print("needs Pillow:  python -m pip install pillow")
     raise SystemExit(2)
 
-# Measured, not assumed - see the module docstring for how it was pinned down.
-QUAD_ASPECT = 2.157
-OUT_WIDTH = 2880
+# Measured, not assumed - see the module docstring for how, and for what confirmed it.
+WINDOW = (0.184, 0.807, 0.006, 0.926)
+RECT = (1920, 883)
+SLOT = (3030, 940)
 
 CORNERS = {"tl": (0.0, 0.0), "tr": (1.0, 0.0), "bl": (0.0, 1.0), "br": (1.0, 1.0)}
 
@@ -63,13 +75,19 @@ def option(name: str, fallback: str = "") -> str:
     return fallback
 
 
+def numbers(text: str, count: int) -> tuple[float, ...]:
+    parts = tuple(float(p) for p in text.replace("x", ",").split(","))
+    if len(parts) != count:
+        raise SystemExit(f"expected {count} comma-separated numbers, got '{text}'")
+    return parts
+
+
 def cover(image: Image.Image, width: int, height: int) -> Image.Image:
     """@return `image` cropped to width:height, then scaled to exactly that size.
 
-    Cover, not fit: the frame is filled and the overflow is trimmed evenly, so nothing distorts.
+    Cover, not fit: the frame is filled and the overflow trimmed evenly, so nothing distorts.
     """
-    want = width / height
-    have = image.width / image.height
+    want, have = width / height, image.width / image.height
     if have > want:  # source is wider - trim the sides
         keep = round(image.height * want)
         box = ((image.width - keep) // 2, 0, (image.width - keep) // 2 + keep, image.height)
@@ -79,65 +97,99 @@ def cover(image: Image.Image, width: int, height: int) -> Image.Image:
     return image.resize((width, height), Image.LANCZOS, box=box)
 
 
-def stamp_logo(canvas: Image.Image, logo: Image.Image, corner: str,
-               height_frac: float, margin_frac: float) -> tuple[int, int, int, int]:
-    """Composite `logo` into a corner of `canvas`, sized as a fraction of canvas height.
+class Quad:
+    """Maps screen coordinates to texture pixels through the measured UV window."""
+
+    def __init__(self, window, rect, slot):
+        self.u0, self.u1, self.v0, self.v1 = window
+        self.rect_w, self.rect_h = rect
+        self.slot_w, self.slot_h = slot
+        self.x0 = self.u0 * self.slot_w
+        self.y0 = self.v0 * self.slot_h
+        self.box_w = (self.u1 - self.u0) * self.slot_w
+        self.box_h = (self.v1 - self.v0) * self.slot_h
+
+    @property
+    def box(self) -> tuple[int, int, int, int]:
+        return (round(self.x0), round(self.y0),
+                round(self.x0 + self.box_w), round(self.y0 + self.box_h))
+
+    def point(self, sx: float, sy: float) -> tuple[float, float]:
+        """@return Texture pixel for a screen pixel."""
+        return (self.x0 + sx / self.rect_w * self.box_w,
+                self.y0 + sy / self.rect_h * self.box_h)
+
+    def size(self, sw: float, sh: float) -> tuple[float, float]:
+        """@return Texture pixel size for a screen pixel size, pre-distorted."""
+        return (sw / self.rect_w * self.box_w, sh / self.rect_h * self.box_h)
+
+
+def stamp_logo(canvas: Image.Image, quad: Quad, logo: Image.Image, corner: str,
+               height_frac: float, margin_frac: float) -> str:
+    """Composite `logo` into a corner **of the screen**, sized as a fraction of screen height.
 
     A white mark on a photograph needs help to stay legible, so it carries a soft dark shadow.
-    @return The placed box, for reporting.
     """
     ink = logo.getbbox()
     if ink is not None:
         logo = logo.crop(ink)
-    tall = max(round(canvas.height * height_frac), 8)
-    wide = max(round(logo.width * tall / logo.height), 8)
-    logo = logo.resize((wide, tall), Image.LANCZOS)
 
+    tall = quad.rect_h * height_frac
+    wide = logo.width * tall / logo.height
+    pad = quad.rect_h * margin_frac
     fx, fy = CORNERS[corner]
-    pad = round(canvas.height * margin_frac)
-    x = round(fx * (canvas.width - wide - 2 * pad)) + pad
-    y = round(fy * (canvas.height - tall - 2 * pad)) + pad
+    sx = fx * (quad.rect_w - wide - 2 * pad) + pad
+    sy = fy * (quad.rect_h - tall - 2 * pad) + pad
 
-    blur = max(round(tall * 0.05), 2)
-    shadow = Image.new("RGBA", (wide + blur * 6, tall + blur * 6), (0, 0, 0, 0))
+    tw, th = quad.size(wide, tall)
+    tx, ty = quad.point(sx, sy)
+    logo = logo.resize((max(round(tw), 8), max(round(th), 8)), Image.LANCZOS)
+
+    blur = max(round(min(logo.size) * 0.05), 2)
+    shadow = Image.new("RGBA", (logo.width + blur * 6, logo.height + blur * 6), (0, 0, 0, 0))
     shadow.paste((0, 0, 0, 190), (blur * 3, blur * 3), logo)
     shadow = shadow.filter(ImageFilter.GaussianBlur(blur))
-    canvas.alpha_composite(shadow, (x - blur * 3, y - blur * 3))
-    canvas.alpha_composite(logo, (x, y))
-    return x, y, wide, tall
+    canvas.alpha_composite(shadow, (round(tx) - blur * 3, round(ty) - blur * 3))
+    canvas.alpha_composite(logo, (round(tx), round(ty)))
+    return (f"{wide:.0f}x{tall:.0f} screen px at ({sx:.0f}, {sy:.0f}) "
+            f"-> {logo.width}x{logo.height} texture px at ({tx:.0f}, {ty:.0f})")
 
 
-def add_marks(canvas: Image.Image) -> None:
-    """Faint registration marks: a circle for aspect, corner ticks for crop.
+def add_marks(canvas: Image.Image, quad: Quad) -> None:
+    """Registration marks laid out in screen space, so a correct render shows a true circle.
 
-    Deliberately low-contrast. These ride on a finished background so the next screenshot doubles
+    Deliberately low-contrast. These ride on a finished background, so the next screenshot doubles
     as a measurement without spoiling the look.
     """
     layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
-    ink = (255, 255, 255, 46)
-    line = max(round(canvas.height * 0.0025), 2)
+    ink, faint = (255, 255, 255, 52), (255, 255, 255, 30)
+    line = max(round(quad.box_h * 0.003), 2)
 
-    r = canvas.height * 0.32
-    cx, cy = canvas.width / 2, canvas.height / 2
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=ink, width=line)
-    draw.line([(cx - r, cy), (cx + r, cy)], fill=(255, 255, 255, 26), width=line)
-    draw.line([(cx, cy - r), (cx, cy + r)], fill=(255, 255, 255, 26), width=line)
+    r = quad.rect_h * 0.34
+    cx, cy = quad.point(quad.rect_w / 2, quad.rect_h / 2)
+    rx, ry = quad.size(r, r)
+    draw.ellipse([cx - rx, cy - ry, cx + rx, cy + ry], outline=ink, width=line)
+    draw.line([(cx - rx, cy), (cx + rx, cy)], fill=faint, width=line)
+    draw.line([(cx, cy - ry), (cx, cy + ry)], fill=faint, width=line)
 
-    arm = round(canvas.height * 0.05)
+    # Ticks inset from the screen corners, so a small error still leaves them on screen.
+    arm_x, arm_y = quad.size(quad.rect_h * 0.05, quad.rect_h * 0.05)
     for fx, fy in CORNERS.values():
-        x = round(fx * (canvas.width - 1))
-        y = round(fy * (canvas.height - 1))
+        inset_x = quad.rect_w * (0.02 if fx == 0 else 0.98)
+        inset_y = quad.rect_h * (0.02 if fy == 0 else 0.98)
+        x, y = quad.point(inset_x, inset_y)
         sx = -1 if fx else 1
         sy = -1 if fy else 1
-        draw.line([(x, y), (x + sx * arm, y)], fill=ink, width=line * 2)
-        draw.line([(x, y), (x, y + sy * arm)], fill=ink, width=line * 2)
+        draw.line([(x, y), (x + sx * arm_x, y)], fill=ink, width=line * 2)
+        draw.line([(x, y), (x, y + sy * arm_y)], fill=ink, width=line * 2)
     canvas.alpha_composite(layer)
 
 
 def main() -> int:
     plain = [a for a in sys.argv[1:] if not a.startswith("--")]
-    for name in ("out", "aspect", "width", "logo", "logo-corner", "logo-height", "logo-margin"):
+    for name in ("out", "window", "rect", "slot", "logo", "logo-corner", "logo-height",
+                 "logo-margin"):
         value = option(name)
         if value in plain:
             plain.remove(value)
@@ -150,19 +202,31 @@ def main() -> int:
         print(f"no such image: {source}")
         return 1
 
-    aspect = float(option("aspect", str(QUAD_ASPECT)))
-    width = int(option("width", str(OUT_WIDTH)))
-    height = max(round(width / aspect), 2)
+    window = numbers(option("window", ",".join(str(v) for v in WINDOW)), 4)
+    rect = tuple(int(v) for v in numbers(option("rect", "%dx%d" % RECT), 2))
+    slot = tuple(int(v) for v in numbers(option("slot", "%dx%d" % SLOT), 2))
+    quad = Quad(window, rect, slot)
     out = Path(option("out", "title_bg.png"))
 
     image = Image.open(source).convert("RGBA")
     had = image.width / image.height
-    canvas = cover(image, width, height)
+    want = rect[0] / rect[1]
     print(f"{source.name}  {image.width}x{image.height} (aspect {had:.3f})")
-    edge = "top/bottom" if had < aspect else "the sides"
-    lost = 1 - min(had, aspect) / max(had, aspect)
-    print(f"  cover-cropped to {width}x{height} (aspect {aspect:.3f}) - "
-          f"{100 * lost:.1f}% trimmed off {edge}")
+    print(f"  quad window u {window[0]:.3f}..{window[1]:.3f}  v {window[2]:.3f}..{window[3]:.3f}"
+          f"  -> screen {rect[0]}x{rect[1]} (aspect {want:.3f})")
+
+    # Outside the window this quad never looks, but the second layer does - so fill it rather
+    # than leave a hard edge, blurred and darkened so it reads as an out-of-focus surround.
+    canvas = cover(image, *slot).filter(ImageFilter.GaussianBlur(slot[0] * 0.012))
+    canvas = Image.blend(canvas, Image.new("RGBA", canvas.size, (0, 0, 0, 255)), 0.45)
+
+    box = quad.box
+    fitted = cover(image, box[2] - box[0], box[3] - box[1])
+    canvas.paste(fitted, (box[0], box[1]))
+    edge = "top/bottom" if had < want else "the sides"
+    lost = 1 - min(had, want) / max(had, want)
+    print(f"  cover-cropped to {want:.3f} ({100 * lost:.1f}% trimmed off {edge}) and laid into"
+          f" the window at {box[0]},{box[1]} {box[2] - box[0]}x{box[3] - box[1]} px")
 
     logo_path = option("logo")
     if logo_path:
@@ -174,19 +238,17 @@ def main() -> int:
         if corner not in CORNERS:
             print(f"--logo-corner must be one of {', '.join(CORNERS)}")
             return 1
-        box = stamp_logo(canvas, Image.open(logo_file).convert("RGBA"), corner,
-                         float(option("logo-height", "0.12")),
-                         float(option("logo-margin", "0.045")))
-        print(f"  {logo_file.name} at {corner}: {box[2]}x{box[3]} px at ({box[0]}, {box[1]})"
-              f" = {100 * box[0] / width:.1f}%, {100 * box[1] / height:.1f}% of the screen")
+        where = stamp_logo(canvas, quad, Image.open(logo_file).convert("RGBA"), corner,
+                           float(option("logo-height", "0.13")),
+                           float(option("logo-margin", "0.05")))
+        print(f"  {logo_file.name} {corner}: {where}")
 
     if "--marks" in sys.argv:
-        add_marks(canvas)
-        print("  registration marks on: circle = aspect, corner ticks = crop")
+        add_marks(canvas, quad)
+        print("  marks on: a true circle and four corner ticks mean the window is right")
 
-    canvas.convert("RGB").save(out, quality=95)
-    print(f"  wrote {out}  ({out.stat().st_size / 1024:.0f} KB)"
-          if out.exists() else f"  wrote {out}")
+    canvas.convert("RGB").save(out)
+    print(f"  wrote {out}  {slot[0]}x{slot[1]}  ({out.stat().st_size / 1024:.0f} KB)")
     return 0
 
 

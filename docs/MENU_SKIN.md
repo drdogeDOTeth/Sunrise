@@ -63,35 +63,53 @@ overwrite it. Only 32-bit formats are dumped; BC7 slots come back empty.
 
 ---
 
-## Fitting a background: the quad's aspect, not the file's
+## Fitting a background: the quad reads a window, not the whole texture
 
-The hook hands the game whatever file it finds, and the quad maps UV 0..1 across it. So **the
-file's pixel dimensions are irrelevant** and only one number matters: the quad's screen aspect.
+The hook hands the game whatever file it finds, so the file's pixel dimensions do not decide
+anything on their own. What decides the result is that **the backdrop quad samples a window out of
+the middle of the texture** and maps it to a screen rect wider than 16:9:
 
-That number was pinned by elimination, not measured with a ruler. The backdrop was bound to a
-3840×2160 (16:9) photo and read as *slightly* stretched. Only one geometry produces "slightly":
+```
+u  0.184 .. 0.807     the middle 62% of the width
+v  0.006 .. 0.926     nearly the full height
+screen rect 1920 x 883, under the band that occupies the top 197 px
+```
 
-| quad geometry | distortion on a 16:9 source |
-|---|---|
-| full UV, screen rect **2.157:1** | **1.21× horizontal — matches** |
-| full UV, rect 16:9 | none, and some was visible |
-| middle-67% crop, either rect | 1.50–1.82×, which would read as wrecked |
+Solved by locating two features in both the baked file and a screenshot of it in game — the bright
+ceiling light bar's two ends horizontally, the bar and the lit ledge vertically.
 
-So the correction is a **cover crop to 2.157:1** — fill the screen, lose ~18% off top and bottom,
-keep circles circular. Never a resize, which is what stretched it in the first place.
+**Four independent things confirm it**, which is the reason to trust it:
+
+* a logo baked at u 0.021 did not appear on screen
+* all four corner ticks did not appear
+* the crowd came back zoomed by the predicted factor
+* a circle baked at the texture centre rendered as a 914×615 ellipse, arcs measured at x 515 and
+  1415 against 516 and 1431 predicted
+
+So the fix is to **cover-crop to the screen rect's 2.174 and lay that into the window** — fill the
+screen, trim ~18% off top and bottom, keep circles circular.
 
 ```bash
 python make_menu_background.py menu_bg.jpg --logo doge_white.png --out title_bg.png
-python make_menu_background.py sky.jpg --aspect 2.0 --logo-corner tr --marks
+python make_menu_background.py sky.jpg --logo-corner tr --marks
+python make_menu_background.py sky.jpg --window 0.19,0.81,0.0,0.93   # if re-measured
 ```
 
-The output is written *at* the quad's aspect, so the PNG on disk looks exactly like the thing in
-game — nothing is pre-warped and nothing has to be imagined.
+Logos and marks are positioned in **screen** coordinates and mapped back through the window, so
+"top-left corner" means the corner of the screen rather than of the file.
 
-**`--marks` turns a pretty screenshot into a measurement.** A faint circle and corner ticks ride on
-the finished background at ~18% opacity. Circle round → the aspect is right. Circle an ellipse →
-its width:height *is* the remaining correction, feed it back through `--aspect`. A corner tick
-missing → the quad crops, and by how much. Drop the flag once it reads clean.
+**`--marks` turns a pretty screenshot into a measurement.** A faint circle and four corner ticks
+ride on the finished background at ~20% opacity, drawn pre-distorted so a correct render shows a
+true circle and four visible ticks. An ellipse's width:height is the residual error; a missing tick
+says the window is still wrong on that edge. Drop the flag once it reads clean.
+
+### The mistake worth not repeating
+
+The first attempt put the window at full UV, reasoning that a 16:9 source read as only *slightly*
+stretched and only a full-UV wide rect predicts "slightly". That reasoning was sound and the
+premise was junk: **"looks slightly off" is not a measurement.** An earlier calibration pass had
+already read the window as roughly the middle two-thirds, and it was talked away on the strength of
+a feeling about a screenshot. Trust the grid, or trust the marks — not the impression.
 
 ### Where a logo can go
 
@@ -100,6 +118,13 @@ rotating emblem behind the title, plus the Bungie glyph (276×276) and the "2" (
 draws in the top-left corner**, so a corner mark has no slot of its own and is composited into the
 background instead. That costs nothing: the background is already being baked, and the logo then
 travels with whichever theme is loaded.
+
+### The band across the top
+
+The 1920×1200 layer draws over the top ~197 px and samples near **u 0.94, mirrored** — which is what
+was throwing reversed ceiling lights across the top of the screen when both layers were bound to
+the same photo. Since that region is outside the backdrop's own window, the fitter fills it with a
+blurred, darkened copy, and the band becomes a soft dark strip instead of a competing reflection.
 
 ---
 
