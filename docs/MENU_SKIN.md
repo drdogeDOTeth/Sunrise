@@ -132,8 +132,11 @@ travels with whichever theme is loaded.
 ### The character select screen is a different quad
 
 It draws from the **1920×1200** slot, not the 3030×940 one, and reads the texture across its whole
-width — offset by **0.502**, wrapping. Two textures share that size, one BC7 and one UNORM, and
-matching is by size, so both get replaced.
+width — offset by **0.502**, wrapping. **Three** textures share that size — BC7 (98), UNORM (28) and
+BC7 sRGB (99) — and matching is by size, so all three get replaced.
+
+Surveying both screens in one launch filled all 64 slots: 33 for the title screen, the rest for
+character select, so the list is complete for neither and there may be more past the cap.
 
 The offset was measured off the logo, which makes a good landmark because its position in the file
 is known exactly: baked at u 0.028, it rendered at screen x 1010 of 1920, and its 140 texture px
