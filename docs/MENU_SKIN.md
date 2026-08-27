@@ -18,8 +18,8 @@ launch once, read it off a screenshot. Every guess resolved in a single pass.
 | 3030×940 | RGBA8_UNORM | main backdrop |
 | 1920×1200 | **BC7** | second background layer behind it |
 | 1024×1024 | **A8** | font glyph atlas |
-| 276×276 | — | draws where the Bungie glyph sits, between DESTINY and 2 |
-| 112×158 | — | draws where the "2" sits |
+| 112×158 | RGBA8_UNORM | **the "2" of DESTINY 2** — authored art, dumped and confirmed |
+| 276×276 | RGBA8_UNORM | draws where the Bungie glyph sits, but **alpha peaks at 46** — a glow, not the glyph |
 
 Two of those readings settle questions on their own:
 
@@ -124,9 +124,14 @@ a feeling about a screenshot. Trust the grid, or trust the marks — not the imp
 ### Where a logo can go
 
 The colour pass tinted ten small quads at once. Every one drew centre or centre-right — the
-rotating emblem behind the title, plus the Bungie glyph (276×276) and the "2" (112×158). **Nothing
-draws in the top-left corner**, so a corner mark has no slot of its own and is composited into the
-background instead. That costs nothing: the background is already being baked, and the logo then
+rotating emblem behind the title, plus two that land on the lockup itself. **Nothing draws in the
+top-left corner**, so a corner mark has no slot of its own and is composited into the background
+instead.
+
+Dumping those two settles what they are: **112×158 is the "2"**, finished white-on-alpha art. The
+276×276 sits where the Bungie glyph does but its alpha peaks at 46 of 255, so it is a glow behind
+the glyph rather than the glyph — putting a mark there would render at 18% opacity. If the lockup
+itself is ever the target, the glyph is a slot still to be found. That costs nothing: the background is already being baked, and the logo then
 travels with whichever theme is loaded.
 
 ### The character select screen is a different quad
