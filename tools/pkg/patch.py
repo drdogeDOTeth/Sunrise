@@ -12,17 +12,30 @@ body stay exactly as shipped, and only the records describing the replaced entry
 ## What it does
 
 The new body is appended past the end of the file and the entry's own block record is repointed at
-it. Blocks are **Oodle-compressed when that pays and stored plain when it does not**, and never
-encrypted. That is legal because block flags are per-record and the reader honours them per block,
-so a block of ours sitting among encrypted ones decodes without any key. All four flag combinations
-ship, and `w64_audio_01d2_en` mixes plain and encrypted blocks in one file, so this is the format's
+it, stored **plain** — neither compressed nor encrypted. A plain block sitting among encrypted ones
+decodes without any key, and `w64_audio_01d2_en` mixes the two in one file, so this is the format's
 own behaviour rather than a hopeful reading of it. This is what makes the whole approach work
 without touching the game's proprietary key table: writing never needs it.
 
-Compressing is what a shipped block does — 80.1% of all block records are compressed and encrypted,
-and Kraken takes our geometry to about a third of its size. Choosing per block rather than always
-compressing is also the format's behaviour: plain blocks exist in quantity, which is what a writer
-that skips compression when it does not pay would produce.
+## Why not compressed
+
+Compression is implemented, correct, and **switched off**, because the game will not load the result.
+
+A census of all 2,231 installed packages — **1,897,918 block records** — finds compressed+encrypted
+(80.6%) and plain (17.9%) and **exactly zero blocks that are compressed but not encrypted**. The
+combination this writer would have to produce, having no keys, is one the format never ships.
+
+Tested rather than inferred. Layers written with compressed blocks **register cleanly** — the
+container is structurally right — and then fail at content load:
+
+    files:async: decompression failed for package w64_sandbox_037c_7.pkg
+
+So compression is only reachable together with encryption, and encryption needs the block keys,
+which stay inside the game. **Plain is the only encoding a writer without keys can legally produce.**
+It is not a shortcut taken for convenience; it is the whole of what is available.
+
+`compress=True` still works and round-trips byte-exact through the game's own codec, so the encoding
+is ready if the keys ever become reachable. It should not be used against a live install.
 
 A block record is 48 bytes and every field matters. The four leading fields fill 12; bytes 12-31
 carry a SHA-1 and bytes 32-47 an AES-GCM tag used only when the encrypted flag is set. Writing the
@@ -244,7 +257,7 @@ def plan_patch(pkg: Package, entry_index: int, new_size: int) -> Plan:
 
 
 def write_patch_package(source: str | Path, entry_index: int, new_data: bytes,
-                        compress: bool = True) -> Plan:
+                        compress: bool = False) -> Plan:
     """
     Writes the next patch file of one package, redirecting a single entry to new bytes.
 
@@ -259,7 +272,7 @@ def write_patch_package(source: str | Path, entry_index: int, new_data: bytes,
     @param source Newest existing file of the package. It is never modified.
     @param entry_index Entry to redirect.
     @param new_data Bytes the entry should yield.
-    @param compress Oodle-compress blocks where it pays.
+    @param compress Oodle-compress blocks where it pays. Defaults off; see the module docstring.
     @return The plan that was carried out.
     """
     return write_patch_package_multi(source, {entry_index: new_data}, compress)[entry_index]
@@ -267,7 +280,7 @@ def write_patch_package(source: str | Path, entry_index: int, new_data: bytes,
 
 def write_patch_package_multi(source: str | Path,
                               replacements: dict[int, bytes],
-                              compress: bool = True) -> dict[int, Plan]:
+                              compress: bool = False) -> dict[int, Plan]:
     """
     Writes the next patch file, redirecting any number of entries in one go.
 
@@ -278,9 +291,10 @@ def write_patch_package_multi(source: str | Path,
 
     @param source Newest existing file of the package. It is never modified.
     @param replacements Entry index to the bytes it should yield.
-    @param compress Oodle-compress blocks where it pays. Off writes every block plain, which is what
-        this did before the codec was wired in and remains a valid file — useful for isolating a
-        problem to compression rather than to the rest of the layout.
+    @param compress Oodle-compress blocks where it pays. **Defaults off, and should stay off.**
+        A compressed-but-unencrypted block is a combination the game cannot load — see the
+        module docstring. Kept because the encoding itself is correct and round-trips
+        byte-exact, so it is ready if the block keys ever become reachable.
     @return The plan carried out for each entry.
     """
     source = Path(source)

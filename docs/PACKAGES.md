@@ -42,11 +42,27 @@ Across 1,857,244 block records:
 | `0x0000` | 18.2% | plain                  |
 | `0x0007` |  0.0% | + alternate key        |
 
-**`0x0001` is rare but real.** A later census restricted to the newest file of each family found
-5,739 compressed-but-not-encrypted blocks across 6 packages, and 5,716 encrypted-but-uncompressed
-across another 6. All four combinations ship, so compression and encryption are genuinely
-independent per-block flags. That matters: a compressed block needs Oodle, which we have, but no
-key — so compressing our own writes is available if a plain block ever proves unacceptable.
+**`0x0001` does not exist. Corrected 2026-08-27.** This section previously claimed a census had
+found 5,739 compressed-but-not-encrypted blocks across 6 packages, and concluded that compression
+and encryption are freely independent — so compressing our own writes would be available without a
+key. **That claim is false.** A full census of all 2,231 installed packages and **1,897,918 block
+records** finds:
+
+| flags    | count     | share | meaning                        |
+|----------|-----------|-------|--------------------------------|
+| `0x0003` | 1,528,834 | 80.6% | compressed + encrypted         |
+| `0x0000` |   338,779 | 17.9% | plain                          |
+| `0x0007` |       776 |  0.0% | + alternate key                |
+| **`0x0001`** | **0** | **0%** | **compressed, not encrypted** |
+
+The remaining handful of values (`0x8080`, `0xBF5E`, …) are the 24 already-known suspect records,
+not real combinations.
+
+So **compression is only ever reached together with encryption**, and the game agrees: a layer
+written with `0x0001` blocks registers cleanly and then fails at content load with
+`files:async: decompression failed for package w64_sandbox_037c_7.pkg`. Since encryption needs the
+block keys — which stay inside the game — **plain is the only encoding a writer without keys can
+legally produce.** It is not a shortcut; it is the whole of what is available.
 
 Every compressed block in the *bulk* of the install is also encrypted. The plain 18%
 is almost entirely audio (97% plain) and video (82%); the families holding geometry are not:
