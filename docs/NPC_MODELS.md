@@ -137,6 +137,7 @@ no-op layer live — a layer that stores no bodies of its own and changes nothin
 | `globals_0238` | the body model | **PASS** — Tower 6.1s |
 | `globals_01fe` | most headers + buffers | **PASS** — Tower 6.2s |
 | `globals_03ab` | mesh 0 positions buffer | **PASS** — Tower 6.2s |
+| `globals_03f5` | player-hands indices/buffers | **PASS** — Tower 6.1s |
 | `sandbox_037d` | the head model | already carries our layers every build |
 
 Every verdict is `activity:in_world` reached with zero stall or host-lost lines. **All four packages
@@ -145,6 +146,29 @@ this swap needs are cleared**, and the probes have been atticked so nothing of o
 `globals_01cf` and `globals_0238` are the **first evidence a `globals` package can carry our layers
 at all**. Before them the only globals datapoint was `globals_06dc`, which rejects even a no-op — so
 "globals is the problem" was a live theory. It is not; rejection stays a per-package property.
+
+---
+
+## Why an NPC is a cleaner target than the Guardian
+
+There is no Guardian body mesh to inject into. `0x815B9521`, which this project's notes called
+"the replicated player-body mesh", is **a pair of hands** — 7,092 vertices spanning 88 cm wide and
+17 cm tall at waist height, nothing below z 1.018, rendered and confirmed 2026-08-27. That is
+exactly why the race-*glove* blank needed that entry. The Guardian's visible body really is the
+equipped armour — chest, legs, gauntlets — which is what `dump_class_bodies.py` has always said and
+what the live chest-draw injection already targets.
+
+So the asymmetry runs the other way from what it looks like:
+
+| | Guardian | NPC (Zavala) |
+|---|---|---|
+| body geometry | three armour pieces, no single body mesh | **one complete mesh**, 6,147 verts |
+| skinning donor | stitched from chest + legs + gauntlets | the mesh being replaced, 100% weighted |
+| bone space | does not match the read skeleton | **is** the skeleton's row order, 2.6 cm |
+| rig | estimated (`rig.json`), good shape, bad labelling | exact (`rig_true_human.json`) |
+
+`inject_scatterhorn.py` exists in its complicated form *because* the Guardian has no single body
+mesh. An NPC needs none of that.
 
 ---
 
