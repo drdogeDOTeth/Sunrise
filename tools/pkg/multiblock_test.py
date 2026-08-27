@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import os
 import sys
+import shutil
 import tempfile
 from pathlib import Path
 
+from oodle import Oodle
 from patch import copy_family, write_patch_package
 from tigerpkg import BLOCK_SIZE, Package, PackageError
 
@@ -63,6 +65,10 @@ pkg = Package(source)
 print(f"  {source.name}: {len(readable):,} readable entries, patch {pkg.header.patch_id}, "
       f"{pkg.header.block_count:,} blocks")
 
+# A patch file left by an earlier run would sit newer than the base and make it
+# illegal, so the scratch copy starts empty every time.
+if scratch.exists():
+    shutil.rmtree(scratch)
 work = copy_family(source, scratch)
 original = Package(work)
 before = {}
@@ -90,13 +96,16 @@ if len(plan.spans) != expected_blocks:
 
 print("\n=== reading it back ===")
 patched = Package(written)
+# Written blocks are Oodle-compressed where that pays, so the read-back goes through the codec.
+# That also proves the stored block genuinely decodes, not just that it is well-formed.
+decode = Oodle().decompress_block
 introduced = set(patched.check()) - set(original.check())
 if introduced:
     for complaint in sorted(introduced)[:5]:
         print(f"  {complaint}")
     raise SystemExit("patch introduced structural problems")
 
-got = patched.read_entry(target)
+got = patched.read_entry(target, decoder=decode)
 if got != replacement:
     where = next((i for i in range(min(len(got), len(replacement)))
                   if got[i] != replacement[i]), min(len(got), len(replacement)))
@@ -109,7 +118,7 @@ for index, want in before.items():
     if index == target:
         continue
     try:
-        if patched.read_entry(index) != want:
+        if patched.read_entry(index, decoder=decode) != want:
             changed.append(index)
     except PackageError:
         changed.append(index)

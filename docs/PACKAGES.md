@@ -164,10 +164,34 @@ it. Every other block record keeps its original patch id and therefore still res
 file. Nothing existing is disturbed, so no neighbour can be corrupted. Header fields that are not
 understood are inherited verbatim.
 
+### Blocks are compressed, the way shipped blocks are
+
+Bodies were written plain for a long time. They are now **Oodle-compressed when that pays and stored
+plain when it does not**, which is what the format itself does — 80.1% of all block records are
+compressed, and plain blocks exist in quantity precisely because a writer that skips compression
+when it loses produces them. Our own geometry goes to about **a third** of its size, and a
+798,777-byte test entry produced a 172,181-byte patch file.
+
+Three facts make this safe, and each was measured rather than assumed:
+
+* **The block record's `size` is the stored length.** `package_entry_reader.cpp` reads exactly that
+  many bytes from disk, then decrypts and decompresses.
+* **The SHA-1 at bytes 12-31 covers the bytes as stored**, after compression. It matched on 400
+  compressed-and-encrypted blocks and on all 321 hash-carrying plain blocks in the three packages
+  this fork patches, with no exceptions either way.
+* **A compressed block's plaintext size is not recorded.** The reader recovers it by asking the
+  codec for progressively smaller multiples of `0x4000` until one decodes, and `layout.h` states a
+  decompressed block is always `kBlockSize`. So a short final chunk is padded to a whole block
+  before compressing. The padding is never read as content — the entry's own size field bounds what
+  is consumed.
+
+Encryption is deliberately *not* done. It would need the block keys, which stay inside the game, and
+a plain or compressed-only block decodes without them. `compress=False` still writes every block
+plain, which is a valid file and useful for isolating a problem to compression.
+
 Current limits, all enforced rather than assumed:
 
-- The replacement must fit one block (`0x40000`).
-- Bodies are written plain — neither compressed nor encrypted.
+- A replacement larger than one block (`0x40000`) is split across consecutive appended records.
 - Block indices are a 14-bit field, capping a package at 16,384 blocks.
 
 ## Every package ends in a 0x800 trailer

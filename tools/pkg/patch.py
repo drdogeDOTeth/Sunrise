@@ -12,18 +12,29 @@ body stay exactly as shipped, and only the records describing the replaced entry
 ## What it does
 
 The new body is appended past the end of the file and the entry's own block record is repointed at
-it, rewritten as a plain block — neither compressed nor encrypted. That is legal because block flags
-are per-record and the reader honours them per block, so a plain block sitting among encrypted ones
-decodes without any key. All four flag combinations ship, and `w64_audio_01d2_en` mixes plain and
-encrypted blocks in one file, so this is the format's own behaviour rather than a hopeful reading of
-it. This is what makes the whole approach work without touching the game's proprietary key table:
-writing never needs it.
+it. Blocks are **Oodle-compressed when that pays and stored plain when it does not**, and never
+encrypted. That is legal because block flags are per-record and the reader honours them per block,
+so a block of ours sitting among encrypted ones decodes without any key. All four flag combinations
+ship, and `w64_audio_01d2_en` mixes plain and encrypted blocks in one file, so this is the format's
+own behaviour rather than a hopeful reading of it. This is what makes the whole approach work
+without touching the game's proprietary key table: writing never needs it.
+
+Compressing is what a shipped block does — 80.1% of all block records are compressed and encrypted,
+and Kraken takes our geometry to about a third of its size. Choosing per block rather than always
+compressing is also the format's behaviour: plain blocks exist in quantity, which is what a writer
+that skips compression when it does not pay would produce.
 
 A block record is 48 bytes and every field matters. The four leading fields fill 12; bytes 12-31
-carry a SHA-1 of the stored body and bytes 32-47 an AES-GCM tag used only when the encrypted flag is
-set. Writing the first twelve and zeroing the rest yields a file the patchable registrar accepts and
-the geometry streamer silently hangs on — the registrar validates structure, the streamer validates
-content, and only the second one reads the hash.
+carry a SHA-1 and bytes 32-47 an AES-GCM tag used only when the encrypted flag is set. Writing the
+first twelve and zeroing the rest yields a file the patchable registrar accepts and the geometry
+streamer silently hangs on — the registrar validates structure, the streamer validates content, and
+only the second one reads the hash.
+
+**The SHA-1 covers the bytes as stored**, after compression, not the plaintext. Measured rather than
+assumed: across 400 compressed-and-encrypted blocks `sha1(stored)` matched the field exactly, and so
+did all 321 hash-carrying plain blocks in the three packages this fork patches. A block record is
+therefore self-describing — `size` is the stored length the reader will read from disk, and the hash
+covers exactly those bytes.
 
 ## Limits, all enforced rather than assumed
 
@@ -46,6 +57,7 @@ from tigerpkg import (
     BLOCK_RECORD_SIZE,
     BLOCK_SIZE,
     ENTRY_RECORD_SIZE,
+    FLAG_COMPRESSED,
     OFF_BLOCK_COUNT,
     OFF_PATCH_ID,
     Package,
@@ -104,6 +116,34 @@ class Plan:
     old_size: int
     new_size: int
     spans: list[int]
+
+
+def encode_chunk(chunk: bytes, codec) -> tuple[bytes, int]:
+    """
+    Prepares one block's worth of stream for storage.
+
+    Compression is attempted and **kept only when it wins**, which is what produces the mix of plain
+    and compressed blocks the shipped packages actually contain.
+
+    A short final chunk is padded to a whole block before compressing. The reader does not record a
+    block's plaintext size — it recovers it by asking the codec for progressively smaller multiples
+    of `0x4000` until one decodes (`oodle_installed.cpp`), and `layout.h` states a decompressed block
+    is always `kBlockSize`. Padding to that keeps every compressed block on the size the search finds
+    first. The padding is never read as content: the entry's own size field bounds what is consumed.
+
+    @param chunk Up to `BLOCK_SIZE` bytes of the body stream.
+    @param codec An `oodle.Oodle`, or None to store plain.
+    @return The bytes to store, and the block flags describing them.
+    """
+    if codec is None:
+        return chunk, 0
+    padded = chunk if len(chunk) == BLOCK_SIZE else chunk + b"\x00" * (BLOCK_SIZE - len(chunk))
+    packed = codec.compress(padded)
+    # Losing to plain storage is normal for small or already-dense bodies, and a block that grew
+    # under compression would cost space and gain nothing.
+    if len(packed) >= len(chunk):
+        return chunk, 0
+    return packed, FLAG_COMPRESSED
 
 
 def encode_block_info(start_block: int, start_offset: int, size: int) -> int:
@@ -203,7 +243,8 @@ def plan_patch(pkg: Package, entry_index: int, new_size: int) -> Plan:
     return Plan(entry_index, entry.start_block, entry.size, new_size, spans)
 
 
-def write_patch_package(source: str | Path, entry_index: int, new_data: bytes) -> Plan:
+def write_patch_package(source: str | Path, entry_index: int, new_data: bytes,
+                        compress: bool = True) -> Plan:
     """
     Writes the next patch file of one package, redirecting a single entry to new bytes.
 
@@ -218,13 +259,15 @@ def write_patch_package(source: str | Path, entry_index: int, new_data: bytes) -
     @param source Newest existing file of the package. It is never modified.
     @param entry_index Entry to redirect.
     @param new_data Bytes the entry should yield.
+    @param compress Oodle-compress blocks where it pays.
     @return The plan that was carried out.
     """
-    return write_patch_package_multi(source, {entry_index: new_data})[entry_index]
+    return write_patch_package_multi(source, {entry_index: new_data}, compress)[entry_index]
 
 
 def write_patch_package_multi(source: str | Path,
-                              replacements: dict[int, bytes]) -> dict[int, Plan]:
+                              replacements: dict[int, bytes],
+                              compress: bool = True) -> dict[int, Plan]:
     """
     Writes the next patch file, redirecting any number of entries in one go.
 
@@ -235,12 +278,28 @@ def write_patch_package_multi(source: str | Path,
 
     @param source Newest existing file of the package. It is never modified.
     @param replacements Entry index to the bytes it should yield.
+    @param compress Oodle-compress blocks where it pays. Off writes every block plain, which is what
+        this did before the codec was wired in and remains a valid file — useful for isolating a
+        problem to compression rather than to the rest of the layout.
     @return The plan carried out for each entry.
     """
     source = Path(source)
     pkg = Package(source)
     if not replacements:
         raise PackageError("no replacements given")
+
+    # Imported here, not at module scope: the codec is the game's own DLL, so a machine without the
+    # game installed can still import this module to inspect a package.
+    codec = None
+    if compress:
+        from oodle import Oodle, OodleError
+        try:
+            codec = Oodle()
+        except OodleError as problem:
+            raise PackageError(
+                f"compression asked for but the codec is unavailable: {problem}. "
+                "Pass compress=False to write plain blocks instead."
+            ) from problem
     for entry_index, new_data in replacements.items():
         if not 0 <= entry_index < pkg.header.entry_count:
             raise PackageError(f"entry {entry_index} is outside this package")
@@ -314,28 +373,33 @@ def write_patch_package_multi(source: str | Path,
     raw.extend(tail)
 
     for record, chunk in enumerate(chunks):
+        stored, flags = encode_chunk(chunk, codec)
         body_at = (len(raw) + BODY_ALIGNMENT - 1) // BODY_ALIGNMENT * BODY_ALIGNMENT
         raw.extend(b"\x00" * (body_at - len(raw)))
-        raw.extend(chunk)
+        raw.extend(stored)
         # A block record is 48 bytes, not the 12 the four leading fields occupy. Writing only
         # those and leaving the rest zero produced a file the registrar accepted and the
         # geometry streamer then hung on, because bytes 12-31 are a SHA-1 of the stored body
         # and every shipped block carries one. Verified against all 285 plain blocks of
         # w64_audio_01d2_en: sha1(body) equals those bytes exactly, with no exceptions.
         #
+        # The hash covers the bytes as STORED, after compression - measured across 400
+        # compressed-and-encrypted blocks and all 321 hash-carrying plain blocks in the three
+        # packages this fork patches, with no exceptions either way.
+        #
         # Bytes 32-47 are the AES-GCM tag and are nonzero only for encrypted blocks - in that
         # same package they are set on precisely the 61 blocks whose encrypted flag is set.
-        # Ours are written plain, so leaving the tag zero is correct by construction rather
+        # Ours are never encrypted, so leaving the tag zero is correct by construction rather
         # than by omission. Encrypting would need the block keys, which stay in the game.
         struct.pack_into(
             "<IIHH20s16s",
             raw,
             table_end + record * BLOCK_RECORD_SIZE,
             body_at,
-            len(chunk),
+            len(stored),
             new_patch_id,
-            0,
-            hashlib.sha1(chunk).digest(),
+            flags,
+            hashlib.sha1(stored).digest(),
             b"\x00" * 16,
         )
 
@@ -411,9 +475,22 @@ def write_noop_patch_package(source: str | Path) -> Path:
 
 
 def verify_patch(out_path: str | Path, entry_index: int, expected: bytes) -> None:
-    """Re-reads a patched file and raises unless the entry now yields exactly `expected`."""
+    """
+    Re-reads a patched file and raises unless the entry now yields exactly `expected`.
+
+    The decoder is supplied unconditionally, so this exercises the same decompression path the game
+    will take. Reading a compressed block back through the codec is the check that the stored block
+    is genuinely decodable, rather than merely well-formed on paper.
+    """
     pkg = Package(out_path)
-    got = pkg.read_entry(entry_index)
+    decoder = None
+    try:
+        from oodle import Oodle
+        decoder = Oodle().decompress_block
+    except Exception:
+        # Only fatal if the file actually needs it, which read_entry will say.
+        pass
+    got = pkg.read_entry(entry_index, decoder=decoder)
     if got != expected:
         raise PackageError(
             f"entry {entry_index} read back {len(got):,} bytes, expected {len(expected):,}"
