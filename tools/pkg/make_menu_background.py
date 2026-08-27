@@ -117,6 +117,55 @@ def extend_margins(canvas: Image.Image, box: tuple[int, int, int, int]) -> None:
         canvas.paste(strip, (0, y1))
 
 
+BAND = (0.040, 0.244)   # the v range of its texture that the top strip samples
+BAND_HEIGHT = 197       # screen px it covers, above the backdrop's rect
+
+
+def make_band(source: Image.Image, gamma: float, saturation: float, slot: tuple[int, int],
+              rect: tuple[int, int], window: tuple[float, float], screen_h: int) -> Image.Image:
+    """Build the strip that draws across the top of the title screen.
+
+    That quad **mirrors about the centre of the screen**, so it can never show un-mirrored picture -
+    a logo placed in its window comes back twice, once backwards, which is exactly what happened.
+    What it *can* show is content with no left-right detail, because that mirrors to itself
+    invisibly.
+
+    So every row is the mean colour of the picture's corresponding row. That keeps the vertical
+    falloff of the ceiling and its glow, and drops precisely the horizontal detail the mirror would
+    duplicate.
+
+    Getting it to *join* the picture takes the geometry, not a guess at a gradient. The backdrop
+    shows `crop` of the source's height over `rect` screen px, so the band's 197 px want the source
+    rows immediately above the crop, at the same scale. There are not that many - the crop starts
+    only 9% down - so what runs off the top fades to black, which is what the ceiling was doing
+    anyway.
+    """
+    lit = relight(source.convert("RGB"), gamma, saturation)
+    column = lit.resize((1, 2048), Image.LANCZOS)  # a 1px column IS the row averages
+
+    # How much of the source's height the backdrop keeps, and where that crop starts.
+    kept = min(1.0, (source.width / source.height) / (rect[0] / rect[1]))
+    anchor = (1.0 - kept) / 2.0
+    per_screen_px = kept / rect[1]
+    span = screen_h * per_screen_px          # source-v the band would need
+    v0, v1 = window
+
+    out = Image.new("RGB", slot)
+    draw = ImageDraw.Draw(out)
+    for y in range(slot[1]):
+        band_v = y / slot[1]
+        source_v = anchor - (v1 - band_v) / (v1 - v0) * span
+        if source_v >= 0.0:
+            row = column.getpixel((0, min(int(source_v * 2048), 2047)))
+        else:
+            # Above the picture: fade the topmost row out over the same distance again.
+            top = column.getpixel((0, 0))
+            fade = max(0.0, 1.0 + source_v / max(span, 1e-6))
+            row = tuple(round(c * fade) for c in top)
+        draw.line([(0, y), (slot[0], y)], fill=row)
+    return out.convert("RGBA")
+
+
 def roll(canvas: Image.Image, fraction: float) -> Image.Image:
     """Circularly shift the texture sideways, to cancel a quad that samples at an offset.
 
@@ -283,6 +332,16 @@ def main() -> int:
 
     gamma = float(option("gamma", "1.0"))
     saturation = float(option("saturation", "1.0"))
+
+    if "--band" in sys.argv:
+        band = make_band(Image.open(source), gamma, saturation, slot, rect, BAND, BAND_HEIGHT)
+        band.convert("RGB").save(out)
+        print(f"{source.name} -> band {slot[0]}x{slot[1]}, sampled v {BAND[0]}..{BAND[1]} over "
+              f"{BAND_HEIGHT} screen px")
+        print("  row averages only, so the quad's mirror about screen centre is invisible")
+        print(f"  wrote {out}  ({out.stat().st_size / 1024:.0f} KB)")
+        return 0
+
     image = relight(Image.open(source).convert("RGB"), gamma, saturation).convert("RGBA")
     had = image.width / image.height
     want = rect[0] / rect[1]

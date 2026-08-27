@@ -157,6 +157,42 @@ make a column the character stands against, which reads as deliberate staging. B
 
 ### The band across the top
 
+The 1920x1200 layer draws over the top ~197 px of the title screen, and it **mirrors about the
+centre of the screen** - it reads v 0.040..0.244 with u running 0.502 up to 1.0 at screen centre
+and then reflecting back. So anything with left-right detail in its window arrives twice, once
+backwards. A logo baked for character select showed up as two logos in the band, one of them
+mirror-written, which is how the mirror was identified.
+
+A mirrored quad can never show un-mirrored picture. What it *can* show is content with no
+left-right detail, because that mirrors to itself invisibly:
+
+```bash
+python make_menu_background.py menu_bg.jpg --gamma 0.75 --band --slot 1920x1200     --out title_band.png
+```
+
+`--band` makes every row the mean colour of the picture's corresponding row - keeping the ceiling's
+vertical falloff and glow, dropping exactly the horizontal detail the mirror would duplicate. It is
+positioned by geometry rather than by eye: the backdrop shows `kept` of the source's height over
+its rect, so the band's 197 px take the source rows immediately above the crop at the same scale,
+and what runs off the top fades out. Simulated before launching, the join measured **4.6 of 255**.
+
+### Telling two screens apart
+
+The title band and character select both bind 1920x1200 and matching is by size, so one image had
+to serve both - and they disagree: the band mirrors, character select wraps. Their **formats**
+differ, though, and the survey reports the format of everything it names.
+
+So a probe line takes an optional `@<dxgi format>` before its value:
+
+```
+1920 1200 @98 title_band.png     BC7        - title band
+1920 1200 @28 title_band.png     UNORM      - title band
+1920 1200 @99 select_bg.png      BC7 sRGB   - character select
+```
+
+Format 0 (omitted) still means "any", so every size-only rule keeps working. This is also what a
+theme switcher will need, since it has to address each screen separately.
+
 The 1920×1200 layer draws over the top ~197 px and samples near **u 0.94, mirrored** — which is what
 was throwing reversed ceiling lights across the top of the screen when both layers were bound to
 the same photo. Since that region is outside the backdrop's own window, the fitter fills it with a

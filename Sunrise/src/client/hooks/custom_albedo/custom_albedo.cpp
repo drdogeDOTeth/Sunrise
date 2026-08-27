@@ -974,6 +974,8 @@ void survey_textures(ID3D11DeviceContext* context) noexcept {
 struct Probe {
     UINT width;
     UINT height;
+    /** DXGI format to require, or 0 for any. Several screens share a size but not a format. */
+    UINT format;
     ID3D11ShaderResourceView* view;
 };
 
@@ -1001,7 +1003,8 @@ void load_probes(ID3D11Device* device) noexcept {
     if (file == INVALID_HANDLE_VALUE) {
         return;
     }
-    std::array<char, 1024> text{};
+    // Comments count toward this, and the file carries the measured geometry for each screen.
+    std::array<char, 4096> text{};
     DWORD read = 0;
     const BOOL ok = ReadFile(file, text.data(), static_cast<DWORD>(text.size() - 1), &read, nullptr);
     CloseHandle(file);
@@ -1029,6 +1032,19 @@ void load_probes(ID3D11Device* device) noexcept {
             break;
         }
         cursor += consumed;
+        // An optional `@<dxgi format>` before the value narrows the match. The title screen and
+        // the character select screen both bind 1920x1200, so size alone cannot tell them apart -
+        // but their formats differ, and the survey reports the format of every texture it names.
+        unsigned format = 0;
+        if (token[0] == '@') {
+            format = std::strtoul(token.data() + 1, nullptr, 10);
+            if (sscanf_s(cursor, " %95s%n", token.data(), static_cast<unsigned>(token.size()),
+                         &consumed)
+                != 1) {
+                break;
+            }
+            cursor += consumed;
+        }
         ID3D11ShaderResourceView* view = nullptr;
         // A dot means a filename. WIC decodes jpg as readily as png, so the extension only has to
         // be something WIC knows - the name is passed through untouched.
@@ -1080,12 +1096,13 @@ void load_probes(ID3D11Device* device) noexcept {
         if (view == nullptr) {
             continue;
         }
-        g_probes[g_probeCount] = {width, height, view};
+        g_probes[g_probeCount] = {width, height, format, view};
         ++g_probeCount;
         std::array<char, 192> line{};
-        const int written = std::snprintf(line.data(), line.size(),
-                                          "ev=custom_albedo stage=probe n=%zu w=%u h=%u src=%s",
-                                          g_probeCount, width, height, token.data());
+        const int written =
+            std::snprintf(line.data(), line.size(),
+                          "ev=custom_albedo stage=probe n=%zu w=%u h=%u fmt=%u src=%s",
+                          g_probeCount, width, height, format, token.data());
         if (written > 0) {
             core::log::write(core::log::Channel::client, core::log::Level::info,
                              std::string_view(line.data(), static_cast<std::size_t>(written)));
@@ -1124,11 +1141,17 @@ void load_probes(ID3D11Device* device) noexcept {
             D3D11_TEXTURE2D_DESC desc{};
             texture->GetDesc(&desc);
             for (std::size_t i = 0; i < g_probeCount; ++i) {
-                if (g_probes[i].width == desc.Width && g_probes[i].height == desc.Height) {
-                    replaced[slot] = g_probes[i].view;
-                    swapped = true;
-                    break;
+                if (g_probes[i].width != desc.Width || g_probes[i].height != desc.Height) {
+                    continue;
                 }
+                // Format 0 means "any", so size-only rules keep working unchanged.
+                if (g_probes[i].format != 0
+                    && g_probes[i].format != static_cast<UINT>(desc.Format)) {
+                    continue;
+                }
+                replaced[slot] = g_probes[i].view;
+                swapped = true;
+                break;
             }
             texture->Release();
         }
