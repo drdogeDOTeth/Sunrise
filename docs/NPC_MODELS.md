@@ -67,20 +67,31 @@ Whichever is patched, the actor that spawns and vendors gets it.
 
 ## Zavala's body, measured
 
-`80C714B2`, model scale 0.8955, three meshes:
+Model scale 0.8955 on both models.
 
-| mesh | parts | positions buffer | vertices |
-|---|---|---|---|
-| 0 | 39 | 98,352 B, stride 16 | **6,147** |
-| 1 | 15 | 3,996 B | stride not yet read |
-| 2 | 132 | 98,936 B | stride not yet read |
+| model | mesh | parts | positions | stride | **verts** | fits our 4,227? |
+|---|---|---|---|---|---|---|
+| `80C714B2` | 0 | 39 | 98,352 B | 16 | 6,147 | yes |
+| `80C714B2` | 1 | 15 | 3,996 B | 12 | 333 | **no** |
+| `80C714B2` | 2 | 132 | 98,936 B | 8 | **12,367** | yes |
+| `80C714B3` | 0 | 8 | 10,560 B | 48 | 220 | **no** |
 
-`80C714B3`, one mesh, 8 parts, 10,560 B positions — and it is the only one carrying a **weights**
-buffer (`80B9F66A`, 1,760 B); the three meshes of `80C714B2` have `0xFFFFFFFF` in that slot.
+**The parse self-checks.** Within every mesh the position and texcoord buffers divide to the *same*
+integer by different strides — mesh 0 gives 6,147 from stride 16 and from stride 20, mesh 2 gives
+12,367 from stride 8 and stride 20. Two independent divisions agreeing on a whole number is not
+something a misread layout produces.
 
-**Our character is 4,227 vertices and mesh 0 is 6,147, so no decimate is needed** — the injector's
-rule is that it may never *exceed* the target's count. The other two strides are still unread, and
-they are not 16: 98,936 does not divide by 16.
+Mesh 2's **stride 8 is packed int16**, which is exactly the format `inject_mesh.py` already writes.
+
+`80C714B3` is the only model carrying a **weights** buffer (`80B9F66A`, 1,760 B, stride 8 → 220);
+all three meshes of `80C714B2` hold `0xFFFFFFFF` in that slot.
+
+**No decimate is needed** for meshes 0 or 2 — the injector may never *exceed* the target's count and
+ours is 4,227. Meshes 1 and `80C714B3`'s single mesh are both smaller than our character, so they
+are not swap targets.
+
+**Which mesh is the visible body is not yet known.** Guessing costs a launch per guess; extracting
+positions and indices and rendering them costs none, which is the pass that answers it.
 
 ---
 
@@ -92,11 +103,14 @@ no-op layer live — a layer that stores no bodies of its own and changes nothin
 
 | package | holds | verdict |
 |---|---|---|
-| `globals_01cf` | entity, resources, some headers | **PASS** — Tower 6.1s, `activity:in_world`, 0 stalls |
-| `globals_0238` | the body model | **PASS** — Tower 6.1s, `activity:in_world`, 0 stalls |
-| `globals_01fe` | most headers + buffers | probe written, unverified |
-| `globals_03ab` | mesh 0 positions buffer | probe written, unverified |
+| `globals_01cf` | entity, resources, some headers | **PASS** — Tower 6.1s |
+| `globals_0238` | the body model | **PASS** — Tower 6.1s |
+| `globals_01fe` | most headers + buffers | **PASS** — Tower 6.2s |
+| `globals_03ab` | mesh 0 positions buffer | **PASS** — Tower 6.2s |
 | `sandbox_037d` | the head model | already carries our layers every build |
+
+Every verdict is `activity:in_world` reached with zero stall or host-lost lines. **All four packages
+this swap needs are cleared**, and the probes have been atticked so nothing of ours sits on them.
 
 `globals_01cf` and `globals_0238` are the **first evidence a `globals` package can carry our layers
 at all**. Before them the only globals datapoint was `globals_06dc`, which rejects even a no-op — so
@@ -106,9 +120,8 @@ at all**. Before them the only globals datapoint was `globals_06dc`, which rejec
 
 ## What is still open
 
-1. **Three strides**, and with them the vertex counts of meshes 1 and 2.
-2. **The two remaining package probes** (`01fe`, `03ab`).
-3. **The paint path.** `custom_albedo` is keyed to the Guardian draw — its `(start, count)` ranges
+1. **Which mesh is the visible body.** Positions and indices are requested; render them and look.
+2. **The paint path.** `custom_albedo` is keyed to the Guardian draw — its `(start, count)` ranges
    and G-buffer gate are written for that mesh and need redoing for Zavala's.
 4. **Row order of the true rig** is not the global bone index, so `rig_true_human.json` still cannot
    replace `rig.json` (see [`the-rig-is-an-estimate`](CUSTOM_CHARACTER.md)).
