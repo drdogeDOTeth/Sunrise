@@ -90,10 +90,20 @@ So the fix is to **cover-crop to the screen rect's 2.174 and lay that into the w
 screen, trim ~18% off top and bottom, keep circles circular.
 
 ```bash
-python make_menu_background.py menu_bg.jpg --logo doge_white.png --out title_bg.png
+python make_menu_background.py menu_bg.jpg --logo doge_white.png --gamma 0.75
 python make_menu_background.py sky.jpg --logo-corner tr --marks
 python make_menu_background.py sky.jpg --window 0.19,0.81,0.0,0.93   # if re-measured
 ```
+
+The window was confirmed a second time against the finished render, by locating three features in
+both the baked file and the screenshot: predicted-vs-observed came out **0 px, 3 px and 12 px** on a
+1080p screen.
+
+**`--gamma`, not brightness, for a dark photo.** These backdrops carry blown-out practical lights,
+so a linear multiplier drives those further into clipping while barely touching the subject. On the
+crowd photo the dark band measured mean 0.248 with 43% of pixels under 0.15; `--gamma 0.75` lifts
+that to 0.326 for 0.13 pp more clipped pixels. It is applied to the source before the logo goes on,
+so a white mark never gets lifted along with the picture.
 
 Logos and marks are positioned in **screen** coordinates and mapped back through the window, so
 "top-left corner" means the corner of the screen rather than of the file.

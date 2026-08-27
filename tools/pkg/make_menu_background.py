@@ -53,7 +53,7 @@ import sys
 from pathlib import Path
 
 try:
-    from PIL import Image, ImageDraw, ImageFilter
+    from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 except ImportError:  # pragma: no cover - guidance beats a traceback
     print("needs Pillow:  python -m pip install pillow")
     raise SystemExit(2)
@@ -80,6 +80,23 @@ def numbers(text: str, count: int) -> tuple[float, ...]:
     if len(parts) != count:
         raise SystemExit(f"expected {count} comma-separated numbers, got '{text}'")
     return parts
+
+
+def relight(image: Image.Image, gamma: float, saturation: float) -> Image.Image:
+    """Lift a dark photo for a screen that sits behind white text.
+
+    **Gamma, not brightness.** These backdrops already have blown-out practical lights in them, and
+    a linear multiplier drives those further into clipping while barely touching the crowd. A gamma
+    below 1 lifts the shadows and midtones and leaves the highlights where they are.
+
+    Applied to the source, before the logo goes on, so a white mark is never dimmed with it.
+    """
+    if gamma != 1.0:
+        curve = [round(255 * (i / 255) ** gamma) for i in range(256)]
+        image = image.point(curve * len(image.getbands()))
+    if saturation != 1.0:
+        image = ImageEnhance.Color(image).enhance(saturation)
+    return image
 
 
 def cover(image: Image.Image, width: int, height: int) -> Image.Image:
@@ -189,7 +206,7 @@ def add_marks(canvas: Image.Image, quad: Quad) -> None:
 def main() -> int:
     plain = [a for a in sys.argv[1:] if not a.startswith("--")]
     for name in ("out", "window", "rect", "slot", "logo", "logo-corner", "logo-height",
-                 "logo-margin"):
+                 "logo-margin", "gamma", "saturation"):
         value = option(name)
         if value in plain:
             plain.remove(value)
@@ -208,10 +225,15 @@ def main() -> int:
     quad = Quad(window, rect, slot)
     out = Path(option("out", "title_bg.png"))
 
-    image = Image.open(source).convert("RGBA")
+    gamma = float(option("gamma", "1.0"))
+    saturation = float(option("saturation", "1.0"))
+    image = relight(Image.open(source).convert("RGB"), gamma, saturation).convert("RGBA")
     had = image.width / image.height
     want = rect[0] / rect[1]
     print(f"{source.name}  {image.width}x{image.height} (aspect {had:.3f})")
+    if gamma != 1.0 or saturation != 1.0:
+        print(f"  relit: gamma {gamma} (shadows lifted, highlights held), "
+              f"saturation {saturation}")
     print(f"  quad window u {window[0]:.3f}..{window[1]:.3f}  v {window[2]:.3f}..{window[3]:.3f}"
           f"  -> screen {rect[0]}x{rect[1]} (aspect {want:.3f})")
 
