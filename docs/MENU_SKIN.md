@@ -131,14 +131,16 @@ instead.
 Dumping those two settles what they are: **112×158 is the "2"**, finished white-on-alpha art. The
 276×276 sits where the Bungie glyph does but its alpha peaks at 46 of 255, so it is a glow behind
 the glyph rather than the glyph — putting a mark there would render at 18% opacity. If the lockup
-itself is ever the target, the glyph is a slot still to be found. That costs nothing: the background is already being baked, and the logo then
-travels with whichever theme is loaded.
+itself is ever the target, the glyph is a slot still to be found.
+
+Compositing the logo into the background costs nothing — the background is already being baked, and the logo then travels with whichever theme is loaded.
 
 ### The character select screen is a different quad
 
 It draws from the **1920×1200** slot, not the 3030×940 one, and reads the texture across its whole
 width — offset by **0.502**, wrapping. **Three** textures share that size — BC7 (98), UNORM (28) and
-BC7 sRGB (99) — and matching is by size, so all three get replaced.
+BC7 sRGB (99). Matching was by size alone at the time, so all three were replaced together; see *Telling screens
+apart* below for what separates them now.
 
 Surveying both screens in one launch filled all 64 slots: 33 for the title screen, the rest for
 character select, so the list is complete for neither and there may be more past the cap.
