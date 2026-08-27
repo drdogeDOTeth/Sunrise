@@ -172,6 +172,34 @@ mesh. An NPC needs none of that.
 
 ---
 
+## Retargeting for an NPC
+
+Use the **body-space** rig, never the armour one. `make_body_rig.py` writes both files from the read
+skeleton; it re-checks left/right against `+y` and the head-to-toe ordering before writing.
+
+    blender --background --python retarget_mesh.py -- 60000 out.obj --glb <glb>         --rig objs/skeleton/rig_body_space.json         --bone-map objs/skeleton/bone_map_body_space.json --fit-proportions
+    python inject_npc_body.py 0x80C714B2 --obj out.obj --write
+
+`--rig` and `--bone-map` must be passed **together**. 22 of 23 armature bones differ between the two
+spaces, and `retarget_mesh.py` had armour indices baked in past `BONE_MAP` — the first body-space run
+printed `chest split: bone 8 at z 0.126`, weighting the chest to the **left ankle**, and folded
+fingers onto wrists 21/22 where a body's are 20/21. Those now derive from `BONE_MAP`. Before/after:
+
+| | armour indices | body indices |
+|---|---|---|
+| chest split | bone 8 @ z 0.126 (ankle) | bone 7 @ z 1.191 (spine_upper) |
+| L wrist off joint | 13.53 cm | **0.00 cm** |
+| R wrist off joint | 41.25 cm | **0.00 cm** |
+| R hand drift | 48.06 cm | 7.66 cm |
+| y bounds | −0.413..0.668 (asymmetric) | −0.409..0.417 |
+
+**Pass `--obj`**, so the injector uses the real per-vertex weights the retarget exports rather than
+nearest-neighbour from the donor. Without it, measured on Zavala: 10% donor coverage and a 7.4 cm
+median match distance, worst 45 cm — weights transferred across a pose mismatch fold when animated.
+The tool prints both numbers either way.
+
+---
+
 ## What is still open
 
 1. **Which mesh is the visible body.** Positions and indices are requested; render them and look.

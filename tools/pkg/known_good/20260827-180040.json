@@ -1,0 +1,142 @@
+{
+  "saved": "2026-08-27T18:00:40",
+  "note": "v25 + race-glove/head blank, 2026-08-27. 27 layers. Rebuilt character chain (037c_7/037d_6/0698_6) plus globals_06dc_7 which carries the blank on 0x815B9521 (the HANDS mesh). Moon works; Titan is broken by 06dc_7 and always was. 0699_6 and 020c_8 stay atticked - they break Moon/Titan and carry no character work. All Zavala probes removed.",
+  "count": 27,
+  "live": [
+    {
+      "name": "w64_fx_019d_6.pkg",
+      "size": 200704,
+      "mtime": "2026-08-20T19:09:00"
+    },
+    {
+      "name": "w64_globals_0211_6.pkg",
+      "size": 229424,
+      "mtime": "2026-08-20T19:09:00"
+    },
+    {
+      "name": "w64_globals_03ed_6.pkg",
+      "size": 154896,
+      "mtime": "2026-08-23T00:30:01"
+    },
+    {
+      "name": "w64_globals_06dc_7.pkg",
+      "size": 130544,
+      "mtime": "2026-08-23T00:30:01"
+    },
+    {
+      "name": "w64_sandbox_019b_7.pkg",
+      "size": 555008,
+      "mtime": "2026-08-20T18:05:12"
+    },
+    {
+      "name": "w64_sandbox_019b_8.pkg",
+      "size": 555008,
+      "mtime": "2026-08-22T09:58:39"
+    },
+    {
+      "name": "w64_sandbox_019b_9.pkg",
+      "size": 555008,
+      "mtime": "2026-08-22T13:34:22"
+    },
+    {
+      "name": "w64_sandbox_01b5_7.pkg",
+      "size": 346112,
+      "mtime": "2026-08-20T18:05:12"
+    },
+    {
+      "name": "w64_sandbox_01bb_7.pkg",
+      "size": 641024,
+      "mtime": "2026-08-20T18:05:12"
+    },
+    {
+      "name": "w64_sandbox_01db_6.pkg",
+      "size": 345456,
+      "mtime": "2026-08-20T16:17:09"
+    },
+    {
+      "name": "w64_sandbox_01db_7.pkg",
+      "size": 345456,
+      "mtime": "2026-08-20T18:05:12"
+    },
+    {
+      "name": "w64_sandbox_01e2_6.pkg",
+      "size": 698400,
+      "mtime": "2026-08-20T10:12:24"
+    },
+    {
+      "name": "w64_sandbox_01e4_6.pkg",
+      "size": 272464,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_01ef_6.pkg",
+      "size": 168648,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_0207_7.pkg",
+      "size": 223232,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_020c_6.pkg",
+      "size": 189808,
+      "mtime": "2026-08-20T16:17:09"
+    },
+    {
+      "name": "w64_sandbox_020c_7.pkg",
+      "size": 189808,
+      "mtime": "2026-08-20T18:05:12"
+    },
+    {
+      "name": "w64_sandbox_020e_7.pkg",
+      "size": 193904,
+      "mtime": "2026-08-20T16:17:09"
+    },
+    {
+      "name": "w64_sandbox_020e_8.pkg",
+      "size": 193904,
+      "mtime": "2026-08-20T18:05:12"
+    },
+    {
+      "name": "w64_sandbox_020e_9.pkg",
+      "size": 193904,
+      "mtime": "2026-08-22T09:58:39"
+    },
+    {
+      "name": "w64_sandbox_0378_6.pkg",
+      "size": 289584,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_037b_6.pkg",
+      "size": 245760,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_037c_7.pkg",
+      "size": 270368,
+      "mtime": "2026-08-27T12:00:45"
+    },
+    {
+      "name": "w64_sandbox_037d_6.pkg",
+      "size": 2076992,
+      "mtime": "2026-08-27T12:00:45"
+    },
+    {
+      "name": "w64_sandbox_0692_6.pkg",
+      "size": 684536,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_0695_7.pkg",
+      "size": 195256,
+      "mtime": "2026-08-20T19:09:01"
+    },
+    {
+      "name": "w64_sandbox_0698_6.pkg",
+      "size": 3693596,
+      "mtime": "2026-08-27T12:00:45"
+    }
+  ]
+}
