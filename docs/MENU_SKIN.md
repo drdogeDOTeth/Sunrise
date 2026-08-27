@@ -193,10 +193,9 @@ So a probe line takes an optional `@<dxgi format>` before its value:
 Format 0 (omitted) still means "any", so every size-only rule keeps working. This is also what a
 theme switcher will need, since it has to address each screen separately.
 
-The 1920×1200 layer draws over the top ~197 px and samples near **u 0.94, mirrored** — which is what
-was throwing reversed ceiling lights across the top of the screen when both layers were bound to
-the same photo. Since that region is outside the backdrop's own window, the fitter fills it with a
-blurred, darkened copy, and the band becomes a soft dark strip instead of a competing reflection.
+An earlier note here put the band's sampling near **u 0.94** — that was a guess from before the
+logo pinned it, and it is wrong. The band reads u 0.502 up to 1.0 at screen centre and mirrors
+back, exactly the same offset character select uses.
 
 ---
 
