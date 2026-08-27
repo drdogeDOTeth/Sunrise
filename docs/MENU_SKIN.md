@@ -181,64 +181,39 @@ positioned by geometry rather than by eye: the backdrop shows `kept` of the sour
 its rect, so the band's 197 px take the source rows immediately above the crop at the same scale,
 and what runs off the top fades out. Simulated before launching, the join measured **4.6 of 255**.
 
-### Telling two screens apart
+### Telling screens apart: format, then order
 
-The title band and character select both bind 1920x1200 and matching is by size, so one image had
-to serve both - and they disagree: the band mirrors, character select wraps. Their **formats**
-differ, though, and the survey reports the format of everything it names.
+Four screens bind 1920×1200 and matching was by size alone, so one image had to serve all of them.
+Two mechanisms separate them, and each was chosen only after the cheaper one was shown to fail.
 
-So a probe line takes an optional `@<dxgi format>` before its value:
+**Format**, where it differs. A probe line takes an optional `@<dxgi format>` before its value:
 
 ```
-1920 1200 @98 title_band.png     BC7        - title band
-1920 1200 @28 title_band.png     UNORM      - title band
-1920 1200 @99 select_bg.png      BC7 sRGB   - character select
+1920 1200 @28 title_band.png     UNORM     - title screen's top band
+1920 1200 @98 boot_bg.png        BC7       - boot screen and character-select loading
+1920 1200 @99 select_bg.png      BC7 sRGB  - character select
 ```
 
-Format 0 (omitted) still means "any", so every size-only rule keeps working. This is also what a
-theme switcher will need, since it has to address each screen separately.
+Format 0 (omitted) still means "any", so every size-only rule keeps working.
 
-An earlier note here put the band's sampling near **u 0.94** — that was a guess from before the
-logo pinned it, and it is wrong. The band reads u 0.502 up to 1.0 at screen centre and mirrors
-back, exactly the same offset character select uses.
+**Order**, where format does not differ. The boot screen and the screen that loads into character
+select are the same UI element at two moments — same size, same format. The draw is not a way out
+either: the hit log shows UI index ranges **drift** as the menu repacks its buffer (the title screen
+alone used 132, 138, 144, 150, 156, 162, 180, 186, 192…), so keying on `startIndex` would be
+building on sand.
 
----
+What is stable is sequence. In the hit log the boot screen's format-98 draws are hits **1 and 2**,
+and the title backdrop is hit **9** — the boot screen always draws before the title screen exists,
+and the loading screen always after. So a line takes an optional `!boot` or `!after`:
 
-## Making a title texture
-
-```bash
-python make_title_texture.py VOIDWALKER --preview
+```
+1920 1200 @98 !boot  boot_bg.png
+1920 1200 @98 !after load_bg.png
 ```
 
-1110×61 to match the original. Proportions are no longer estimated — dumping the slot gives
-Bungie's own art to measure: white RGB with the glyphs in **alpha**, ink spanning **x 273..829
-(556 px) and y 14..47 (33 px)**, coverage 0.178. The screenshot estimates that preceded the dump
-(560 px wide, 34 px cap) were right to within 4 px and 1 px.
+The phase flips the first time a 3030×940 texture is bound, read from the game's own description
+rather than our replacement, and never clears.
 
-Filling the whole texture would render the word at twice the original's width.
-
-```bash
-python make_title_texture.py VOIDWALKER --target 556 --cap 33
-```
-
-Scoring every installed font against the dumped art by alpha IoU was **not** decisive — a 33 px cap
-is too small to separate faces, and sans and serif scored alike around 0.5. Ink coverage and a 2×
-side-by-side settled it instead: Constantia sits within 3 px of the original on a 1110 px texture.
-
-Tracking is *solved*, not eyeballed — total width is the sum of glyph advances plus (n−1) gaps, so
-fixing the target width fixes the gap. And centring is on the **ink bounding box**, not the font
-metrics: all-caps text has no descender, so metric centring rides ~10 px high in a box 61 px tall.
-
----
-
-## Answered: is the subtitle rasterised?
-
-It was a fair worry — RGBA8_UNORM, 1 mip, a non-power-of-2 size, and a font atlas sitting in the
-same survey all point at a surface built at runtime rather than a shipped asset. **It is shipped
-art.** Dumping the slot returned finished SHADOWKEEP glyphs, and a bound replacement renders solid
-rather than flickering.
-
-The one that *is* built at runtime is **1050×114**: it dumps fully transparent, every channel zero,
-in the typeless format render targets use. The DESTINY 2 lockup is composed into it during the
-frame. Tinting it still works, because the probe replaces the shader resource at draw time — but
-there is no authored image in there to read back.
+**`stage=probe_hit` in the log is what made this tractable** — it names every distinct
+(size, format, draw, phase) a probe lands on, once each. Its cap started at 32 and filled before
+character select was ever reached, losing exactly the screen under study; it is 96 now.

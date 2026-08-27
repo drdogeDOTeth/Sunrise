@@ -971,11 +971,34 @@ void survey_textures(ID3D11DeviceContext* context) noexcept {
 }
 
 /** One texture size to tint, and the colour to tint it. */
+/**
+ * The title backdrop's size. Seeing it is what marks the boot screen as over.
+ *
+ * The boot screen and the screen that loads into character select are the same UI element at two
+ * moments - same size, same format, and index ranges that drift as the menu repacks its buffer, so
+ * nothing about the draw tells them apart. What does is **order**: the boot screen's draws land
+ * before the title backdrop has ever appeared, and the loading screen's land after.
+ */
+constexpr UINT kTitleMarkerWidth = 3030;
+constexpr UINT kTitleMarkerHeight = 940;
+
+/** Which side of the title screen a probe applies to. */
+enum ProbePhase : UINT {
+    phaseAny = 0,
+    phaseBoot = 1,   /**< before the title screen has been seen */
+    phaseAfter = 2,  /**< once it has */
+};
+
+/** Set the first time the title backdrop is bound, and never cleared. */
+bool g_titleSeen{};
+
 struct Probe {
     UINT width;
     UINT height;
     /** DXGI format to require, or 0 for any. Several screens share a size but not a format. */
     UINT format;
+    /** ProbePhase; `phaseAny` matches whenever size and format do. */
+    UINT phase;
     ID3D11ShaderResourceView* view;
 };
 
@@ -1045,6 +1068,22 @@ void load_probes(ID3D11Device* device) noexcept {
             }
             cursor += consumed;
         }
+        // An optional `!boot` or `!after` splits one slot across the title screen, for elements
+        // that are the same draw at two different moments.
+        unsigned phase = phaseAny;
+        if (token[0] == '!') {
+            if (std::strcmp(token.data() + 1, "boot") == 0) {
+                phase = phaseBoot;
+            } else if (std::strcmp(token.data() + 1, "after") == 0) {
+                phase = phaseAfter;
+            }
+            if (sscanf_s(cursor, " %95s%n", token.data(), static_cast<unsigned>(token.size()),
+                         &consumed)
+                != 1) {
+                break;
+            }
+            cursor += consumed;
+        }
         ID3D11ShaderResourceView* view = nullptr;
         // A dot means a filename. WIC decodes jpg as readily as png, so the extension only has to
         // be something WIC knows - the name is passed through untouched.
@@ -1096,13 +1135,13 @@ void load_probes(ID3D11Device* device) noexcept {
         if (view == nullptr) {
             continue;
         }
-        g_probes[g_probeCount] = {width, height, format, view};
+        g_probes[g_probeCount] = {width, height, format, phase, view};
         ++g_probeCount;
         std::array<char, 192> line{};
         const int written =
             std::snprintf(line.data(), line.size(),
-                          "ev=custom_albedo stage=probe n=%zu w=%u h=%u fmt=%u src=%s",
-                          g_probeCount, width, height, format, token.data());
+                          "ev=custom_albedo stage=probe n=%zu w=%u h=%u fmt=%u phase=%u src=%s",
+                          g_probeCount, width, height, format, phase, token.data());
         if (written > 0) {
             core::log::write(core::log::Channel::client, core::log::Level::info,
                              std::string_view(line.data(), static_cast<std::size_t>(written)));
@@ -1124,7 +1163,8 @@ struct ProbeHit {
     UINT count;
 };
 
-ProbeHit g_hits[32]{};
+// 32 filled before character select was ever reached, losing exactly the screen under study.
+ProbeHit g_hits[96]{};
 std::size_t g_hitCount{};
 
 /**
@@ -1151,8 +1191,8 @@ void note_probe_hit(UINT width, UINT height, UINT format, UINT start, UINT count
     std::array<char, 192> line{};
     const int written = std::snprintf(
         line.data(), line.size(),
-        "ev=custom_albedo stage=probe_hit n=%zu w=%u h=%u fmt=%u start=%u count=%u", g_hitCount,
-        width, height, format, start, count);
+        "ev=custom_albedo stage=probe_hit n=%zu w=%u h=%u fmt=%u start=%u count=%u titleSeen=%d",
+        g_hitCount, width, height, format, start, count, g_titleSeen ? 1 : 0);
     if (written > 0) {
         core::log::write(core::log::Channel::client, core::log::Level::info,
                          std::string_view(line.data(), static_cast<std::size_t>(written)));
@@ -1186,6 +1226,11 @@ void note_probe_hit(UINT width, UINT height, UINT format, UINT start, UINT count
             && texture != nullptr) {
             D3D11_TEXTURE2D_DESC desc{};
             texture->GetDesc(&desc);
+            // The title backdrop appearing is what ends the boot phase. Read from the game's own
+            // description, so it is the real texture being marked and not our replacement.
+            if (desc.Width == kTitleMarkerWidth && desc.Height == kTitleMarkerHeight) {
+                g_titleSeen = true;
+            }
             for (std::size_t i = 0; i < g_probeCount; ++i) {
                 if (g_probes[i].width != desc.Width || g_probes[i].height != desc.Height) {
                     continue;
@@ -1193,6 +1238,10 @@ void note_probe_hit(UINT width, UINT height, UINT format, UINT start, UINT count
                 // Format 0 means "any", so size-only rules keep working unchanged.
                 if (g_probes[i].format != 0
                     && g_probes[i].format != static_cast<UINT>(desc.Format)) {
+                    continue;
+                }
+                if ((g_probes[i].phase == phaseBoot && g_titleSeen)
+                    || (g_probes[i].phase == phaseAfter && !g_titleSeen)) {
                     continue;
                 }
                 replaced[slot] = g_probes[i].view;
