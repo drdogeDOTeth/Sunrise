@@ -71,6 +71,16 @@ Every class id pairs with the tag it introduces, one each. For the thrall:
 Note `0x808073A5` (`SEntityModel`, per `parse_models.py`) does **not** appear. The model is reached
 by another class; `80FC7312` is the candidate on the strength of three separate classes naming it.
 
+**Resolved 2026-08-27.** `tools/pkg/trace_entity_chain.py` walks the remaining hop offline and ranks
+`80FC7312` first with **four** classes agreeing, then follows it:
+
+    80BF8A1D thrall -> resource 80FC7312 -> MODEL 0x80FC7300, 4,592 B, w64_sandbox_03e3_5
+
+So the thrall's model is `0x80FC7300` and the package a thrall swap must patch is `sandbox_03e3`.
+Neither the model nor the resource is in the entity's own package (`sandbox_01fc`) — the same trap
+documented for Zavala in [`NPC_MODELS.md`](NPC_MODELS.md). `80FC7300` is not dumped, so its mesh
+table and vertex counts are still unread.
+
 ---
 
 ## What this costs

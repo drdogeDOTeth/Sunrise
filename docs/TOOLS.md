@@ -66,7 +66,8 @@ entity_models.py -> entity_models.py -> (game dumps) -> parse_models.py -> live_
 | `tigerpkg.py` | Tiger `.pkg` reader — both header layouts, entry/block tables, patch siblings. Everything else imports this. |
 | `oodle.py` | Binds the game's own `oo2core_3_win64.dll` so blocks decompress exactly as the game does. |
 | `verify_all.py` | Parses every installed package and reports disagreements. The regression test for the reader. |
-| `resolve.py` | Resolves a tag to class, size and package without decrypting. |
+| `resolve.py` | Resolves a tag to class, size and package without decrypting. Importable for `resolve()` / `references_of()`. |
+| `trace_entity_chain.py` | Walks a named character SEntity → resource → SEntityModel → buffer headers offline, reports every package the swap must patch, and emits the `request.txt` block for the hops still encrypted. `--request`, `--headers <pkg>`. See [`NPC_MODELS.md`](NPC_MODELS.md). |
 | `inspect_entry.py` | Prints one dumped entry with the understood fields annotated. |
 | `classes.py` | Histograms entry classes across the install. Entry tables are plain, so this needs no keys. |
 | `lookup_arrangement.py` | Arrangement index → hash → assignment → entity-parent → model. Hop is **closed**. `--census` / `--request` / `--inspect` / no-args loadout walk. |

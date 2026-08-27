@@ -105,26 +105,33 @@ def show(tags: list[int], indent: str = "  ") -> None:
         print(f"{indent}0x{tag:08X}  class 0x{class_id:08X}  {size:>9,} B  {family:<28} {name}")
 
 
-if "--graph" in sys.argv:
-    dumped = sorted(p.stem[4:] for p in DUMP.glob("tag_*.bin"))
-    classes: collections.Counter[int] = collections.Counter()
-    for stem in dumped:
-        own = resolve(int(stem, 16))
-        label = f"class 0x{own[0]:08X}" if own else "unknown"
+def main() -> None:
+    if "--graph" in sys.argv:
+        dumped = sorted(p.stem[4:] for p in DUMP.glob("tag_*.bin"))
+        classes: collections.Counter[int] = collections.Counter()
+        for stem in dumped:
+            own = resolve(int(stem, 16))
+            label = f"class 0x{own[0]:08X}" if own else "unknown"
+            refs = references_of(stem)
+            print(f"\n0x{stem} ({label}) references {len(refs)}:")
+            show(refs)
+            for tag in refs:
+                got = resolve(tag)
+                if got:
+                    classes[got[0]] += 1
+        print("\n--- classes most referenced across every dumped blob ---")
+        for class_id, count in classes.most_common(15):
+            print(f"  0x{class_id:08X}  {count:5,} references")
+    elif "--refs" in sys.argv:
+        stem = sys.argv[sys.argv.index("--refs") + 1]
         refs = references_of(stem)
-        print(f"\n0x{stem} ({label}) references {len(refs)}:")
+        print(f"0x{stem.upper()} references {len(refs)} distinct tags:\n")
         show(refs)
-        for tag in refs:
-            got = resolve(tag)
-            if got:
-                classes[got[0]] += 1
-    print("\n--- classes most referenced across every dumped blob ---")
-    for class_id, count in classes.most_common(15):
-        print(f"  0x{class_id:08X}  {count:5,} references")
-elif "--refs" in sys.argv:
-    stem = sys.argv[sys.argv.index("--refs") + 1]
-    refs = references_of(stem)
-    print(f"0x{stem.upper()} references {len(refs)} distinct tags:\n")
-    show(refs)
-else:
-    show([int(a, 0) for a in sys.argv[1:]], indent="")
+    else:
+        show([int(a, 0) for a in sys.argv[1:]], indent="")
+
+
+# Guarded so this module can be imported for resolve()/references_of(). Unguarded, importing it ran
+# the CLI against the importer's argv, which crashed trace_entity_chain.py on its own arguments.
+if __name__ == "__main__":
+    main()
