@@ -61,6 +61,12 @@ def _take_opt(args, name, default=None):
 _ARGS = list(ARGV)
 GLB = _take_opt(_ARGS, "--glb", DEFAULT_GLB)
 BONE_MAP_FILE = _take_opt(_ARGS, "--bone-map")
+# Which skeleton to pose onto. The default is armour space and estimated; an NPC body needs
+# `objs/skeleton/rig_body_space.json`, which is exact and indexed differently - armour puts knees at
+# 6/7 and ankles at 9/10 where a body puts them at 5/6 and 8/9, and armour's 18 is the head where a
+# body's 18 is an elbow. Pass the matching `--bone-map bone_map_body_space.json` with it; using one
+# without the other weights the character to the wrong limbs. See `make_body_rig.py`.
+RIG = _take_opt(_ARGS, "--rig", RIG)
 MATERIAL_MAP_FILE = _take_opt(_ARGS, "--material-map")
 RETARGET = "--no-retarget" not in _ARGS
 KEEP_SEAMS = "--keep-seams" in _ARGS
