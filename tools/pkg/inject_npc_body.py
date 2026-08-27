@@ -13,8 +13,28 @@ weights from three armour pieces because no single Guardian mesh covers the whol
 splits hands onto the gauntlet draw to reach bones 20-71.
 
 An NPC needs neither. Zavala's mesh 0 is **one complete humanoid donor** - 6,147 vertices, every one
-weighted, weight sums all exactly 255, 54 bones spanning 1..63 - so a single nearest-neighbour
-transfer from the mesh being replaced covers the whole character.
+weighted, weight sums all exactly 255, 54 bones spanning 1..63 - so the whole character can be
+skinned from the single mesh it replaces.
+
+## Two ways to get weights, and one is much better
+
+**`--obj <retargeted.obj>`** uses the real per-vertex weights `retarget_mesh.py` exports beside it,
+taken from the GLB's own armature posed onto the rig. Use this.
+
+Without it, weights are transferred by nearest donor vertex. That is only as good as the pose
+agreement between source and donor, and it is usually poor: a character authored with its arms out,
+matched against a donor standing differently, sends arm vertices to torso bones. Measured on Zavala
+before retargeting - 10% donor coverage, median match distance 7.4 cm, worst 45 cm. The tool prints
+both numbers and says so rather than letting it pass quietly.
+
+Retarget for an NPC with the **body-space** rig, never the armour one:
+
+    blender --background --python retarget_mesh.py -- 60000 out.obj --glb <glb> \\
+        --rig objs/skeleton/rig_body_space.json \\
+        --bone-map objs/skeleton/bone_map_body_space.json --fit-proportions
+
+22 of 23 armature bones map to a different index in the two spaces, so mixing them weights the
+character to the wrong limbs - it put the chest on an ankle the first time this was run.
 
 ## Three things this reads from the target rather than assuming
 
@@ -37,13 +57,14 @@ The remaining hard ceiling is **16-bit indices** - above 65,535 vertices this wo
 32-bit ones, and it does not.
 
 Usage:
-    python inject_npc_body.py 0x80C714B2 --dry-run
-    python inject_npc_body.py 0x80C714B2 --glb <path.glb> --dry-run
+    python inject_npc_body.py 0x80C714B2 --obj retargeted.obj --dry-run
+    python inject_npc_body.py 0x80C714B2 --obj retargeted.obj --write
+    python inject_npc_body.py 0x80C714B2 --glb <path.glb> --dry-run    # nearest-neighbour fallback
     python inject_npc_body.py 0x80C714B2 --glb <path.glb> --stretch --dry-run
-    python inject_npc_body.py 0x80C714B2 --glb <path.glb> --write
 """
 from __future__ import annotations
 
+import json
 import struct
 import sys
 from collections import Counter
@@ -100,6 +121,40 @@ def donor_skin(body: bytes, stride: int) -> list[bytes]:
     return [bytes(body[at + 8:at + 16]) for at in range(0, len(body) - stride + 1, stride)]
 
 
+def retargeted_skin(weights_path: Path, count: int) -> list[bytes]:
+    """
+    Reads real per-vertex skinning exported by `retarget_mesh.py`.
+
+    Preferred over the nearest-neighbour transfer whenever it exists: those weights come from the
+    GLB's own armature posed onto the rig, so they follow the character's actual topology instead of
+    whichever donor vertex happened to be closest. Nearest-neighbour is the fallback for a source
+    that has never been retargeted.
+
+    @param weights_path The `<mesh>_weights.json` written beside the retargeted OBJ.
+    @param count Vertices in the mesh, which the file must match exactly - the export states that
+                 its vertex order is the OBJ's, so a length disagreement means they are not a pair.
+    @return One 8-byte tail per vertex: four weights then four bone indices.
+    """
+    data = json.loads(weights_path.read_text(encoding="utf-8"))
+    skins = data["skins"]
+    if len(skins) != count:
+        raise SystemExit(f"{weights_path.name} has {len(skins):,} vertices but the mesh has "
+                         f"{count:,}; they are not a matching pair")
+    out: list[bytes] = []
+    for entry in skins:
+        pairs = sorted(entry, key=lambda pair: -pair[1])[:4]
+        bones = [int(bone) for bone, _weight in pairs] + [0] * (4 - len(pairs))
+        values = [int(weight) for _bone, weight in pairs] + [0] * (4 - len(pairs))
+        # Destiny's weights are bytes summing to 255; re-normalise after truncating to four so a
+        # vertex that had five influences is not left drawing at partial strength.
+        total = sum(values)
+        if total and total != 255:
+            values = [value * 255 // total for value in values]
+            values[0] += 255 - sum(values)
+        out.append(bytes(values) + bytes(bones))
+    return out
+
+
 def dominant_w(body: bytes, stride: int) -> int:
     """
     @return The `w` the target overwhelmingly uses in its packed positions.
@@ -152,7 +207,7 @@ def place(source: np.ndarray, target: np.ndarray, stretch: bool) -> np.ndarray:
 
 
 def build(model, mesh_index: int, source: np.ndarray, faces: np.ndarray,
-          stretch: bool) -> tuple[dict[int, bytes], list[str]]:
+          stretch: bool, own_skin: list[bytes] | None = None) -> tuple[dict[int, bytes], list[str]]:
     """
     @return `(entry index -> new bytes, notes)` for one NPC body swap.
     """
@@ -184,16 +239,17 @@ def build(model, mesh_index: int, source: np.ndarray, faces: np.ndarray,
         raise SystemExit(f"half-extents {np.round(half, 4)} exceed model scale {scale:.4f}; "
                          "the model header would need rewriting too")
 
-    # Skinning is copied from the mesh being replaced, so the bone index space carries over verbatim
-    # and nothing has to be known about which skeleton it is.
+    # Real retargeted weights when we have them; otherwise copy from the mesh being replaced, which
+    # carries its bone index space over verbatim so nothing needs to be known about the skeleton.
     nearest = nearest_index(placed, donor_points)
+    vertex_skin = own_skin if own_skin is not None else [skins[i] for i in nearest]
 
     packed = np.clip(np.round((placed - translation) / scale * PACKED_MAX), -32768, 32767)
     out = bytearray(len(placed) * stride)
     for index, (x, y, z) in enumerate(packed.astype(np.int64)):
         at = index * stride
         struct.pack_into("<4h", out, at, int(x), int(y), int(z), w)
-        out[at + 8:at + 16] = skins[nearest[index]]
+        out[at + 8:at + 16] = vertex_skin[index]
     positions = bytes(out)
     indices = pack_indices(faces)
 
@@ -217,15 +273,24 @@ def build(model, mesh_index: int, source: np.ndarray, faces: np.ndarray,
     # it, and neither is visible from looking at the geometry afterwards.
     gaps = np.linalg.norm(placed - donor_points[nearest], axis=1)
     coverage = len(set(nearest)) / len(donor_points)
-    notes = [f"donor {len(donor_points):,} verts, {len(set(nearest)):,} used "
-             f"({100 * coverage:.0f}% coverage)",
-             f"match distance: median {np.median(gaps) * 100:.1f} cm, "
-             f"90th pct {np.percentile(gaps, 90) * 100:.1f} cm, max {gaps.max() * 100:.1f} cm",
-             f"w={w} taken from the target", f"bones carried over from mesh {mesh_index}"]
-    if coverage < 0.5 or np.median(gaps) > 0.05:
-        notes.append("POSE MISMATCH - the source and the donor are not standing the same way, so "
-                     "these weights will deform badly. Retarget the source onto the rig first "
-                     "(rig_true_human.json; this donor's bone indices are its row order).")
+    if own_skin is not None:
+        used = sorted({tail[4 + slot] for tail in own_skin for slot in range(4)
+                       if tail[slot]})
+        notes = [f"skinning: RETARGETED weights, {len(used)} bones {used[:8]}"
+                 f"{'...' if len(used) > 8 else ''}",
+                 f"w={w} taken from the target"]
+    else:
+        notes = [f"skinning: nearest-neighbour from the donor",
+                 f"donor {len(donor_points):,} verts, {len(set(nearest)):,} used "
+                 f"({100 * coverage:.0f}% coverage)",
+                 f"match distance: median {np.median(gaps) * 100:.1f} cm, "
+                 f"90th pct {np.percentile(gaps, 90) * 100:.1f} cm, max {gaps.max() * 100:.1f} cm",
+                 f"w={w} taken from the target", f"bones carried over from mesh {mesh_index}"]
+        if coverage < 0.5 or np.median(gaps) > 0.05:
+            notes.append("POSE MISMATCH - the source and the donor are not standing the same way, "
+                         "so these weights will deform badly. Retarget the source onto the rig "
+                         "first and pass --obj: retarget_mesh.py --rig rig_body_space.json "
+                         "--bone-map bone_map_body_space.json")
     if uv_header is None or not uv_body:
         notes.append("TEXCOORD BUFFER NOT DUMPED - inherited, and it is too short. Dump "
                      f"0x{mesh.texcoords:08X} and 0x{mesh.texcoord_buffer:08X} before writing.")
@@ -258,13 +323,30 @@ def main() -> int:
         print(f"0x{target:08X} is not among the {len(models)} dumped models")
         return 1
 
-    points, faces = load_all_meshes(glb)
-    source = to_destiny(points)
-    print(f"custom mesh   {len(source):,} verts, {len(faces):,} tris   from {glb.name}")
+    obj = option("--obj", "")
+    own_skin = None
+    if obj:
+        # A retargeted OBJ is already in Destiny's frame and posed onto the rig, so it must not be
+        # run through to_destiny() a second time.
+        from inject_scatterhorn import read_obj
+        obj_path = Path(obj)
+        source, faces = read_obj(obj_path)
+        source = np.asarray(source, dtype=np.float64)
+        weights = obj_path.with_name(obj_path.stem + "_weights.json")
+        if not weights.is_file():
+            raise SystemExit(f"{obj_path.name} has no {weights.name} beside it; re-run "
+                             "retarget_mesh.py, which writes them together")
+        own_skin = retargeted_skin(weights, len(source))
+        print(f"custom mesh   {len(source):,} verts, {len(faces):,} tris   "
+              f"from {obj_path.name} (retargeted)")
+    else:
+        points, faces = load_all_meshes(glb)
+        source = to_destiny(points)
+        print(f"custom mesh   {len(source):,} verts, {len(faces):,} tris   from {glb.name}")
     print(f"target        0x{target:08X} mesh {mesh_index} of {len(model.meshes)}, "
           f"scale {model.scale[0]:.4f}")
 
-    replacements, notes = build(model, mesh_index, source, faces, stretch)
+    replacements, notes = build(model, mesh_index, source, faces, stretch, own_skin)
     for note in notes:
         print(f"  {note}")
     # An entry belongs to whichever package its own tag names, and for one NPC body those are

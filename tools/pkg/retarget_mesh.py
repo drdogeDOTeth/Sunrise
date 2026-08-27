@@ -155,7 +155,10 @@ BONE_MAP = {
     "Left leg": 3, "Left knee": 6, "Left ankle": 9, "Left toe": 25,
     "Right leg": 4, "Right knee": 7, "Right ankle": 10, "Right toe": 26,
 }
-# Chest is not a single joint. Split between spine_upper (8) and chest (11) by Destiny Z.
+# Chest is not a single joint. Split between spine_upper and chest by Destiny Z. These default to
+# the armour space's 8 and 11; a bone map may override them with "Chest lower" / "Chest upper",
+# which body space must, since its 8 is the left ANKLE and its 11 a collar. Weighting the chest to
+# an ankle produces a model that looks correct until it animates.
 CHEST_GROUP = "Chest"
 SPINE_UPPER = 8
 CHEST_BONE = 11
@@ -174,7 +177,8 @@ FINGER_MAP = {
     "MiddleFinger1_R": 48, "MiddleFinger2_R": 58, "MiddleFinger3_R": 58,
     "LittleFinger1_R": 49, "LittleFinger2_R": 59, "LittleFinger3_R": 59,
 }
-WRIST_FOLD = {name: (21 if name.endswith("_L") else 22) for name in FINGER_MAP}
+WRIST_FOLD = {name: BONE_MAP["Left wrist" if name.endswith("_L") else "Right wrist"]
+              for name in FINGER_MAP}
 # Canonical pose-bone name -> the name this armature actually uses, supplied by the bone map.
 # `BONE_MAP` above is keyed by *vertex group*; the pose step below indexes the **armature**, which
 # is a different namespace, and a VRM out of Blender satisfies neither by accident - its bones are
@@ -207,7 +211,13 @@ if BONE_MAP_FILE:
     extra_groups, extra_fingers = _load_json_map(BONE_MAP_FILE)
     BONE_MAP.update(extra_groups)
     FINGER_MAP.update(extra_fingers)
-    WRIST_FOLD = {name: (21 if name.endswith("_L") else 22) for name in FINGER_MAP}
+    # Everything below is *derived* from BONE_MAP rather than restated, because a second
+    # hand-written table is exactly how the upper arm once ended up spanning 27->19 instead of
+    # 15->19 (noted below), and how a body-space run weighted the chest to bone 8 - its ankle.
+    WRIST_FOLD = {name: BONE_MAP["Left wrist" if name.endswith("_L") else "Right wrist"]
+                  for name in FINGER_MAP}
+    SPINE_UPPER = extra_groups.get("Chest lower", SPINE_UPPER)
+    CHEST_BONE = extra_groups.get("Chest upper", CHEST_BONE)
 
 if FINGERS:
     BONE_MAP.update(FINGER_MAP)
@@ -222,8 +232,10 @@ if MATERIAL_MAP_FILE:
 # (pose bone, rig joint at its head, rig joint at its tail). Parent first - posing the upper arm
 # moves the elbow, so the elbow has to be aligned against where it ends up.
 ARM_CHAINS = [
-    ("Left arm", 27, 19), ("Left elbow", 19, 21),
-    ("Right arm", 28, 20), ("Right elbow", 20, 22),
+    ("Left arm", BONE_MAP["Left shoulder"], BONE_MAP["Left elbow"]),
+    ("Left elbow", BONE_MAP["Left elbow"], BONE_MAP["Left wrist"]),
+    ("Right arm", BONE_MAP["Right shoulder"], BONE_MAP["Right elbow"]),
+    ("Right elbow", BONE_MAP["Right elbow"], BONE_MAP["Right wrist"]),
 ]
 # Consecutive bone pairs down each arm. A *length* is measured across a pair, which ARM_CHAINS
 # cannot express: it names the bone and the joints it points between, not the bone below it that
@@ -1011,7 +1023,10 @@ def main():
     z_span = max(z_chest - z_upper, 1e-4)
     print(f"chest split: bone {SPINE_UPPER} at z {z_upper:.3f} -> "
           f"bone {CHEST_BONE} at z {z_chest:.3f}")
-    print(f"fingers: {'gauntlet joints 34-71' if FINGERS else 'folded onto wrists 21/22'}")
+    # Report the wrists actually used, not a hardcoded pair: they are 21/22 in armour space and
+    # 20/21 in body space, and a message that always says 21/22 hides a wrong fold.
+    folded = sorted(set(WRIST_FOLD.values()))
+    print(f"fingers: {'gauntlet joints 34-71' if FINGERS else f'folded onto wrists {folded}'}")
 
     lo = [1e9] * 3
     hi = [-1e9] * 3

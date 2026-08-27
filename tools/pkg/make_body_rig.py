@@ -88,6 +88,8 @@ BONE_MAP = {
     "Right shoulder": 16, "Right arm": 31, "Right elbow": 19, "Right wrist": 21,
     "Left leg": 2, "Left knee": 5, "Left ankle": 8, "Left toe": 28,
     "Right leg": 3, "Right knee": 6, "Right ankle": 9, "Right toe": 29,
+    # The Chest vertex group is split between two joints by height, not posed as one.
+    "Chest lower": 7, "Chest upper": 10,
 }
 
 
