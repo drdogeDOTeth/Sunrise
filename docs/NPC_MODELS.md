@@ -90,8 +90,30 @@ all three meshes of `80C714B2` hold `0xFFFFFFFF` in that slot.
 ours is 4,227. Meshes 1 and `80C714B3`'s single mesh are both smaller than our character, so they
 are not swap targets.
 
-**Which mesh is the visible body is not yet known.** Guessing costs a launch per guess; extracting
-positions and indices and rendering them costs none, which is the pass that answers it.
+### Which mesh is which, settled by looking
+
+Extracted with `extract_mesh.py --dump <dump dir>` and rendered with `render_obj.py`. No launch: the
+buffers were already dumped, and offline rendering is the one visual judgement in this project that
+is trustworthy — the in-game character draws as a dissolve shell and has produced a false
+identification before.
+
+| mesh | verts | tris | bbox (m) | what it is |
+|---|---|---|---|---|
+| `80C714B2` 0 | 6,147 | 33,330 | 0.61 x 0.90 x **1.69** | **the body** — complete humanoid, head to boots, A-pose |
+| `80C714B2` 1 | 333 | 1,362 | 0.34 x 0.40 x 0.62 | scattered fragments, small accessories |
+| `80C714B2` 2 | 12,367 | 52,317 | 0.64 x 0.93 x 1.78 | **the armour** — pauldrons, chest, gauntlets, greaves, disconnected plates |
+| `80C714B3` 0 | 220 | 1,440 | 1.76 x 0.91 x 1.77 | flat overlapping planes — cloth or cape |
+
+Destiny's z is up, so the third bbox figure is height. Mesh 2 is *taller and wider* than mesh 0
+despite having no continuous torso, which is what armour worn over a body measures like.
+
+**So the swap is two edits, not one.** Replacing mesh 0 alone puts the custom character inside
+Zavala's armour and leaves his plates floating around it — the same failure as the stock gloves and
+bald race head that still overlay the custom Warlock. Mesh 2's parts have to be blanked as well.
+
+Blanking is the edit that has never landed as a package patch, but that was a *package* problem:
+the race-glove blank needed `0x815B9521` in `globals_06dc`, which rejects even a no-op. Mesh 2 is in
+`globals_01fe`, which passed, so the blank has a route here that it never had on the Guardian.
 
 ---
 
