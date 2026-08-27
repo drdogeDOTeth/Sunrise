@@ -173,6 +173,13 @@ def walk(entity: int) -> tuple[list[int], list[int]]:
     @return (model tags found, tags that must be dumped before the walk can continue).
     """
     print(f"entity   {describe(entity)}")
+    # A caller may hand us a model tag directly - the player body 0x815B9521 is one. Walking it as
+    # an entity finds no model-naming class and reports a dead end, when in fact it *is* the end.
+    own = resolve(entity)
+    if own and own[0] == SENTITY_MODEL:
+        print("\n  This tag is already an SEntityModel; nothing to walk.")
+        return [entity], ([] if dumped(entity) else [entity])
+
     body = dumped(entity)
     if not body:
         print("\n  The entity body itself is not dumped. Request it and launch once.")

@@ -117,11 +117,14 @@ def main() -> int:
         print(f"missing {TRUE_RIG}")
         return 1
     rows = true_rows()
+    # Read the arguments BEFORE pointing parse_models at the dump directory, because that is done by
+    # rewriting sys.argv - reading after it silently discarded every tag the caller asked for and
+    # reported the defaults instead, which looks like a working run.
+    wanted = [(int(a, 0), f"0x{int(a, 0):08X}") for a in sys.argv[1:] if a.startswith("0x")]
     sys.argv = [sys.argv[0], "--dump", r"C:\Sunrise\bin\x64\Sunrise\dump"]
     from parse_models import models
 
     by_tag = {m.tag: m for m in models}
-    wanted = [(int(a, 0), f"0x{int(a, 0):08X}") for a in sys.argv[1:] if a.startswith("0x")]
 
     print(f"skeleton {TRUE_RIG.name}: {len(rows)} rows\n")
     print("Does this mesh's bone index equal the skeleton's row index?")
