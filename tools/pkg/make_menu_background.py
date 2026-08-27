@@ -117,6 +117,27 @@ def extend_margins(canvas: Image.Image, box: tuple[int, int, int, int]) -> None:
         canvas.paste(strip, (0, y1))
 
 
+def roll(canvas: Image.Image, fraction: float) -> Image.Image:
+    """Circularly shift the texture sideways, to cancel a quad that samples at an offset.
+
+    The character select screen reads this texture starting half a width in, so the picture arrives
+    cut in half and swapped - right half on the left of the screen, left half on the right, and the
+    two dark side walls butted together down the middle. In a symmetric room that reads as a
+    mirror. Shifting the content by the same amount before it is bound puts the picture back in
+    order, and moves the seam out to the screen's own edges where it cannot be seen.
+
+    Measured from the logo, which is a landmark of known position: baked at u 0.028, it rendered at
+    screen x 1010 of 1920, giving an offset of 0.502.
+    """
+    shift = round(fraction * canvas.width) % canvas.width
+    if shift == 0:
+        return canvas
+    out = Image.new(canvas.mode, canvas.size)
+    out.paste(canvas.crop((canvas.width - shift, 0, canvas.width, canvas.height)), (0, 0))
+    out.paste(canvas.crop((0, 0, canvas.width - shift, canvas.height)), (shift, 0))
+    return out
+
+
 def relight(image: Image.Image, gamma: float, saturation: float) -> Image.Image:
     """Lift a dark photo for a screen that sits behind white text.
 
@@ -241,7 +262,7 @@ def add_marks(canvas: Image.Image, quad: Quad) -> None:
 def main() -> int:
     plain = [a for a in sys.argv[1:] if not a.startswith("--")]
     for name in ("out", "window", "rect", "slot", "logo", "logo-corner", "logo-height",
-                 "logo-margin", "gamma", "saturation"):
+                 "logo-margin", "gamma", "saturation", "roll"):
         value = option(name)
         if value in plain:
             plain.remove(value)
@@ -303,6 +324,11 @@ def main() -> int:
     if "--marks" in sys.argv:
         add_marks(canvas, quad)
         print("  marks on: a true circle and four corner ticks mean the window is right")
+
+    turn = float(option("roll", "0"))
+    if turn:
+        canvas = roll(canvas, turn)
+        print(f"  rolled {turn} of a width, cancelling the quad's sampling offset")
 
     canvas.convert("RGB").save(out)
     print(f"  wrote {out}  {slot[0]}x{slot[1]}  ({out.stat().st_size / 1024:.0f} KB)")

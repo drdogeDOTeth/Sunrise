@@ -129,6 +129,29 @@ draws in the top-left corner**, so a corner mark has no slot of its own and is c
 background instead. That costs nothing: the background is already being baked, and the logo then
 travels with whichever theme is loaded.
 
+### The character select screen is a different quad
+
+It draws from the **1920×1200** slot, not the 3030×940 one, and reads the texture across its whole
+width — offset by **0.502**, wrapping. Two textures share that size, one BC7 and one UNORM, and
+matching is by size, so both get replaced.
+
+The offset was measured off the logo, which makes a good landmark because its position in the file
+is known exactly: baked at u 0.028, it rendered at screen x 1010 of 1920, and its 140 texture px
+arrived as 140 screen px — so the mapping is 1:1 with a half-width shift.
+
+That shift puts the picture on screen cut in half and swapped, with the source's two dark side
+walls butted together down the middle. **In a symmetric room that reads as a mirror**, which is what
+it was mistaken for. `--roll 0.5` cancels it: the picture lands in order and the seam moves out to
+the screen's own edges, where nothing can see it.
+
+```bash
+python make_menu_background.py sky.jpg --window 0,1,0,1 --rect 1920x1080 \
+    --slot 1920x1200 --roll 0.5 --out select_bg.png
+```
+
+Worth knowing that the un-rolled version is not simply broken — the two walls meeting in the centre
+make a column the character stands against, which reads as deliberate staging. Both are kept.
+
 ### The band across the top
 
 The 1920×1200 layer draws over the top ~197 px and samples near **u 0.94, mirrored** — which is what
