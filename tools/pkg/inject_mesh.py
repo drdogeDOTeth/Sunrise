@@ -44,6 +44,7 @@ Usage:
     python inject_mesh.py 0x80BA7474 --glb <path.glb> --mesh GasMask
     python inject_mesh.py --all-helmets
     python inject_mesh.py --all-helmets --rewrite-uvs
+    python inject_mesh.py 0x80C714B2 --glb <path.glb> --mesh Body --silence-other-meshes
     python inject_mesh.py --request-uvs
     python inject_mesh.py --undo
 """
@@ -147,8 +148,20 @@ def resize_per_vertex(original: bytes, old_count: int, new_count: int) -> bytes:
     return tiled[: new_count * stride]
 
 
-def rewrite_model(model, mesh, index_count: int) -> bytes:
-    """@return The model blob with part 0 covering the new triangles and every other part silenced."""
+def rewrite_model(model, mesh, index_count: int, silence_other_meshes: bool = False) -> bytes:
+    """
+    @param silence_other_meshes Zero every part of the model's *other* meshes as well.
+    @return The model blob with part 0 covering the new triangles and every other part silenced.
+
+    A character model is usually a body mesh plus separate armour meshes drawn over it. Replacing
+    only the body leaves those plates floating around the custom mesh - the same failure as the
+    stock gloves and bald race head that still overlay the custom Warlock. Zavala is the worked
+    case: mesh 0 is a complete 6,147-vertex humanoid and mesh 2 is 12,367 vertices of disconnected
+    armour plating, so a swap has to silence 2 to show 0.
+
+    This stays size-preserving - it only zeroes index counts inside a record that already exists -
+    so it carries none of the resize risk that a record whose declared length changes does.
+    """
     out = bytearray(model.data)
     for slot in range(mesh.part_count):
         at = mesh.parts_at + slot * PART_STRIDE
@@ -159,12 +172,20 @@ def rewrite_model(model, mesh, index_count: int) -> bytes:
             out[at + PART_LOD] = 0
         else:
             struct.pack_into("<I", out, at + PART_INDEX_COUNT, 0)
+    if silence_other_meshes:
+        for other in model.meshes:
+            if other is mesh:
+                continue
+            for slot in range(other.part_count):
+                struct.pack_into("<I", out, other.parts_at + slot * PART_STRIDE
+                                 + PART_INDEX_COUNT, 0)
     return bytes(out)
 
 
 
 def build_replacements(model, source: np.ndarray, faces: np.ndarray,
-                       rewrite_uvs: bool = False) -> dict[int, bytes]:
+                       rewrite_uvs: bool = False,
+                       silence_other_meshes: bool = False) -> dict[int, bytes]:
     """@return Entry index -> new bytes, for the five entries one model needs.
 
     @param source Custom mesh vertices, already in Destiny's frame and centred on nothing in
@@ -196,7 +217,7 @@ def build_replacements(model, source: np.ndarray, faces: np.ndarray,
         entry_index_of(mesh.positions): rewrite_header(vertex_header, len(positions), 0, "<I"),
         entry_index_of(mesh.index_buffer): indices,
         entry_index_of(mesh.indices): rewrite_header(index_header, len(indices), 8, "<q"),
-        entry_index_of(model.tag): rewrite_model(model, mesh, faces.size),
+        entry_index_of(model.tag): rewrite_model(model, mesh, faces.size, silence_other_meshes),
     }
     # UV rewrite is opt-in. Tiling that buffer across 40 models hung the tower; the 19-model
     # inject that left UVs alone loaded clean.
@@ -367,12 +388,16 @@ def main() -> None:
 
     # Grouped by package: only the newest file of a package is a legal base, so every model living
     # in the same package has to be redirected in one patch file rather than a chain of them.
+    silence = "--silence-other-meshes" in sys.argv
     by_package: dict[Path, dict[int, bytes]] = {}
     for model in chosen:
         by_package.setdefault(package_of(model.tag), {}).update(
-            build_replacements(model, source, faces, rewrite_uvs))
+            build_replacements(model, source, faces, rewrite_uvs, silence))
 
     print(f"custom mesh {len(source):,} verts, {len(faces):,} tris")
+    if silence:
+        hidden = sum(len(m.meshes) - 1 for m in chosen)
+        print(f"silencing {hidden} other mesh(es) so armour does not draw over the custom body")
     print(f"{len(chosen)} models across {len(by_package)} packages")
     for path, replacements in sorted(by_package.items()):
         print(f"  {path.name}: {len(replacements)} entries")
