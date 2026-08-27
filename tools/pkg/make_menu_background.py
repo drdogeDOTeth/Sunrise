@@ -82,6 +82,41 @@ def numbers(text: str, count: int) -> tuple[float, ...]:
     return parts
 
 
+def extend_margins(canvas: Image.Image, box: tuple[int, int, int, int]) -> None:
+    """Mirror the window's edges outward to fill the rest of the texture.
+
+    **The margin is not dead space.** The title screen reads only the window, but the character
+    select screen reads the *whole* texture with wrap, and puts the u=0/1 seam across the middle of
+    the screen. A blurred dark fill out here is invisible on one screen and a black band down the
+    centre of the other.
+
+    Mirroring is what makes both work: it is seamless at the window boundary by construction, and
+    it carries real picture rather than a hole. The source's left and right edges are dark walls,
+    so the wrap seam lands somewhere already dark.
+    """
+    x0, y0, x1, y1 = box
+    width, height = canvas.size
+
+    if x0 > 0:  # left margin, reflected about the window's left edge
+        take = min(x0, x1 - x0)
+        strip = canvas.crop((x0, y0, x0 + take, y1)).transpose(Image.FLIP_LEFT_RIGHT)
+        canvas.paste(strip, (x0 - take, y0))
+    if x1 < width:  # right margin
+        take = min(width - x1, x1 - x0)
+        strip = canvas.crop((x1 - take, y0, x1, y1)).transpose(Image.FLIP_LEFT_RIGHT)
+        canvas.paste(strip, (x1, y0))
+
+    # Now the full width is filled, so the vertical margins mirror across all of it.
+    if y0 > 0:
+        take = min(y0, y1 - y0)
+        strip = canvas.crop((0, y0, width, y0 + take)).transpose(Image.FLIP_TOP_BOTTOM)
+        canvas.paste(strip, (0, y0 - take))
+    if y1 < height:
+        take = min(height - y1, y1 - y0)
+        strip = canvas.crop((0, y1 - take, width, y1)).transpose(Image.FLIP_TOP_BOTTOM)
+        canvas.paste(strip, (0, y1))
+
+
 def relight(image: Image.Image, gamma: float, saturation: float) -> Image.Image:
     """Lift a dark photo for a screen that sits behind white text.
 
@@ -237,14 +272,14 @@ def main() -> int:
     print(f"  quad window u {window[0]:.3f}..{window[1]:.3f}  v {window[2]:.3f}..{window[3]:.3f}"
           f"  -> screen {rect[0]}x{rect[1]} (aspect {want:.3f})")
 
-    # Outside the window this quad never looks, but the second layer does - so fill it rather
-    # than leave a hard edge, blurred and darkened so it reads as an out-of-focus surround.
-    canvas = cover(image, *slot).filter(ImageFilter.GaussianBlur(slot[0] * 0.012))
-    canvas = Image.blend(canvas, Image.new("RGBA", canvas.size, (0, 0, 0, 255)), 0.45)
-
+    canvas = Image.new("RGBA", slot, (0, 0, 0, 255))
     box = quad.box
-    fitted = cover(image, box[2] - box[0], box[3] - box[1])
+    # Crop at the SCREEN's aspect, then squeeze into the window's pixel box. The quad undoes that
+    # squeeze on the way to the screen. Cropping at the box's own aspect instead only looks right
+    # while the two happen to agree, which they do not for every slot.
+    fitted = cover(image, *rect).resize((box[2] - box[0], box[3] - box[1]), Image.LANCZOS)
     canvas.paste(fitted, (box[0], box[1]))
+    extend_margins(canvas, box)
     edge = "top/bottom" if had < want else "the sides"
     lost = 1 - min(had, want) / max(had, want)
     print(f"  cover-cropped to {want:.3f} ({100 * lost:.1f}% trimmed off {edge}) and laid into"
