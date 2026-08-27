@@ -1115,9 +1115,55 @@ void load_probes(ID3D11Device* device) noexcept {
  *
  * @return True when something was swapped, in which case the caller must restore afterwards.
  */
+/** One distinct (texture, draw) pairing a probe has matched, so each is reported once. */
+struct ProbeHit {
+    UINT width;
+    UINT height;
+    UINT format;
+    UINT start;
+    UINT count;
+};
+
+ProbeHit g_hits[32]{};
+std::size_t g_hitCount{};
+
+/**
+ * Name each distinct draw a probe lands on, once.
+ *
+ * Size and format together still cannot separate every screen - the title screen's top band, the
+ * boot screen and the screen that loads into character select all bind 1920x1200 at format 98. The
+ * **draw** is the thing that actually differs between UI elements, the same way the character's
+ * parts are told apart, so this records the index range alongside the texture. If the three come
+ * back with different ranges, they can be addressed separately without any guessing about timing.
+ */
+void note_probe_hit(UINT width, UINT height, UINT format, UINT start, UINT count) noexcept {
+    if (g_hitCount >= std::size(g_hits)) {
+        return;
+    }
+    for (std::size_t i = 0; i < g_hitCount; ++i) {
+        if (g_hits[i].width == width && g_hits[i].height == height && g_hits[i].format == format
+            && g_hits[i].start == start && g_hits[i].count == count) {
+            return;
+        }
+    }
+    g_hits[g_hitCount] = {width, height, format, start, count};
+    ++g_hitCount;
+    std::array<char, 192> line{};
+    const int written = std::snprintf(
+        line.data(), line.size(),
+        "ev=custom_albedo stage=probe_hit n=%zu w=%u h=%u fmt=%u start=%u count=%u", g_hitCount,
+        width, height, format, start, count);
+    if (written > 0) {
+        core::log::write(core::log::Channel::client, core::log::Level::info,
+                         std::string_view(line.data(), static_cast<std::size_t>(written)));
+    }
+}
+
 [[nodiscard]] bool apply_probes(ID3D11DeviceContext* context,
                                 ID3D11ShaderResourceView** saved,
-                                UINT slots) noexcept {
+                                UINT slots,
+                                UINT startIndex,
+                                UINT indexCount) noexcept {
     if (g_probeCount == 0) {
         return false;
     }
@@ -1151,6 +1197,8 @@ void load_probes(ID3D11Device* device) noexcept {
                 }
                 replaced[slot] = g_probes[i].view;
                 swapped = true;
+                note_probe_hit(desc.Width, desc.Height, static_cast<UINT>(desc.Format), startIndex,
+                               indexCount);
                 break;
             }
             texture->Release();
@@ -1500,7 +1548,7 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context,
         // Probing is confined to draws the character never claims, so an identification pass
         // cannot disturb the body. Restore immediately: the game keeps drawing with these slots.
         ID3D11ShaderResourceView* saved[kProbeSlots]{};
-        if (apply_probes(context, saved, kProbeSlots)) {
+        if (apply_probes(context, saved, kProbeSlots, startIndex, indexCount)) {
             next(context, indexCount, startIndex, baseVertex);
             context->PSSetShaderResources(0, kProbeSlots, saved);
             for (ID3D11ShaderResourceView* view : saved) {
